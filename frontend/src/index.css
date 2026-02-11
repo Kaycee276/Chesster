@@ -1,0 +1,125 @@
+@import url("https://fonts.googleapis.com/css2?family=Stack+Sans+Notch:wght@200..700&display=swap");
+@import "tailwindcss";
+
+@theme {
+	/* Dark */
+	--bg-dark: #121212;
+	--bg-dark-secondary: #18181b;
+	--bg-dark-tertiary: #27272a;
+	--text-dark: #f3f4f6;
+	--text-dark-secondary: #9ca3af;
+	--text-dark-tertiary: #6b7280;
+	--border-dark: #212121;
+
+	/* Light */
+	--bg-light: #f9fafb;
+	--bg-light-secondary: #dfe8e6;
+	--bg-light-tertiary: #f3f4f6;
+	--text-light: #111827;
+	--text-light-secondary: #6b7280;
+	--text-light-tertiary: #9ca3af;
+	--border-light: #e5e7eb;
+
+	/* Accent */
+	--accent-primary: #dc2626;
+	--accent-light: #ef4444;
+	--accent-dark: #b91c1c;
+
+	/* Common */
+	--success: #22c55e; /* Green */
+	--error: #ef4444; /* Red */
+	--warning: #f59e0b; /* Yellow */
+	--info: #3b82f6; /* Blue */
+}
+
+:root {
+	--bg: var(--bg-light);
+	--bg-secondary: var(--bg-light-secondary);
+	--bg-tertiary: var(--bg-light-tertiary);
+	--text: var(--text-light);
+	--text-secondary: var(--text-light-secondary);
+	--text-tertiary: var(--text-light-tertiary);
+	--border: var(--border-light);
+}
+
+.dark {
+	--bg: var(--bg-dark);
+	--bg-secondary: var(--bg-dark-secondary);
+	--bg-tertiary: var(--bg-dark-tertiary);
+	--text: var(--text-dark);
+	--text-secondary: var(--text-dark-secondary);
+	--text-tertiary: var(--text-dark-tertiary);
+	--border: var(--border-dark);
+}
+
+body {
+	font-family: "Stack Sans Notch", sans-serif;
+	background-color: var(--bg);
+	font-optical-sizing: auto;
+	color: var(--text);
+	transition:
+		background-color 0.3s ease,
+		color 0.3s ease;
+}
+
+html {
+	scroll-behavior: smooth;
+	overscroll-behavior: none;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+::-webkit-scrollbar-track {
+	background: var(--bg-dark);
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--accent-light);
+	border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--accent-dark);
+}
+
+/* Selection color */
+::selection {
+	background-color: var(--accent-primary);
+	color: white;
+}
+
+/* Focus styles */
+:focus-visible {
+	outline: 2px solid var(--accent-primary);
+	outline-offset: 2px;
+}
+
+button {
+	cursor: pointer;
+}
+
+button:disabled {
+	cursor: not-allowed;
+}
+
+@media screen and (max-width: 768px) {
+	h1 {
+		font-size: 1.5rem;
+	}
+	p {
+		font-size: 0.875rem;
+	}
+	button {
+		font-size: 0.875rem;
+	}
+	input {
+		font-size: 0.875rem;
+	}
+	select {
+		font-size: 0.875rem;
+	}
+}
