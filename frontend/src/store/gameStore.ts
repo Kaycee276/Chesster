@@ -19,6 +19,7 @@ interface GameStore {
 	makeMove: (from: [number, number], to: [number, number]) => Promise<void>;
 	selectSquare: (pos: [number, number] | null) => void;
 	updateGameState: (data: GameState) => void;
+	leaveGame: () => void;
 	reset: () => void;
 }
 
@@ -116,7 +117,7 @@ export const useGameStore = create<GameStore>()(persist((set, get) => ({
 
 	selectSquare: (pos: [number, number] | null) => set({ selectedSquare: pos }),
 
-	reset: () => {
+	leaveGame: () => {
 		const { gameCode } = get();
 		if (gameCode) {
 			socketService.leaveGame(gameCode);
@@ -131,6 +132,10 @@ export const useGameStore = create<GameStore>()(persist((set, get) => ({
 			status: "",
 			selectedSquare: null,
 		});
+	},
+
+	reset: () => {
+		get().leaveGame();
 	},
 }), {
 	name: "chesster-game",

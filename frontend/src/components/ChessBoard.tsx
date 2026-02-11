@@ -1,7 +1,8 @@
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, LogOut } from "lucide-react";
 import { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { getPossibleMoves } from "../utils/chessUtils";
 
 const PIECE_SYMBOLS: Record<string, string> = {
@@ -29,9 +30,11 @@ export default function ChessBoard() {
 		selectedSquare,
 		makeMove,
 		selectSquare,
+		leaveGame,
 		// fetchGameState,
 	} = useGameStore();
 	const { addToast } = useToastStore();
+	const navigate = useNavigate();
 
 	const [copied, setCopied] = useState(false);
 
@@ -42,6 +45,11 @@ export default function ChessBoard() {
 
 	const isPossibleMove = (row: number, col: number) =>
 		possibleMoves.some(([r, c]) => r === row && c === col);
+
+	const handleLeaveGame = () => {
+		leaveGame();
+		navigate("/");
+	};
 
 	const copyGameCode = async () => {
 		if (!gameCode) return;
@@ -84,6 +92,14 @@ export default function ChessBoard() {
 	return (
 		<div className="flex flex-col items-center gap-4 p-4 min-h-screen">
 			<div className="flex items-center justify-center gap-4 text-xs h-10 px-10 rounded">
+				<button
+					onClick={handleLeaveGame}
+					className="px-3 py-1 bg-(--accent-dark) hover:bg-(--accent-primary) rounded flex items-center gap-2"
+					title="Leave game"
+				>
+					<LogOut size={14} />
+					Leave
+				</button>
 				<span className="flex flex-col items-center gap-1">
 					<h6 className="text-(--accent-primary)">Game Code</h6>
 
@@ -111,7 +127,7 @@ export default function ChessBoard() {
 					<h6 className="text-(--accent-primary)">Turn</h6>
 
 					<span className="flex items-center gap-2">
-						<span>{currentTurn}</span>
+						<span className="uppercase">{currentTurn}</span>
 					</span>
 				</span>
 
