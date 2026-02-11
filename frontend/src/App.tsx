@@ -1,16 +1,17 @@
-import { useGameStore } from './store/gameStore';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import GameLobby from './components/GameLobby';
-import ChessBoard from './components/ChessBoard';
+import GamePage from './pages/GamePage';
 import Toast from './components/Toast';
 
 const App = () => {
-  const gameCode = useGameStore((state) => state.gameCode);
-
   return (
-    <>
+    <BrowserRouter>
       <Toast />
-      {gameCode ? <ChessBoard /> : <GameLobby />}
-    </>
+      <Routes>
+        <Route path="/" element={<GameLobby />} />
+        <Route path="/:gameCode" element={<GamePage />} />
+      </Routes>
+    </BrowserRouter>
   );
 };
 

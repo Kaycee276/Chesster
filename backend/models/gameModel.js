@@ -31,14 +31,17 @@ class GameModel {
 
     if (fetchError) throw fetchError;
     if (!game) throw new Error('Game not found');
-    if (game.status !== 'waiting') throw new Error('Game already started');
+    if (game.status !== 'waiting' && game.status !== 'active') throw new Error('Cannot join game');
 
     const updateField = playerColor === 'white' ? 'player_white' : 'player_black';
+    const otherField = playerColor === 'white' ? 'player_black' : 'player_white';
+    const bothPlayersJoined = game[otherField] === true;
+
     const { data, error } = await supabase
       .from('games')
       .update({ 
         [updateField]: true,
-        status: game.player_white && game.player_black ? 'active' : 'waiting'
+        status: bothPlayersJoined ? 'active' : 'waiting'
       })
       .eq('game_code', gameCode)
       .select()

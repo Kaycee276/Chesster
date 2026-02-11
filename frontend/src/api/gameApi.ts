@@ -1,4 +1,6 @@
-const API_URL = "http://10.106.245.79:3000/api";
+const BACKEND_URL =
+	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
+const API_URL = `${BACKEND_URL}api`;
 
 export const api = {
 	createGame: async (gameType = "chess") => {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 
@@ -7,11 +8,14 @@ export default function GameLobby() {
 	const [loading, setLoading] = useState(false);
 	const { createGame, joinGame } = useGameStore();
 	const { addToast } = useToastStore();
+	const navigate = useNavigate();
 
 	const handleCreateGame = async () => {
 		setLoading(true);
 		try {
 			await createGame();
+			const code = useGameStore.getState().gameCode;
+			if (code) navigate(`/${code}`);
 		} catch (error: unknown) {
 			if (error instanceof Error) {
 				addToast(error.message);
@@ -27,6 +31,7 @@ export default function GameLobby() {
 		setLoading(true);
 		try {
 			await joinGame(gameCode, color);
+			navigate(`/${gameCode}`);
 		} catch (error: unknown) {
 			if (error instanceof Error) {
 				addToast(error.message);

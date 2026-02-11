@@ -1,7 +1,8 @@
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 import { Copy, Check } from "lucide-react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { getPossibleMoves } from "../utils/chessUtils";
 
 const PIECE_SYMBOLS: Record<string, string> = {
 	K: "♚",
@@ -28,11 +29,19 @@ export default function ChessBoard() {
 		selectedSquare,
 		makeMove,
 		selectSquare,
-		fetchGameState,
+		// fetchGameState,
 	} = useGameStore();
 	const { addToast } = useToastStore();
 
 	const [copied, setCopied] = useState(false);
+
+	const possibleMoves = useMemo(() => {
+		if (!selectedSquare || !playerColor) return [];
+		return getPossibleMoves(board, selectedSquare, playerColor);
+	}, [selectedSquare, board, playerColor]);
+
+	const isPossibleMove = (row: number, col: number) =>
+		possibleMoves.some(([r, c]) => r === row && c === col);
 
 	const copyGameCode = async () => {
 		if (!gameCode) return;
@@ -113,12 +122,12 @@ export default function ChessBoard() {
 					</span>
 				</span>
 
-				<button
+				{/* <button
 					onClick={fetchGameState}
 					className="ml-2 p-1 bg-(--accent-dark) hover:bg-(--accent-primary) rounded"
 				>
 					Refresh
-				</button>
+				</button> */}
 			</div>
 
 			<div className="max-w-full">
@@ -129,11 +138,14 @@ export default function ChessBoard() {
 							return (
 								<div
 									key={`${rowIndex}-${colIndex}`}
-									className={`w-17.5 h-17.5 flex items-center justify-center cursor-pointer transition-opacity hover:opacity-80 ${
+									className={`w-17.5 h-17.5 flex items-center justify-center cursor-pointer transition-opacity hover:opacity-80 relative ${
 										isLight ? "bg-(--accent-light)/90" : "bg-(--accent-dark)"
 									} ${isSelected(rowIndex, colIndex) ? "bg-(--success) shadow-inner" : ""}`}
 									onClick={() => handleSquareClick(rowIndex, colIndex)}
 								>
+									{isPossibleMove(rowIndex, colIndex) && (
+										<div className="absolute w-3 h-3 bg-(--info) rounded-full opacity-70" />
+									)}
 									{piece !== "." && (
 										<span
 											className={`text-5xl select-none ${piece === piece.toUpperCase() ? "text-white" : "text-black"}`}

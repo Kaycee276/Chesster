@@ -16,6 +16,10 @@ class GameController {
       const { gameCode } = req.params;
       const { playerColor } = req.body;
       const game = await gameModel.joinGame(gameCode, playerColor);
+      
+      const io = req.app.get('io');
+      io.to(gameCode).emit('game-update', game);
+      
       res.json({ success: true, data: game });
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
@@ -37,6 +41,10 @@ class GameController {
       const { gameCode } = req.params;
       const { from, to } = req.body;
       const game = await gameModel.makeMove(gameCode, from, to);
+      
+      const io = req.app.get('io');
+      io.to(gameCode).emit('game-update', game);
+      
       res.json({ success: true, data: game });
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
