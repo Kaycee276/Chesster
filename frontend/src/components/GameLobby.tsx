@@ -49,7 +49,7 @@ export default function GameLobby() {
 				<button
 					onClick={handleCreateGame}
 					disabled={loading}
-					className="px-6 py-3 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors"
+					className="px-6 py-3 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors rounded-2xl"
 				>
 					Create New Game
 				</button>
@@ -66,14 +66,14 @@ export default function GameLobby() {
 						<button
 							onClick={() => handleJoinGame("white")}
 							disabled={!gameCode || loading}
-							className="flex-1 px-3 py-1 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors"
+							className="flex-1 px-3 py-1 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors rounded-xl"
 						>
 							Join as White
 						</button>
 						<button
 							onClick={() => handleJoinGame("black")}
 							disabled={!gameCode || loading}
-							className="flex-1 px-3 py-1 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors"
+							className="flex-1 px-3 py-1 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors rounded-xl"
 						>
 							Join as Black
 						</button>
