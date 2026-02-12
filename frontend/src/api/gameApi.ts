@@ -30,17 +30,44 @@ export const api = {
 		gameCode: string,
 		from: [number, number],
 		to: [number, number],
+		promotion?: string
 	) => {
 		const res = await fetch(`${API_URL}/games/${gameCode}/move`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ from, to }),
+			body: JSON.stringify({ from, to, promotion }),
 		});
 		return res.json();
 	},
 
 	getMoves: async (gameCode: string) => {
 		const res = await fetch(`${API_URL}/games/${gameCode}/moves`);
+		return res.json();
+	},
+
+	resignGame: async (gameCode: string, playerColor: 'white' | 'black') => {
+		const res = await fetch(`${API_URL}/games/${gameCode}/resign`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ playerColor })
+		});
+		return res.json();
+	},
+
+	offerDraw: async (gameCode: string, playerColor: 'white' | 'black') => {
+		const res = await fetch(`${API_URL}/games/${gameCode}/draw/offer`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ playerColor })
+		});
+		return res.json();
+	},
+
+	acceptDraw: async (gameCode: string) => {
+		const res = await fetch(`${API_URL}/games/${gameCode}/draw/accept`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' }
+		});
 		return res.json();
 	},
 };

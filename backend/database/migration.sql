@@ -1,0 +1,11 @@
+-- Add new columns to games table
+ALTER TABLE games ADD COLUMN IF NOT EXISTS last_move JSONB;
+ALTER TABLE games ADD COLUMN IF NOT EXISTS in_check BOOLEAN DEFAULT false;
+ALTER TABLE games ADD COLUMN IF NOT EXISTS captured_white JSONB DEFAULT '[]';
+ALTER TABLE games ADD COLUMN IF NOT EXISTS captured_black JSONB DEFAULT '[]';
+ALTER TABLE games ADD COLUMN IF NOT EXISTS draw_offer VARCHAR(10);
+
+-- Add new columns to moves table
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS is_check BOOLEAN DEFAULT false;
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS is_checkmate BOOLEAN DEFAULT false;
+ALTER TABLE moves ADD COLUMN IF NOT EXISTS promotion VARCHAR(5);

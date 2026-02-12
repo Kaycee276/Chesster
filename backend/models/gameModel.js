@@ -62,22 +62,47 @@ class GameModel {
     return data;
   }
 
-  async makeMove(gameCode, from, to) {
+  async makeMove(gameCode, from, to, promotion = null) {
     const game = await this.getGame(gameCode);
     
     if (game.status !== 'active') throw new Error('Game not active');
 
-    const validation = chessEngine.isValidMove(game.board_state, from, to, game.current_turn);
+    const validation = chessEngine.isValidMove(game.board_state, from, to, game.current_turn, game.last_move);
     if (!validation.valid) throw new Error(validation.reason || 'Invalid move');
 
-    const newBoard = chessEngine.makeMove(game.board_state, from, to);
+    const piece = game.board_state[from[0]][from[1]];
+    const isPromotion = piece.toLowerCase() === 'p' && (to[0] === 0 || to[0] === 7);
+    
+    if (isPromotion && !promotion) {
+      throw new Error('Promotion piece required');
+    }
+
+    const newBoard = chessEngine.makeMove(game.board_state, from, to, promotion, validation.enPassant);
     const nextTurn = game.current_turn === 'white' ? 'black' : 'white';
+    const isCheck = chessEngine.isKingInCheck(newBoard, nextTurn);
+    const isCheckmate = chessEngine.isCheckmate(newBoard, nextTurn, { from, to, piece });
+    const isStalemate = chessEngine.isStalemate(newBoard, nextTurn, { from, to, piece });
+
+    let newStatus = game.status;
+    let winner = null;
+
+    if (isCheckmate) {
+      newStatus = 'finished';
+      winner = game.current_turn;
+    } else if (isStalemate) {
+      newStatus = 'finished';
+      winner = 'draw';
+    }
 
     const { data: updatedGame, error: updateError } = await supabase
       .from('games')
       .update({
         board_state: newBoard,
-        current_turn: nextTurn
+        current_turn: nextTurn,
+        last_move: { from, to, piece },
+        in_check: isCheck,
+        status: newStatus,
+        winner: winner
       })
       .eq('game_code', gameCode)
       .select()
@@ -93,8 +118,11 @@ class GameModel {
         player: game.current_turn,
         from_position: from,
         to_position: to,
-        piece: game.board_state[from[0]][from[1]],
-        board_state_after: newBoard
+        piece: piece,
+        board_state_after: newBoard,
+        is_check: isCheck,
+        is_checkmate: isCheckmate,
+        promotion: promotion
       });
 
     if (moveError) throw moveError;
@@ -105,6 +133,43 @@ class GameModel {
       .eq('game_code', gameCode);
 
     return updatedGame;
+  }
+
+  async resignGame(gameCode, playerColor) {
+    const winner = playerColor === 'white' ? 'black' : 'white';
+    const { data, error } = await supabase
+      .from('games')
+      .update({ status: 'finished', winner })
+      .eq('game_code', gameCode)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  async offerDraw(gameCode, playerColor) {
+    const { data, error } = await supabase
+      .from('games')
+      .update({ draw_offer: playerColor })
+      .eq('game_code', gameCode)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  }
+
+  async acceptDraw(gameCode) {
+    const { data, error } = await supabase
+      .from('games')
+      .update({ status: 'finished', winner: 'draw', draw_offer: null })
+      .eq('game_code', gameCode)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
   }
 
   async getMoves(gameCode) {
