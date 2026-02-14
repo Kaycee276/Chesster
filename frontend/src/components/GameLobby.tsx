@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
+import { AppKitButton } from "@reown/appkit/react";
 
 export default function GameLobby() {
 	const [gameCode, setGameCode] = useState("");
@@ -44,6 +45,9 @@ export default function GameLobby() {
 
 	return (
 		<div className="flex flex-col items-center justify-center min-h-screen gap-8">
+			<div className="absolute top-6 right-6">
+				<AppKitButton />
+			</div>
 			<h1 className="text-6xl font-bold ">Chesster</h1>
 			<div className="flex flex-col gap-5 w-80">
 				<button

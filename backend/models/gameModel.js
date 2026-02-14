@@ -1,193 +1,305 @@
-const supabase = require('../config/supabase');
-const chessEngine = require('../services/chessEngine');
+const supabase = require("../config/supabase");
+const chessEngine = require("../services/chessEngine");
+const escrowService = require("../services/escrowService");
+
+// Initialize escrow service
+escrowService.init();
 
 class GameModel {
-  async createGame(gameType = 'chess') {
-    const gameCode = this.generateGameCode();
-    const initialBoard = chessEngine.initBoard();
-    
-    const { data, error } = await supabase
-      .from('games')
-      .insert({
-        game_code: gameCode,
-        game_type: gameType,
-        board_state: initialBoard,
-        current_turn: 'white',
-        status: 'waiting'
-      })
-      .select()
-      .single();
+	async createGame(
+		gameType = "chess",
+		wagerAmount = null,
+		tokenAddress = null,
+		playerWhiteAddress = null,
+	) {
+		const gameCode = this.generateGameCode();
+		const initialBoard = chessEngine.initBoard();
 
-    if (error) throw error;
-    return data;
-  }
+		const { data, error } = await supabase
+			.from("games")
+			.insert({
+				game_code: gameCode,
+				game_type: gameType,
+				board_state: initialBoard,
+				current_turn: "white",
+				status: "waiting",
+				wager_amount: wagerAmount,
+				token_address: tokenAddress,
+				player_white_address: playerWhiteAddress,
+				escrow_status: wagerAmount ? "pending" : null,
+			})
+			.select()
+			.single();
 
-  async joinGame(gameCode, playerColor) {
-    const { data: game, error: fetchError } = await supabase
-      .from('games')
-      .select('*')
-      .eq('game_code', gameCode)
-      .single();
+		if (error) throw error;
 
-    if (fetchError) throw fetchError;
-    if (!game) throw new Error('Game not found');
-    if (game.status !== 'waiting' && game.status !== 'active') throw new Error('Cannot join game');
+		// If wager is set, create match on escrow contract
+		if (wagerAmount && tokenAddress && playerWhiteAddress) {
+			try {
+				await escrowService.createMatch(gameCode, tokenAddress, wagerAmount);
+			} catch (escrowErr) {
+				console.error("Escrow createMatch failed:", escrowErr.message);
+				// Don't fail game creation if escrow fails; log for manual review
+			}
+		}
 
-    const updateField = playerColor === 'white' ? 'player_white' : 'player_black';
-    const otherField = playerColor === 'white' ? 'player_black' : 'player_white';
-    const bothPlayersJoined = game[otherField] === true;
+		return data;
+	}
 
-    const { data, error } = await supabase
-      .from('games')
-      .update({ 
-        [updateField]: true,
-        status: bothPlayersJoined ? 'active' : 'waiting'
-      })
-      .eq('game_code', gameCode)
-      .select()
-      .single();
+	async joinGame(gameCode, playerColor, playerAddress = null) {
+		const { data: game, error: fetchError } = await supabase
+			.from("games")
+			.select("*")
+			.eq("game_code", gameCode)
+			.single();
 
-    if (error) throw error;
-    return data;
-  }
+		if (fetchError) throw fetchError;
+		if (!game) throw new Error("Game not found");
+		if (game.status !== "waiting" && game.status !== "active")
+			throw new Error("Cannot join game");
 
-  async getGame(gameCode) {
-    const { data, error } = await supabase
-      .from('games')
-      .select('*')
-      .eq('game_code', gameCode)
-      .single();
+		if (game.player_white === true && game.player_black === true)
+			if (
+				game[playerColor === "white" ? "player_white" : "player_black"] === true
+			)
+				throw new Error("Player color already taken");
 
-    if (error) throw error;
-    return data;
-  }
+		const updateField =
+			playerColor === "white" ? "player_white" : "player_black";
+		const addressField =
+			playerColor === "white" ? "player_white_address" : "player_black_address";
+		const otherField =
+			playerColor === "white" ? "player_black" : "player_white";
+		const bothPlayersJoined = game[otherField] === true;
 
-  async makeMove(gameCode, from, to, promotion = null) {
-    const game = await this.getGame(gameCode);
-    
-    if (game.status !== 'active') throw new Error('Game not active');
+		const { data, error } = await supabase
+			.from("games")
+			.update({
+				[updateField]: true,
+				[addressField]: playerAddress,
+				status: bothPlayersJoined ? "active" : "waiting",
+			})
+			.eq("game_code", gameCode)
+			.select()
+			.single();
 
-    const validation = chessEngine.isValidMove(game.board_state, from, to, game.current_turn, game.last_move);
-    if (!validation.valid) throw new Error(validation.reason || 'Invalid move');
+		if (error) throw error;
 
-    const piece = game.board_state[from[0]][from[1]];
-    const isPromotion = piece.toLowerCase() === 'p' && (to[0] === 0 || to[0] === 7);
-    
-    if (isPromotion && !promotion) {
-      throw new Error('Promotion piece required');
-    }
+		// If wagered game and both players joined, call escrow joinMatch
+		if (game.wager_amount && game.token_address && bothPlayersJoined) {
+			try {
+				await escrowService.joinMatch(gameCode);
+			} catch (escrowErr) {
+				console.error("Escrow joinMatch failed:", escrowErr.message);
+				// Log but don't fail join
+			}
+		}
 
-    const newBoard = chessEngine.makeMove(game.board_state, from, to, promotion, validation.enPassant);
-    const nextTurn = game.current_turn === 'white' ? 'black' : 'white';
-    const isCheck = chessEngine.isKingInCheck(newBoard, nextTurn);
-    const isCheckmate = chessEngine.isCheckmate(newBoard, nextTurn, { from, to, piece });
-    const isStalemate = chessEngine.isStalemate(newBoard, nextTurn, { from, to, piece });
+		return data;
+	}
 
-    let newStatus = game.status;
-    let winner = null;
+	async getGame(gameCode) {
+		const { data, error } = await supabase
+			.from("games")
+			.select("*")
+			.eq("game_code", gameCode)
+			.single();
 
-    if (isCheckmate) {
-      newStatus = 'finished';
-      winner = game.current_turn;
-    } else if (isStalemate) {
-      newStatus = 'finished';
-      winner = 'draw';
-    }
+		if (error) throw error;
+		return data;
+	}
 
-    const { data: updatedGame, error: updateError } = await supabase
-      .from('games')
-      .update({
-        board_state: newBoard,
-        current_turn: nextTurn,
-        last_move: { from, to, piece },
-        in_check: isCheck,
-        status: newStatus,
-        winner: winner
-      })
-      .eq('game_code', gameCode)
-      .select()
-      .single();
+	async makeMove(gameCode, from, to, promotion = null) {
+		const game = await this.getGame(gameCode);
 
-    if (updateError) throw updateError;
+		if (game.status !== "active") throw new Error("Game not active");
 
-    const { error: moveError } = await supabase
-      .from('moves')
-      .insert({
-        game_id: game.id,
-        move_number: game.move_count + 1,
-        player: game.current_turn,
-        from_position: from,
-        to_position: to,
-        piece: piece,
-        board_state_after: newBoard,
-        is_check: isCheck,
-        is_checkmate: isCheckmate,
-        promotion: promotion
-      });
+		const validation = chessEngine.isValidMove(
+			game.board_state,
+			from,
+			to,
+			game.current_turn,
+			game.last_move,
+		);
+		if (!validation.valid) throw new Error(validation.reason || "Invalid move");
 
-    if (moveError) throw moveError;
+		const piece = game.board_state[from[0]][from[1]];
+		const isPromotion =
+			piece.toLowerCase() === "p" && (to[0] === 0 || to[0] === 7);
 
-    await supabase
-      .from('games')
-      .update({ move_count: game.move_count + 1 })
-      .eq('game_code', gameCode);
+		if (isPromotion && !promotion) {
+			throw new Error("Promotion piece required");
+		}
 
-    return updatedGame;
-  }
+		const newBoard = chessEngine.makeMove(
+			game.board_state,
+			from,
+			to,
+			promotion,
+			validation.enPassant,
+		);
+		const nextTurn = game.current_turn === "white" ? "black" : "white";
+		const isCheck = chessEngine.isKingInCheck(newBoard, nextTurn);
+		const isCheckmate = chessEngine.isCheckmate(newBoard, nextTurn, {
+			from,
+			to,
+			piece,
+		});
+		const isStalemate = chessEngine.isStalemate(newBoard, nextTurn, {
+			from,
+			to,
+			piece,
+		});
 
-  async resignGame(gameCode, playerColor) {
-    const winner = playerColor === 'white' ? 'black' : 'white';
-    const { data, error } = await supabase
-      .from('games')
-      .update({ status: 'finished', winner })
-      .eq('game_code', gameCode)
-      .select()
-      .single();
+		let newStatus = game.status;
+		let winner = null;
 
-    if (error) throw error;
-    return data;
-  }
+		if (isCheckmate) {
+			newStatus = "finished";
+			winner = game.current_turn;
+		} else if (isStalemate) {
+			newStatus = "finished";
+			winner = "draw";
+		}
 
-  async offerDraw(gameCode, playerColor) {
-    const { data, error } = await supabase
-      .from('games')
-      .update({ draw_offer: playerColor })
-      .eq('game_code', gameCode)
-      .select()
-      .single();
+		const { data: updatedGame, error: updateError } = await supabase
+			.from("games")
+			.update({
+				board_state: newBoard,
+				current_turn: nextTurn,
+				last_move: { from, to, piece },
+				in_check: isCheck,
+				status: newStatus,
+				winner: winner,
+			})
+			.eq("game_code", gameCode)
+			.select()
+			.single();
 
-    if (error) throw error;
-    return data;
-  }
+		if (updateError) throw updateError;
 
-  async acceptDraw(gameCode) {
-    const { data, error } = await supabase
-      .from('games')
-      .update({ status: 'finished', winner: 'draw', draw_offer: null })
-      .eq('game_code', gameCode)
-      .select()
-      .single();
+		// If game finished, resolve on-chain escrow
+		if (newStatus === "finished") {
+			try {
+				if (winner === "draw") {
+					await escrowService.resolveAsDraw(gameCode);
+				} else {
+					// winner is 'white' or 'black', need to map to player address
+					const playerField =
+						winner === "white" ? "player_white" : "player_black";
+					const winnerAddress =
+						updatedGame[
+							playerField === "player_white"
+								? "player_white_address"
+								: "player_black_address"
+						];
+					if (winnerAddress) {
+						await escrowService.resolveWithWinner(gameCode, winnerAddress);
+					}
+				}
+			} catch (escrowErr) {
+				console.error("Escrow resolution failed:", escrowErr.message);
+				// Log but don't fail the game update
+			}
+		}
 
-    if (error) throw error;
-    return data;
-  }
+		const { error: moveError } = await supabase.from("moves").insert({
+			game_id: game.id,
+			move_number: game.move_count + 1,
+			player: game.current_turn,
+			from_position: from,
+			to_position: to,
+			piece: piece,
+			board_state_after: newBoard,
+			is_check: isCheck,
+			is_checkmate: isCheckmate,
+			promotion: promotion,
+		});
 
-  async getMoves(gameCode) {
-    const game = await this.getGame(gameCode);
-    
-    const { data, error } = await supabase
-      .from('moves')
-      .select('*')
-      .eq('game_id', game.id)
-      .order('move_number', { ascending: true });
+		if (moveError) throw moveError;
 
-    if (error) throw error;
-    return data;
-  }
+		await supabase
+			.from("games")
+			.update({ move_count: game.move_count + 1 })
+			.eq("game_code", gameCode);
 
-  generateGameCode() {
-    return Math.random().toString(36).substring(2, 8).toUpperCase();
-  }
+		return updatedGame;
+	}
+
+	async resignGame(gameCode, playerColor) {
+		const winner = playerColor === "white" ? "black" : "white";
+		const { data, error } = await supabase
+			.from("games")
+			.update({ status: "finished", winner })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+
+		// Resolve escrow with winner address
+		try {
+			const winnerField =
+				winner === "white" ? "player_white_address" : "player_black_address";
+			const winnerAddress = data[winnerField];
+			if (winnerAddress) {
+				await escrowService.resolveWithWinner(gameCode, winnerAddress);
+			}
+		} catch (escrowErr) {
+			console.error("Escrow resolution failed:", escrowErr.message);
+		}
+
+		return data;
+	}
+
+	async offerDraw(gameCode, playerColor) {
+		const { data, error } = await supabase
+			.from("games")
+			.update({ draw_offer: playerColor })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+		return data;
+	}
+
+	async acceptDraw(gameCode) {
+		const { data, error } = await supabase
+			.from("games")
+			.update({ status: "finished", winner: "draw", draw_offer: null })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+
+		// Resolve escrow as draw
+		try {
+			await escrowService.resolveAsDraw(gameCode);
+		} catch (escrowErr) {
+			console.error("Escrow resolution failed:", escrowErr.message);
+		}
+
+		return data;
+	}
+
+	async getMoves(gameCode) {
+		const game = await this.getGame(gameCode);
+
+		const { data, error } = await supabase
+			.from("moves")
+			.select("*")
+			.eq("game_id", game.id)
+			.order("move_number", { ascending: true });
+
+		if (error) throw error;
+		return data;
+	}
+
+	generateGameCode() {
+		return Math.random().toString(36).substring(2, 8).toUpperCase();
+	}
 }
 
 module.exports = new GameModel();

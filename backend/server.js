@@ -4,6 +4,7 @@ const cors = require("cors");
 const http = require("http");
 const { Server } = require("socket.io");
 const gameRoutes = require("./routes/gameRoutes");
+const escrowRoutes = require("./routes/escrowRoutes");
 
 const app = express();
 const server = http.createServer(app);
@@ -17,6 +18,7 @@ app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 app.use("/api", gameRoutes);
+app.use("/api/escrow", escrowRoutes);
 
 app.get("/health", (req, res) => {
 	res.json({ status: "ok", message: "Chesster backend running" });
