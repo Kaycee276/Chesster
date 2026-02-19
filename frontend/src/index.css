@@ -102,6 +102,22 @@ button {
 	cursor: pointer;
 }
 
+/* Override Reown AppKit connect wallet button */
+appkit-button::part(button),
+appkit-connect-button::part(button),
+w3m-button::part(button),
+w3m-connect-button::part(button) {
+	background-color: var(--accent-dark) !important;
+}
+
+appkit-button,
+appkit-connect-button,
+w3m-button,
+w3m-connect-button {
+	--wui-color-accent-100: var(--accent-dark) !important;
+	--w3m-accent: var(--accent-dark) !important;
+}
+
 button:disabled {
 	cursor: not-allowed;
 }

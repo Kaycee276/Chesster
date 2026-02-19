@@ -142,48 +142,28 @@ REFUNDED (3)  → Automatic timeout refund issued
   ```
 - Response: `{ success: true, txHash, blockNumber }`
 
-### Deployment
+### Deployment (Foundry)
 
-#### Compile with Hardhat
-
-1. **Create `hardhat.config.js`** in project root:
-   ```javascript
-   module.exports = {
-     solidity: "0.8.17",
-     networks: {
-       localhost: {
-         url: "http://127.0.0.1:8545"
-       },
-       testnet: {
-         url: process.env.RPC_URL,
-         accounts: [process.env.DEPLOY_KEY]
-       }
-     }
-   };
-   ```
-
-2. **Compile**:
+1. **Build**:
    ```bash
-   npx hardhat compile
+   cd contracts
+   forge build
    ```
 
-3. **Deploy script** (`scripts/deploy.js`):
-   ```javascript
-   const hre = require("hardhat");
-
-   async function main() {
-     const Escrow = await hre.ethers.getContractFactory("ChessterEscrow");
-     const escrow = await Escrow.deploy();
-     await escrow.deployed();
-     console.log("ChessterEscrow deployed to:", escrow.address);
-   }
-
-   main();
-   ```
-
-4. **Deploy**:
+2. **Run tests**:
    ```bash
-   npx hardhat run scripts/deploy.js --network localhost
+   forge test -v
+   ```
+
+3. **Deploy to local Anvil node**:
+   ```bash
+   anvil &
+   forge script script/DeployEscrow.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
+   ```
+
+4. **Deploy to Sepolia testnet**:
+   ```bash
+   forge script script/DeployEscrow.s.sol --rpc-url $SEPOLIA_RPC_URL --broadcast --verify
    ```
 
 5. **Update `.env` with deployed address**
@@ -220,15 +200,18 @@ REFUNDED (3)  → Automatic timeout refund issued
 ### Testing
 
 ```bash
-# Unit tests
-npx hardhat test
+# Run all tests
+forge test -v
 
-# Local testnet (Ganache/Hardhat)
-npx hardhat node
-npx hardhat run scripts/deploy.js --network localhost
+# Run specific test
+forge test --match-test test_CreateMatch_ETH -vvv
 
-# Testnet (Goerli, Sepolia, etc.)
-npx hardhat run scripts/deploy.js --network testnet
+# Gas report
+forge test --gas-report
+
+# Local testnet (Anvil)
+anvil &
+forge script script/DeployEscrow.s.sol --rpc-url http://127.0.0.1:8545 --broadcast
 ```
 
 ### Next Steps

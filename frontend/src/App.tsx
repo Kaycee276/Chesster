@@ -1,6 +1,6 @@
 import { AppKitProvider } from "@reown/appkit/react";
 import { EthersAdapter } from "@reown/appkit-adapter-ethers";
-import { monadTestnet } from "@reown/appkit/networks";
+import { sepolia } from "@reown/appkit/networks";
 import type { AppKitNetwork } from "@reown/appkit/networks";
 
 import { BrowserRouter, Routes, Route } from "react-router-dom";
@@ -15,7 +15,7 @@ if (!projectId) {
 
 // 2. Set the networks
 const networks: [AppKitNetwork, ...AppKitNetwork[]] = [
-	monadTestnet as AppKitNetwork,
+	sepolia as AppKitNetwork,
 ];
 
 const metadata = {
@@ -23,7 +23,7 @@ const metadata = {
 	description:
 		"Chesster is a chess game with on-chain move verification and rewards.",
 	url: "https://chesster-lovat.vercel.app",
-	icons: ["https://avatars.mywebsite.com/"],
+	icons: ["https://chesster-lovat.vercel.app/favicon.ico"],
 };
 
 const App = () => {
@@ -35,6 +35,9 @@ const App = () => {
 			metadata={metadata}
 			features={{
 				analytics: true,
+			}}
+			themeVariables={{
+				"--w3m-accent": "#b91c1c",
 			}}
 		>
 			<BrowserRouter>
