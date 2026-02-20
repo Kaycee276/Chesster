@@ -13,7 +13,6 @@ if (!projectId) {
 	throw new Error("VITE_PROJECT_ID is not set in .env");
 }
 
-// 2. Set the networks
 const networks: [AppKitNetwork, ...AppKitNetwork[]] = [
 	sepolia as AppKitNetwork,
 ];
@@ -21,21 +20,24 @@ const networks: [AppKitNetwork, ...AppKitNetwork[]] = [
 const metadata = {
 	name: "Chesster",
 	description:
-		"Chesster is a chess game with on-chain move verification and rewards.",
+		"A decentralized chess game built with React, Socket.IO, and Supabase. Play against friends or strangers, with on-chain move validation and game state management.",
 	url: "https://chesster-lovat.vercel.app",
 	icons: ["https://chesster-lovat.vercel.app/favicon.ico"],
 };
 
+const ethersAdapter = new EthersAdapter();
+
 const App = () => {
 	return (
 		<AppKitProvider
-			adapters={[new EthersAdapter()]}
+			adapters={[ethersAdapter]}
 			networks={networks}
 			projectId={projectId}
 			metadata={metadata}
-			features={{
-				analytics: true,
-			}}
+			featuredWalletIds={[
+				"c57ca95b47569778a828d19178114f4db188b89b6928c2e8b3decb68f3fd3a30",
+			]}
+			enableInjected={true}
 		>
 			<BrowserRouter>
 				<Toast />

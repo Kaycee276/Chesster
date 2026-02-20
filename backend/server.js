@@ -10,7 +10,7 @@ const timerService = require("./services/timerService");
 const app = express();
 const server = http.createServer(app);
 
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
+const CORS_ORIGIN = process.env.CORS_ORIGIN;
 
 const io = new Server(server, {
 	cors: {
@@ -21,10 +21,12 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
-app.use(cors({
-	origin: CORS_ORIGIN,
-	methods: ["GET", "POST"],
-}));
+app.use(
+	cors({
+		origin: CORS_ORIGIN,
+		methods: ["GET", "POST"],
+	}),
+);
 app.use(express.json());
 
 app.use("/api", gameRoutes);
