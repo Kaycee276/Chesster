@@ -11,4 +11,5 @@ export interface GameState {
 	captured_black?: string[];
 	winner?: string | null;
 	draw_offer?: string | null;
+	turn_started_at?: string | null;
 }

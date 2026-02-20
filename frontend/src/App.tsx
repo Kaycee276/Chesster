@@ -36,9 +36,6 @@ const App = () => {
 			features={{
 				analytics: true,
 			}}
-			themeVariables={{
-				"--w3m-accent": "#b91c1c",
-			}}
 		>
 			<BrowserRouter>
 				<Toast />
