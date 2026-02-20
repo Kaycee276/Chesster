@@ -15,6 +15,8 @@ interface GameStore {
 	inCheck?: boolean;
 	winner?: string | null;
 	drawOffer?: string | null;
+	turnStartedAt?: string | null;
+	secondsLeft: number;
 	capturedWhite?: string[];
 	capturedBlack?: string[];
 	lastMove?: {
@@ -24,8 +26,8 @@ interface GameStore {
 	} | null;
 	selectedSquare: [number, number] | null;
 
-	createGame: () => Promise<void>;
-	joinGame: (code: string, color: "white" | "black") => Promise<void>;
+	createGame: (walletAddress: string) => Promise<void>;
+	joinGame: (code: string, color: "white" | "black", walletAddress: string) => Promise<void>;
 	rejoinGame: (code: string) => Promise<void>;
 	fetchGameState: () => Promise<void>;
 	makeMove: (
@@ -53,20 +55,22 @@ export const useGameStore = create<GameStore>()(
 			inCheck: false,
 			winner: null,
 			drawOffer: null,
+			turnStartedAt: null,
+			secondsLeft: 45,
 			capturedWhite: [],
 			capturedBlack: [],
 			lastMove: null,
 			selectedSquare: null,
 
-			createGame: async () => {
-				const data = await api.createGame();
+			createGame: async (walletAddress: string) => {
+				const data = await api.createGame("chess", walletAddress);
 				if (data.success) {
-					await get().joinGame(data.data.game_code, "white");
+					await get().joinGame(data.data.game_code, "white", walletAddress);
 				}
 			},
 
-			joinGame: async (code: string, color: "white" | "black") => {
-				const data = await api.joinGame(code, color);
+			joinGame: async (code: string, color: "white" | "black", walletAddress: string) => {
+				const data = await api.joinGame(code, color, walletAddress);
 				if (data.success) {
 					set({ gameCode: code, playerColor: color });
 					await get().fetchGameState();
@@ -75,6 +79,9 @@ export const useGameStore = create<GameStore>()(
 					socketService.joinGame(code);
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
+					});
+					socketService.onTimerTick(({ secondsLeft }) => {
+						set({ secondsLeft });
 					});
 				} else {
 					throw new Error(data.error);
@@ -95,6 +102,7 @@ export const useGameStore = create<GameStore>()(
 						inCheck: data.data.in_check ?? false,
 						winner: data.data.winner ?? null,
 						drawOffer: data.data.draw_offer ?? null,
+						turnStartedAt: data.data.turn_started_at ?? null,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
 						lastMove: data.data.last_move ?? null,
@@ -104,6 +112,9 @@ export const useGameStore = create<GameStore>()(
 					socketService.joinGame(code);
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
+					});
+					socketService.onTimerTick(({ secondsLeft }) => {
+						set({ secondsLeft });
 					});
 				} else {
 					throw new Error(data.error);
@@ -123,6 +134,7 @@ export const useGameStore = create<GameStore>()(
 						inCheck: data.data.in_check ?? false,
 						winner: data.data.winner ?? null,
 						drawOffer: data.data.draw_offer ?? null,
+						turnStartedAt: data.data.turn_started_at ?? null,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
 						lastMove: data.data.last_move ?? null,
@@ -147,6 +159,7 @@ export const useGameStore = create<GameStore>()(
 						inCheck: data.data.in_check ?? false,
 						winner: data.data.winner ?? null,
 						drawOffer: data.data.draw_offer ?? null,
+						turnStartedAt: data.data.turn_started_at ?? null,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
 						lastMove: data.data.last_move ?? null,
@@ -165,6 +178,7 @@ export const useGameStore = create<GameStore>()(
 					inCheck: data.in_check ?? false,
 					winner: data.winner ?? null,
 					drawOffer: data.draw_offer ?? null,
+					turnStartedAt: data.turn_started_at ?? null,
 					capturedWhite: data.captured_white ?? [],
 					capturedBlack: data.captured_black ?? [],
 					lastMove: data.last_move ?? null,
@@ -188,7 +202,7 @@ export const useGameStore = create<GameStore>()(
 				if (!gameCode || !playerColor) return;
 				const data = await api.offerDraw(gameCode, playerColor);
 				if (data.success) {
-					set({ status: data.data.status });
+					set({ status: data.data.status, drawOffer: data.data.draw_offer ?? null });
 				}
 			},
 
@@ -206,6 +220,7 @@ export const useGameStore = create<GameStore>()(
 				if (gameCode) {
 					socketService.leaveGame(gameCode);
 					socketService.offGameUpdate();
+					socketService.offTimerTick();
 					socketService.disconnect();
 				}
 				set({
@@ -214,6 +229,7 @@ export const useGameStore = create<GameStore>()(
 					board: [],
 					currentTurn: "white",
 					status: "",
+					secondsLeft: 45,
 					selectedSquare: null,
 				});
 			},

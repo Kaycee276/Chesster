@@ -36,6 +36,14 @@ class SocketService {
 	offGameUpdate() {
 		this.socket?.off("game-update");
 	}
+
+	onTimerTick(callback: (data: { secondsLeft: number }) => void) {
+		this.socket?.on("timer-tick", callback);
+	}
+
+	offTimerTick() {
+		this.socket?.off("timer-tick");
+	}
 }
 
 export const socketService = new SocketService();

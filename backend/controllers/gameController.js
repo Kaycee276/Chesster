@@ -1,4 +1,5 @@
 const gameModel = require("../models/gameModel");
+const timerService = require("../services/timerService");
 
 class GameController {
 	async createGame(req, res) {
@@ -30,6 +31,10 @@ class GameController {
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
 
+			if (game.status === "active") {
+				timerService.startTimer(gameCode);
+			}
+
 			res.json({ success: true, data: game });
 		} catch (error) {
 			res.status(400).json({ success: false, error: error.message });
@@ -55,6 +60,12 @@ class GameController {
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
 
+			if (game.status === "active") {
+				timerService.startTimer(gameCode);
+			} else {
+				timerService.clearTimer(gameCode);
+			}
+
 			res.json({ success: true, data: game });
 		} catch (error) {
 			res.status(400).json({ success: false, error: error.message });
@@ -76,6 +87,8 @@ class GameController {
 			const { gameCode } = req.params;
 			const { playerColor } = req.body;
 			const game = await gameModel.resignGame(gameCode, playerColor);
+
+			timerService.clearTimer(gameCode);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
@@ -105,6 +118,8 @@ class GameController {
 		try {
 			const { gameCode } = req.params;
 			const game = await gameModel.acceptDraw(gameCode);
+
+			timerService.clearTimer(gameCode);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);

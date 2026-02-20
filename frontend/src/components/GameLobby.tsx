@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
-import { AppKitButton } from "@reown/appkit/react";
+import { AppKitButton, useAppKitAccount } from "@reown/appkit/react";
 
 export default function GameLobby() {
 	const [gameCode, setGameCode] = useState("");
@@ -10,11 +10,16 @@ export default function GameLobby() {
 	const { createGame, joinGame } = useGameStore();
 	const { addToast } = useToastStore();
 	const navigate = useNavigate();
+	const { address, isConnected } = useAppKitAccount();
 
 	const handleCreateGame = async () => {
+		if (!isConnected || !address) {
+			addToast("Please connect your wallet first", "error");
+			return;
+		}
 		setLoading(true);
 		try {
-			await createGame();
+			await createGame(address);
 			const code = useGameStore.getState().gameCode;
 			if (code) navigate(`/${code}`);
 		} catch (error: unknown) {
@@ -27,11 +32,15 @@ export default function GameLobby() {
 		setLoading(false);
 	};
 
-	const handleJoinGame = async (color: "white" | "black") => {
+	const handleJoinGame = async () => {
+		if (!isConnected || !address) {
+			addToast("Please connect your wallet first", "error");
+			return;
+		}
 		if (!gameCode) return;
 		setLoading(true);
 		try {
-			await joinGame(gameCode, color);
+			await joinGame(gameCode, "black", address);
 			navigate(`/${gameCode}`);
 		} catch (error: unknown) {
 			if (error instanceof Error) {
@@ -49,10 +58,13 @@ export default function GameLobby() {
 				<AppKitButton />
 			</div>
 			<h1 className="text-6xl font-bold ">Chesster</h1>
+			{!isConnected && (
+				<p className="text-gray-400 text-sm">Connect your wallet to play</p>
+			)}
 			<div className="flex flex-col gap-5 w-80">
 				<button
 					onClick={handleCreateGame}
-					disabled={loading}
+					disabled={loading || !isConnected}
 					className="px-6 py-3 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors rounded-2xl"
 				>
 					Create New Game
@@ -66,22 +78,13 @@ export default function GameLobby() {
 						maxLength={10}
 						className="px-4 py-3 text-lg border rounded text-center uppercase outline-none"
 					/>
-					<div className="flex gap-3">
-						<button
-							onClick={() => handleJoinGame("white")}
-							disabled={!gameCode || loading}
-							className="flex-1 px-3 py-1 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors rounded-xl"
-						>
-							Join as White
-						</button>
-						<button
-							onClick={() => handleJoinGame("black")}
-							disabled={!gameCode || loading}
-							className="flex-1 px-3 py-1 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors rounded-xl"
-						>
-							Join as Black
-						</button>
-					</div>
+					<button
+						onClick={handleJoinGame}
+						disabled={!gameCode || loading || !isConnected}
+						className="px-3 py-3 text-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:bg-gray-400 transition-colors rounded-xl"
+					>
+						Join Game
+					</button>
 				</div>
 			</div>
 		</div>

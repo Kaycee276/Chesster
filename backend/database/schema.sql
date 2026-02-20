@@ -29,6 +29,32 @@ CREATE TABLE moves (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Migration: add turn timer support
+ALTER TABLE games ADD COLUMN turn_started_at TIMESTAMP WITH TIME ZONE;
+
+-- Migration: add player wallet addresses
+ALTER TABLE games ADD COLUMN player_white_address VARCHAR(255);
+ALTER TABLE games ADD COLUMN player_black_address VARCHAR(255);
+
+-- Migration: add wager/escrow support
+ALTER TABLE games ADD COLUMN wager_amount NUMERIC;
+ALTER TABLE games ADD COLUMN token_address VARCHAR(255);
+ALTER TABLE games ADD COLUMN escrow_status JSONB;
+
+-- Migration: add game state tracking columns
+ALTER TABLE games ADD COLUMN in_check BOOLEAN DEFAULT false;
+ALTER TABLE games ADD COLUMN last_move JSONB;
+ALTER TABLE games ADD COLUMN draw_offer VARCHAR(10);
+
+-- Migration: add captured pieces tracking
+ALTER TABLE games ADD COLUMN captured_white JSONB DEFAULT '[]';
+ALTER TABLE games ADD COLUMN captured_black JSONB DEFAULT '[]';
+
+-- Migration: add move detail columns
+ALTER TABLE moves ADD COLUMN is_check BOOLEAN DEFAULT false;
+ALTER TABLE moves ADD COLUMN is_checkmate BOOLEAN DEFAULT false;
+ALTER TABLE moves ADD COLUMN promotion VARCHAR(5);
+
 -- Indexes for performance
 CREATE INDEX idx_games_code ON games(game_code);
 CREATE INDEX idx_moves_game ON moves(game_id, move_number);

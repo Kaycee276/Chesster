@@ -12,20 +12,37 @@ import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { getPossibleMoves, getCapturedPieces } from "../utils/chessUtils";
 import PromotionModal from "./PromotionModal";
+import TurnTimer from "./TurnTimer";
 
+// Uppercase = white pieces (hollow outline symbols)
+// Lowercase = black pieces (filled symbols)
 const PIECE_SYMBOLS: Record<string, string> = {
-	K: "♚",
-	Q: "♛",
-	R: "♜",
-	B: "♝",
-	N: "♞",
-	P: "♟",
+	K: "♔",
+	Q: "♕",
+	R: "♖",
+	B: "♗",
+	N: "♘",
+	P: "♙",
 	k: "♚",
 	q: "♛",
 	r: "♜",
 	b: "♝",
 	n: "♞",
 	p: "♟",
+};
+
+const WHITE_PIECE_STYLE: React.CSSProperties = {
+	color: "#ffffff",
+	textShadow:
+		"-1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000",
+	WebkitTextStroke: "0.5px #000",
+};
+
+const BLACK_PIECE_STYLE: React.CSSProperties = {
+	color: "#111111",
+	textShadow:
+		"-1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff",
+	WebkitTextStroke: "0.5px #fff",
 };
 
 export default function ChessBoard() {
@@ -55,6 +72,7 @@ export default function ChessBoard() {
 	const inCheck = useGameStore((s) => s.inCheck);
 	const winner = useGameStore((s) => s.winner);
 	const drawOffer = useGameStore((s) => s.drawOffer);
+	const secondsLeft = useGameStore((s) => s.secondsLeft);
 
 	// Calculate captured pieces based on current board state
 	const capturedByCurrentPlayer = useMemo(
@@ -223,6 +241,12 @@ export default function ChessBoard() {
 						{gameCode}
 					</span>
 
+					{status === "active" && (
+						<TurnTimer
+							secondsLeft={secondsLeft}
+							isMyTurn={currentTurn === playerColor}
+						/>
+					)}
 					{inCheck && currentTurn === playerColor && status === "active" && (
 						<span className="flex items-center gap-1 text-red-500 font-bold">
 							<AlertTriangle size={12} />
@@ -266,7 +290,12 @@ export default function ChessBoard() {
 											)}
 											{piece !== "." && (
 												<span
-													className={`text-5xl select-none ${piece === piece.toUpperCase() ? "text-white" : "text-black"}`}
+													className="text-5xl select-none"
+													style={
+														piece === piece.toUpperCase()
+															? WHITE_PIECE_STYLE
+															: BLACK_PIECE_STYLE
+													}
 												>
 													{PIECE_SYMBOLS[piece]}
 												</span>
@@ -282,7 +311,13 @@ export default function ChessBoard() {
 
 			<div className="flex flex-wrap gap-2 justify-center max-w-xs mt-2">
 				{capturedByCurrentPlayer.map((p, i) => (
-					<span key={i} className="text-2xl">
+					<span
+						key={i}
+						className="text-2xl"
+						style={
+							p === p.toUpperCase() ? WHITE_PIECE_STYLE : BLACK_PIECE_STYLE
+						}
+					>
 						{PIECE_SYMBOLS[p]}
 					</span>
 				))}

@@ -58,6 +58,17 @@ class GameModel {
 		if (game.status !== "waiting" && game.status !== "active")
 			throw new Error("Cannot join game");
 
+		// Prevent the same wallet from joining as both players
+		if (playerAddress) {
+			const otherColorAddress =
+				playerColor === "white"
+					? game.player_black_address
+					: game.player_white_address;
+			if (otherColorAddress === playerAddress) {
+				throw new Error("You cannot play against yourself");
+			}
+		}
+
 		if (game.player_white === true && game.player_black === true)
 			if (
 				game[playerColor === "white" ? "player_white" : "player_black"] === true
@@ -78,6 +89,9 @@ class GameModel {
 				[updateField]: true,
 				[addressField]: playerAddress,
 				status: bothPlayersJoined ? "active" : "waiting",
+				...(bothPlayersJoined
+					? { turn_started_at: new Date().toISOString() }
+					: {}),
 			})
 			.eq("game_code", gameCode)
 			.select()
@@ -139,13 +153,44 @@ class GameModel {
 			validation.enPassant,
 		);
 		const nextTurn = game.current_turn === "white" ? "black" : "white";
-		const isCheck = chessEngine.isKingInCheck(newBoard, nextTurn);
-		const isCheckmate = chessEngine.isCheckmate(newBoard, nextTurn, {
+
+		// Track captured pieces
+		const newCapturedWhite = [...(game.captured_white || [])];
+		const newCapturedBlack = [...(game.captured_black || [])];
+
+		const targetPiece = game.board_state[to[0]][to[1]];
+		if (targetPiece !== ".") {
+			// uppercase = white piece captured by black; lowercase = black piece captured by white
+			if (targetPiece === targetPiece.toUpperCase()) {
+				newCapturedWhite.push(targetPiece);
+			} else {
+				newCapturedBlack.push(targetPiece);
+			}
+		}
+
+		// Handle en passant: the captured pawn is on the same row as the attacker
+		if (validation.enPassant) {
+			const epRow = game.current_turn === "white" ? to[0] + 1 : to[0] - 1;
+			const epPiece = game.board_state[epRow][to[1]];
+			if (epPiece !== ".") {
+				if (epPiece === epPiece.toUpperCase()) {
+					newCapturedWhite.push(epPiece);
+				} else {
+					newCapturedBlack.push(epPiece);
+				}
+			}
+		}
+		// Check if the opponent's king was directly captured
+		const opponentKing = nextTurn === "white" ? "K" : "k";
+		const kingCaptured = !newBoard.some((row) => row.includes(opponentKing));
+
+		const isCheck = kingCaptured ? false : chessEngine.isKingInCheck(newBoard, nextTurn);
+		const isCheckmate = kingCaptured ? false : chessEngine.isCheckmate(newBoard, nextTurn, {
 			from,
 			to,
 			piece,
 		});
-		const isStalemate = chessEngine.isStalemate(newBoard, nextTurn, {
+		const isStalemate = kingCaptured ? false : chessEngine.isStalemate(newBoard, nextTurn, {
 			from,
 			to,
 			piece,
@@ -154,7 +199,7 @@ class GameModel {
 		let newStatus = game.status;
 		let winner = null;
 
-		if (isCheckmate) {
+		if (kingCaptured || isCheckmate) {
 			newStatus = "finished";
 			winner = game.current_turn;
 		} else if (isStalemate) {
@@ -171,6 +216,9 @@ class GameModel {
 				in_check: isCheck,
 				status: newStatus,
 				winner: winner,
+				captured_white: newCapturedWhite,
+				captured_black: newCapturedBlack,
+				turn_started_at: new Date().toISOString(),
 			})
 			.eq("game_code", gameCode)
 			.select()
@@ -281,6 +329,25 @@ class GameModel {
 			console.error("Escrow resolution failed:", escrowErr.message);
 		}
 
+		return data;
+	}
+
+	async forfeitTurn(gameCode) {
+		const game = await this.getGame(gameCode);
+		if (!game || game.status !== "active") return game;
+
+		const nextTurn = game.current_turn === "white" ? "black" : "white";
+		const { data, error } = await supabase
+			.from("games")
+			.update({
+				current_turn: nextTurn,
+				turn_started_at: new Date().toISOString(),
+			})
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
 		return data;
 	}
 

@@ -3,20 +3,20 @@ const BACKEND_URL =
 const API_URL = `${BACKEND_URL}api`;
 
 export const api = {
-	createGame: async (gameType = "chess") => {
+	createGame: async (gameType = "chess", playerAddress?: string) => {
 		const res = await fetch(`${API_URL}/games`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ gameType }),
+			body: JSON.stringify({ gameType, playerWhiteAddress: playerAddress }),
 		});
 		return res.json();
 	},
 
-	joinGame: async (gameCode: string, playerColor: "white" | "black") => {
+	joinGame: async (gameCode: string, playerColor: "white" | "black", playerAddress?: string) => {
 		const res = await fetch(`${API_URL}/games/${gameCode}/join`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ playerColor }),
+			body: JSON.stringify({ playerColor, playerAddress }),
 		});
 		return res.json();
 	},

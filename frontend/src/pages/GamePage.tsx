@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
+import { useAppKitAccount, AppKitButton } from "@reown/appkit/react";
 import ChessBoard from "../components/ChessBoard";
 
 export default function GamePage() {
@@ -14,6 +15,7 @@ export default function GamePage() {
 		joinGame,
 	} = useGameStore();
 	const { addToast } = useToastStore();
+	const { address, isConnected } = useAppKitAccount();
 	const [loading, setLoading] = useState(false);
 
 	useEffect(() => {
@@ -26,14 +28,17 @@ export default function GamePage() {
 		if (storedGameCode === gameCode && playerColor) {
 			rejoinGame(gameCode);
 		}
-		// Otherwise, player needs to choose a color
 	}, [gameCode, storedGameCode, playerColor, rejoinGame, navigate]);
 
-	const handleJoinColor = async (color: "white" | "black") => {
+	const handleJoinAsBlack = async () => {
 		if (!gameCode) return;
+		if (!isConnected || !address) {
+			addToast("Please connect your wallet first", "error");
+			return;
+		}
 		setLoading(true);
 		try {
-			await joinGame(gameCode, color);
+			await joinGame(gameCode, "black", address);
 		} catch (error: unknown) {
 			if (error instanceof Error) {
 				addToast(error.message, "error");
@@ -49,26 +54,24 @@ export default function GamePage() {
 		return <ChessBoard />;
 	}
 
-	// Show color selection if visiting game URL without being a player
+	// Show join prompt for the second player
 	return (
 		<div className="flex flex-col items-center justify-center min-h-screen gap-8">
+			<div className="absolute top-6 right-6">
+				<AppKitButton />
+			</div>
 			<h2 className="text-4xl font-bold">Join Game {gameCode}</h2>
-			<div className="flex gap-4">
+			{!isConnected ? (
+				<p className="text-gray-400 text-sm">Connect your wallet to join</p>
+			) : (
 				<button
-					onClick={() => handleJoinColor("white")}
-					disabled={loading}
-					className="px-6 py-3 text-lg bg-white text-black hover:bg-gray-200 disabled:bg-gray-400 transition-colors rounded-lg font-bold"
-				>
-					Play as White
-				</button>
-				<button
-					onClick={() => handleJoinColor("black")}
+					onClick={handleJoinAsBlack}
 					disabled={loading}
 					className="px-6 py-3 text-lg bg-black text-white hover:bg-gray-800 disabled:bg-gray-400 transition-colors rounded-lg font-bold"
 				>
-					Play as Black
+					{loading ? "Joining..." : "Play as Black"}
 				</button>
-			</div>
+			)}
 		</div>
 	);
 }
