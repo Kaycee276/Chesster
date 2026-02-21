@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { useToastStore } from "../store/toastStore";
 
 export default function Toast() {
@@ -8,15 +9,22 @@ export default function Toast() {
 			{toasts.map((toast) => (
 				<div
 					key={toast.id}
-					className={`px-4 py-3 rounded shadow-lg text-white cursor-pointer ${
+					className={`px-4 py-3 rounded-xl shadow-lg text-white flex items-center gap-2 ${
+						toast.type === "loading" ? "cursor-default" : "cursor-pointer"
+					} ${
 						toast.type === "error"
 							? "bg-(--error)"
 							: toast.type === "success"
 								? "bg-(--success)"
-								: "bg-(--info)"
+								: toast.type === "loading"
+									? "bg-(--info)"
+									: "bg-(--warning)"
 					}`}
-					onClick={() => removeToast(toast.id)}
+					onClick={() => toast.type !== "loading" && removeToast(toast.id)}
 				>
+					{toast.type === "loading" && (
+						<Loader2 size={16} className="animate-spin shrink-0" />
+					)}
 					{toast.message}
 				</div>
 			))}

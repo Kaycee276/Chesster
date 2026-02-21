@@ -60,10 +60,11 @@ export default function ChessBoard() {
 		offerDraw,
 		acceptDraw,
 	} = useGameStore();
-	const { addToast } = useToastStore();
+	const { addToast, removeToast } = useToastStore();
 	const navigate = useNavigate();
 
 	const [copied, setCopied] = useState(false);
+	const [isMoving, setIsMoving] = useState(false);
 	const [promotionMove, setPromotionMove] = useState<{
 		from: [number, number];
 		to: [number, number];
@@ -119,7 +120,7 @@ export default function ChessBoard() {
 	};
 
 	const handleSquareClick = async (row: number, col: number) => {
-		if (status !== "active" || currentTurn !== playerColor) return;
+		if (status !== "active" || currentTurn !== playerColor || isMoving) return;
 
 		if (!selectedSquare) {
 			const piece = board[row][col];
@@ -132,11 +133,18 @@ export default function ChessBoard() {
 				return;
 			selectSquare([row, col]);
 		} else {
-			// If user clicks the same selected square again, just unselect it
+			// Unselect if clicking the same square
 			if (selectedSquare[0] === row && selectedSquare[1] === col) {
 				selectSquare(null);
 				return;
 			}
+			// Re-select if clicking another own piece
+			const clickedPiece = board[row][col];
+			if (clickedPiece !== "." && isPlayerPiece(clickedPiece)) {
+				selectSquare([row, col]);
+				return;
+			}
+
 			const piece = board[selectedSquare[0]][selectedSquare[1]];
 			const isPromotion =
 				piece.toLowerCase() === "p" && (row === 0 || row === 7);
@@ -146,6 +154,8 @@ export default function ChessBoard() {
 				return;
 			}
 
+			setIsMoving(true);
+			const toastId = addToast("Moving...", "loading");
 			try {
 				await makeMove(selectedSquare, [row, col]);
 			} catch (error: unknown) {
@@ -155,20 +165,26 @@ export default function ChessBoard() {
 					addToast("Something went wrong", "error");
 				}
 				selectSquare(null);
+			} finally {
+				removeToast(toastId);
+				setIsMoving(false);
 			}
 		}
 	};
 
 	const handlePromotion = async (piece: string) => {
 		if (!promotionMove) return;
+		setIsMoving(true);
+		const toastId = addToast("Promoting...", "loading");
 		try {
 			await makeMove(promotionMove.from, promotionMove.to, piece);
-			setPromotionMove(null);
-			selectSquare(null);
 		} catch (error: unknown) {
 			if (error instanceof Error) {
 				addToast(error.message, "error");
 			}
+		} finally {
+			removeToast(toastId);
+			setIsMoving(false);
 			setPromotionMove(null);
 			selectSquare(null);
 		}

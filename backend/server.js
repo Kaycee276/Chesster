@@ -10,7 +10,7 @@ const timerService = require("./services/timerService");
 const app = express();
 const server = http.createServer(app);
 
-const CORS_ORIGIN = process.env.CORS_ORIGIN;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 
 const io = new Server(server, {
 	cors: {

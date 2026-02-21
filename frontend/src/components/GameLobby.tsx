@@ -8,7 +8,7 @@ export default function GameLobby() {
 	const [gameCode, setGameCode] = useState("");
 	const [loading, setLoading] = useState(false);
 	const { createGame, joinGame } = useGameStore();
-	const { addToast } = useToastStore();
+	const { addToast, removeToast } = useToastStore();
 	const navigate = useNavigate();
 	const { address, isConnected } = useAppKitAccount();
 
@@ -18,6 +18,7 @@ export default function GameLobby() {
 			return;
 		}
 		setLoading(true);
+		const toastId = addToast("Creating game...", "loading");
 		try {
 			await createGame(address);
 			const code = useGameStore.getState().gameCode;
@@ -28,8 +29,10 @@ export default function GameLobby() {
 			} else {
 				addToast("Something went wrong");
 			}
+		} finally {
+			removeToast(toastId);
+			setLoading(false);
 		}
-		setLoading(false);
 	};
 
 	const handleJoinGame = async () => {
@@ -39,6 +42,7 @@ export default function GameLobby() {
 		}
 		if (!gameCode) return;
 		setLoading(true);
+		const toastId = addToast("Joining game...", "loading");
 		try {
 			await joinGame(gameCode, "black", address);
 			navigate(`/${gameCode}`);
@@ -48,8 +52,10 @@ export default function GameLobby() {
 			} else {
 				addToast("Something went wrong");
 			}
+		} finally {
+			removeToast(toastId);
+			setLoading(false);
 		}
-		setLoading(false);
 	};
 
 	return (
