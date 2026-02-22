@@ -17,8 +17,8 @@ export default function Toast() {
 							: toast.type === "success"
 								? "bg-(--success)"
 								: toast.type === "loading"
-									? "bg-(--info)"
-									: "bg-(--warning)"
+									? "bg-(--warning)"
+									: "bg-(--info)"
 					}`}
 					onClick={() => toast.type !== "loading" && removeToast(toast.id)}
 				>

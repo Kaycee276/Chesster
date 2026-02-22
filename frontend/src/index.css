@@ -62,9 +62,20 @@ body {
 		color 0.3s ease;
 }
 
+html,
+body {
+	height: 100%;
+	overflow: hidden;
+	overscroll-behavior: none;
+}
+
 html {
 	scroll-behavior: smooth;
-	overscroll-behavior: none;
+}
+
+#root {
+	height: 100%;
+	overflow: hidden;
 }
 
 /* Custom scrollbar */

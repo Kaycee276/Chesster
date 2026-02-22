@@ -14,8 +14,6 @@ import { getPossibleMoves, getCapturedPieces } from "../utils/chessUtils";
 import PromotionModal from "./PromotionModal";
 import TurnTimer from "./TurnTimer";
 
-// Uppercase = white pieces (hollow outline symbols)
-// Lowercase = black pieces (filled symbols)
 const PIECE_SYMBOLS: Record<string, string> = {
 	K: "♔",
 	Q: "♕",
@@ -44,6 +42,9 @@ const BLACK_PIECE_STYLE: React.CSSProperties = {
 		"-1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff",
 	WebkitTextStroke: "0.5px #fff",
 };
+
+// Board occupies the smaller of: (viewport width − 8px), (viewport height − 10rem), capped at 600px
+const BOARD_SIZE = "min(calc(100vw - 8px), calc(100svh - 10rem), 600px)";
 
 export default function ChessBoard() {
 	const {
@@ -75,13 +76,11 @@ export default function ChessBoard() {
 	const drawOffer = useGameStore((s) => s.drawOffer);
 	const secondsLeft = useGameStore((s) => s.secondsLeft);
 
-	// Calculate captured pieces based on current board state
 	const capturedByCurrentPlayer = useMemo(
 		() => getCapturedPieces(board, currentTurn),
 		[board, currentTurn],
 	);
 
-	// Initialize game notifications hook
 	useGameNotifications();
 
 	const possibleMoves = useMemo(() => {
@@ -133,12 +132,10 @@ export default function ChessBoard() {
 				return;
 			selectSquare([row, col]);
 		} else {
-			// Unselect if clicking the same square
 			if (selectedSquare[0] === row && selectedSquare[1] === col) {
 				selectSquare(null);
 				return;
 			}
-			// Re-select if clicking another own piece
 			const clickedPiece = board[row][col];
 			if (clickedPiece !== "." && isPlayerPiece(clickedPiece)) {
 				selectSquare([row, col]);
@@ -206,137 +203,234 @@ export default function ChessBoard() {
 			? [...board].reverse().map((row) => [...row].reverse())
 			: board;
 
+	const opponentColor = playerColor === "white" ? "black" : "white";
+	const isMyTurn = currentTurn === playerColor;
+
+	const PlayerAvatar = ({ color }: { color: "white" | "black" }) => (
+		<div
+			className={`w-7 h-7 rounded-full flex items-center justify-center text-base border-2 shrink-0 ${
+				color === "white"
+					? "bg-white border-gray-300 text-gray-900"
+					: "bg-gray-900 border-gray-600 text-white"
+			}`}
+		>
+			{color === "white" ? "♔" : "♚"}
+		</div>
+	);
+
 	return (
-		<div className="flex flex-col items-center justify-center p-4 min-h-screen">
+		<div className="h-svh w-screen overflow-hidden flex flex-col items-center justify-center bg-(--bg) select-none p-1 gap-1.5">
 			{promotionMove && (
 				<PromotionModal onSelect={handlePromotion} color={playerColor!} />
 			)}
 
-			<div className="flex flex-col items-center gap-4">
-				<div className="flex items-center justify-center gap-3 text-xs px-4 py-2 rounded flex-wrap">
+			{/* ── Opponent Info Bar ── */}
+			<div
+				className="flex items-center justify-between px-3 py-2 rounded-xl bg-(--bg-secondary) border border-(--border) shrink-0"
+				style={{ width: BOARD_SIZE }}
+			>
+				<div className="flex items-center gap-2 min-w-0">
+					<PlayerAvatar color={opponentColor as "white" | "black"} />
+					<span className="text-xs font-semibold uppercase tracking-wider text-(--text-secondary) truncate">
+						Opponent · {opponentColor}
+					</span>
+				</div>
+				<div className="flex items-center gap-2 shrink-0">
+					{status === "active" && !isMyTurn && (
+						<TurnTimer secondsLeft={secondsLeft} isMyTurn={false} />
+					)}
+					{status === "active" && isMyTurn && (
+						<span className="text-xs text-(--text-tertiary) italic">
+							thinking…
+						</span>
+					)}
+				</div>
+			</div>
+
+			{/* ── Chess Board ── */}
+			<div
+				className="shrink-0 rounded-sm overflow-hidden shadow-2xl"
+				style={
+					{
+						width: BOARD_SIZE,
+						height: BOARD_SIZE,
+						display: "grid",
+						gridTemplateColumns: "repeat(8, 1fr)",
+						gridTemplateRows: "repeat(8, 1fr)",
+						"--board-size": BOARD_SIZE,
+					} as React.CSSProperties
+				}
+			>
+				{displayBoard.map((row, rowIndex) =>
+					row.map((piece, colIndex) => {
+						const actualRow = playerColor === "black" ? 7 - rowIndex : rowIndex;
+						const actualCol = playerColor === "black" ? 7 - colIndex : colIndex;
+						const isLight = (actualRow + actualCol) % 2 === 0;
+						const selected = isSelected(actualRow, actualCol);
+						const possible = isPossibleMove(actualRow, actualCol);
+						const isKingInCheck =
+							inCheck &&
+							isMyTurn &&
+							piece.toLowerCase() === "k" &&
+							isPlayerPiece(piece);
+						const highlight =
+							isMyTurn &&
+							isPlayerPiece(piece) &&
+							status === "active" &&
+							!selected;
+
+						return (
+							<div
+								key={`${rowIndex}-${colIndex}`}
+								className={`relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 ${
+									isLight ? "bg-(--accent-light)/90" : "bg-(--accent-dark)"
+								} ${selected ? "bg-yellow-400/75" : ""} ${
+									isKingInCheck ? "bg-red-500/80" : ""
+								} ${highlight ? " outline-2 outline-yellow-300/60 -outline-offset-2" : ""}`}
+								onClick={() => handleSquareClick(actualRow, actualCol)}
+							>
+								{/* Possible-move dot */}
+								{possible && (
+									<div
+										className="absolute rounded-full bg-black/30 dark:bg-white/25 pointer-events-none"
+										style={{
+											width: "calc(var(--board-size) / 8 * 0.32)",
+											height: "calc(var(--board-size) / 8 * 0.32)",
+										}}
+									/>
+								)}
+								{/* Piece */}
+								{piece !== "." && (
+									<span
+										className="leading-none pointer-events-none"
+										style={{
+											fontSize: "calc(var(--board-size) / 8 * 0.72)",
+											...(piece === piece.toUpperCase()
+												? WHITE_PIECE_STYLE
+												: BLACK_PIECE_STYLE),
+										}}
+									>
+										{PIECE_SYMBOLS[piece]}
+									</span>
+								)}
+							</div>
+						);
+					}),
+				)}
+			</div>
+
+			{/* ── Player Info Bar ── */}
+			<div
+				className="flex items-center justify-between px-3 py-2 rounded-xl bg-(--bg-secondary) border border-(--border) shrink-0"
+				style={{ width: BOARD_SIZE }}
+			>
+				<div className="flex items-center gap-2 min-w-0">
+					<PlayerAvatar color={playerColor as "white" | "black"} />
+					<span className="text-xs font-semibold uppercase tracking-wider truncate">
+						You · {playerColor}
+					</span>
+					{/* Captured pieces */}
+					{capturedByCurrentPlayer.length > 0 && (
+						<div className="flex overflow-hidden max-w-25 shrink-0">
+							{capturedByCurrentPlayer.map((p, i) => (
+								<span
+									key={i}
+									className="leading-none"
+									style={{
+										fontSize: "0.8rem",
+										...(p === p.toUpperCase()
+											? WHITE_PIECE_STYLE
+											: BLACK_PIECE_STYLE),
+									}}
+								>
+									{PIECE_SYMBOLS[p]}
+								</span>
+							))}
+						</div>
+					)}
+				</div>
+				<div className="flex items-center gap-2 shrink-0">
+					{inCheck && isMyTurn && status === "active" && (
+						<span className="flex items-center gap-1 text-red-500 font-bold text-xs animate-pulse">
+							<AlertTriangle size={10} />
+							CHECK!
+						</span>
+					)}
+					{status === "active" && isMyTurn && (
+						<TurnTimer secondsLeft={secondsLeft} isMyTurn={true} />
+					)}
+					{status === "active" && !isMyTurn && (
+						<span className="text-xs text-(--text-tertiary) italic">
+							your turn next
+						</span>
+					)}
+					{status === "finished" && (
+						<span className="font-bold text-(--info) uppercase text-xs tracking-wide">
+							{winner === "draw"
+								? "Draw!"
+								: winner === playerColor
+									? "You win!"
+									: "You lose"}
+						</span>
+					)}
+				</div>
+			</div>
+
+			{/* ── Action Bar ── */}
+			<div
+				className="flex items-center justify-between px-3 py-2 rounded-xl bg-(--bg-secondary) border border-(--border) gap-2 shrink-0"
+				style={{ width: BOARD_SIZE }}
+			>
+				{/* Game actions */}
+				<div className="flex items-center gap-1.5">
 					<button
 						onClick={handleLeaveGame}
-						className="px-3 py-1 bg-gray-500 hover:bg-gray-600 rounded flex items-center gap-1 "
+						className="px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600 text-(--text-secondary) hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
 					>
-						<LogOut size={12} />
+						<LogOut size={11} />
 						Leave
 					</button>
 					{status === "active" && (
 						<>
 							<button
 								onClick={handleResign}
-								className="px-3 py-1 bg-red-500 hover:bg-red-600 rounded flex items-center gap-1 "
+								className="px-2.5 py-1 bg-red-500/15 hover:bg-red-500 text-red-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
 							>
-								<Flag size={12} />
+								<Flag size={11} />
 								Resign
 							</button>
 							{drawOffer !== playerColor && (
 								<button
 									onClick={handleOfferDraw}
-									className="px-3 py-1 bg-blue-500 hover:bg-blue-600 rounded flex items-center gap-1 "
+									className="px-2.5 py-1 bg-blue-500/15 hover:bg-blue-500 text-blue-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
 								>
-									<Handshake size={12} />
-									Offer Draw
+									<Handshake size={11} />
+									Draw
 								</button>
 							)}
 							{drawOffer && drawOffer !== playerColor && (
 								<button
 									onClick={handleAcceptDraw}
-									className="px-3 py-1 bg-green-500 hover:bg-green-600 rounded flex items-center gap-1  animate-pulse"
+									className="px-2.5 py-1 bg-green-500 hover:bg-green-600 text-white rounded-lg flex items-center gap-1 text-xs transition-colors animate-pulse"
 								>
-									<Handshake size={12} />
-									Accept Draw
+									<Handshake size={11} />
+									Accept
 								</button>
 							)}
 						</>
 					)}
-					<span className="flex items-center gap-1 font-mono">
-						<button onClick={copyGameCode} disabled={!gameCode}>
-							{copied ? <Check size={12} /> : <Copy size={12} />}
-						</button>
-						{gameCode}
-					</span>
-
-					{status === "active" && (
-						<TurnTimer
-							secondsLeft={secondsLeft}
-							isMyTurn={currentTurn === playerColor}
-						/>
-					)}
-					{inCheck && currentTurn === playerColor && status === "active" && (
-						<span className="flex items-center gap-1 text-red-500 font-bold">
-							<AlertTriangle size={12} />
-							Check!
-						</span>
-					)}
-					{status === "finished" && (
-						<span className="font-bold text-(--info) uppercase">
-							Game Over: {winner === "draw" ? "Draw" : `${winner} wins!`}
-						</span>
-					)}
 				</div>
 
-				<div className="max-w-full">
-					{displayBoard.map((row, rowIndex) => {
-						const actualRow = playerColor === "black" ? 7 - rowIndex : rowIndex;
-						return (
-							<div key={rowIndex} className="flex">
-								{row.map((piece, colIndex) => {
-									const actualCol =
-										playerColor === "black" ? 7 - colIndex : colIndex;
-									const isLight = (actualRow + actualCol) % 2 === 0;
-									const highlight =
-										currentTurn === playerColor &&
-										isPlayerPiece(piece) &&
-										status === "active";
-									return (
-										<div
-											key={`${rowIndex}-${colIndex}`}
-											className={`w-17.5 h-17.5 flex items-center justify-center cursor-pointer transition-opacity hover:opacity-80 relative ${
-												isLight
-													? "bg-(--accent-light)/90"
-													: "bg-(--accent-dark)"
-											} ${isSelected(actualRow, actualCol) ? "bg-(--success) shadow-inner" : ""} ${
-												highlight ? "ring-2 ring-(--warning) ring-inset" : ""
-											}`}
-											onClick={() => handleSquareClick(actualRow, actualCol)}
-										>
-											{isPossibleMove(actualRow, actualCol) && (
-												<div className="absolute w-3 h-3 bg-(--info) rounded-full opacity-70" />
-											)}
-											{piece !== "." && (
-												<span
-													className="text-5xl select-none"
-													style={
-														piece === piece.toUpperCase()
-															? WHITE_PIECE_STYLE
-															: BLACK_PIECE_STYLE
-													}
-												>
-													{PIECE_SYMBOLS[piece]}
-												</span>
-											)}
-										</div>
-									);
-								})}
-							</div>
-						);
-					})}
-				</div>
-			</div>
-
-			<div className="flex flex-wrap gap-2 justify-center max-w-xs mt-2">
-				{capturedByCurrentPlayer.map((p, i) => (
-					<span
-						key={i}
-						className="text-2xl"
-						style={
-							p === p.toUpperCase() ? WHITE_PIECE_STYLE : BLACK_PIECE_STYLE
-						}
-					>
-						{PIECE_SYMBOLS[p]}
-					</span>
-				))}
+				{/* Game code copy */}
+				<button
+					onClick={copyGameCode}
+					disabled={!gameCode}
+					title="Copy game code"
+					className="flex items-center gap-1.5 px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600 text-(--text-secondary) hover:text-white rounded-lg text-xs font-mono transition-colors disabled:opacity-40"
+				>
+					{copied ? <Check size={11} /> : <Copy size={11} />}
+					{gameCode}
+				</button>
 			</div>
 		</div>
 	);
