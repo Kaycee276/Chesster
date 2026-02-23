@@ -303,6 +303,7 @@ export const useGameNotifications = () => {
 	const currentTurn = useGameStore((s) => s.currentTurn);
 	const drawOffer = useGameStore((s) => s.drawOffer);
 	const wagerAmount = useGameStore((s) => s.wagerAmount);
+	const escrowStatus = useGameStore((s) => s.escrowStatus);
 	const fetchGameState = useGameStore((s) => s.fetchGameState);
 
 	useEffect(() => {
@@ -314,12 +315,16 @@ export const useGameNotifications = () => {
 			} else {
 				addToast("You lost. Checkmate!", "error");
 			}
-			// Re-fetch so escrow tx hashes (written after resolution) are picked up
-			if (wagerAmount) {
-				setTimeout(() => fetchGameState(), 3000);
-			}
 		}
-	}, [status, winner, playerColor, wagerAmount, fetchGameState, addToast]);
+	}, [status, winner, playerColor, addToast]);
+
+	// Poll for escrow settlement every 3 s until settled or failed
+	useEffect(() => {
+		if (status !== "finished" || !wagerAmount) return;
+		if (escrowStatus === "settled" || escrowStatus === "failed") return;
+		const id = setInterval(fetchGameState, 3000);
+		return () => clearInterval(id);
+	}, [status, wagerAmount, escrowStatus, fetchGameState]);
 
 	useEffect(() => {
 		if (inCheck && currentTurn === playerColor && status === "active") {

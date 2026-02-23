@@ -9,6 +9,8 @@ import {
 	Handshake,
 	Lock,
 	ExternalLink,
+	Loader2,
+	CheckCircle2,
 } from "lucide-react";
 
 const WETH_SEPOLIA = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14";
@@ -152,6 +154,12 @@ function ChessBoardInner() {
 		wagerAmount && tokenAddress
 			? `${parseFloat(String(wagerAmount)) * 2} ${tokenLabel(tokenAddress)}`
 			: null;
+
+	// Current player will receive tokens when game ends
+	const willReceiveTokens =
+		status === "finished" &&
+		!!wagerAmount &&
+		(winner === playerColor || winner === "draw");
 
 	const capturedByCurrentPlayer = useMemo(
 		() => getCapturedPieces(board, currentTurn),
@@ -469,49 +477,81 @@ function ChessBoardInner() {
 							<AlertTriangle size={10} />
 							Escrow failed — contact support
 						</span>
-					) : (escrowCreateTx || escrowJoinTx || escrowResolveTx) ? (
+					) : (
 						<>
-							<span className="text-xs text-(--text-tertiary) shrink-0">
-								{escrowStatus === "settled" ? "Settled ·" : "Escrow ·"}
-							</span>
-							{escrowCreateTx && (
-								<a
-									href={`${EXPLORER_BASE}${escrowCreateTx}`}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="flex items-center gap-1 text-xs text-(--accent-primary) hover:underline shrink-0"
-								>
-									<ExternalLink size={10} />
-									Create
-								</a>
+							{/* Sending / sent tokens feedback — shown only to recipients */}
+							{status === "finished" && willReceiveTokens && (
+								escrowResolveTx ? (
+									<span className="flex items-center gap-1.5 text-xs text-green-400 font-semibold w-full">
+										<CheckCircle2 size={12} className="shrink-0" />
+										{winner === "draw" ? "Wager returned" : "Tokens sent"}
+										{" · "}
+										<a
+											href={`${EXPLORER_BASE}${escrowResolveTx}`}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex items-center gap-0.5 hover:underline font-normal"
+										>
+											<ExternalLink size={10} />
+											View tx
+										</a>
+									</span>
+								) : (
+									<span className="flex items-center gap-1.5 text-xs text-yellow-400 font-medium w-full">
+										<Loader2 size={12} className="animate-spin shrink-0" />
+										{winner === "draw" ? "Returning your wager…" : "Sending tokens to you…"}
+									</span>
+								)
 							)}
-							{escrowJoinTx && (
-								<a
-									href={`${EXPLORER_BASE}${escrowJoinTx}`}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="flex items-center gap-1 text-xs text-(--accent-primary) hover:underline shrink-0"
-								>
-									<ExternalLink size={10} />
-									Join
-								</a>
-							)}
-							{escrowResolveTx && (
-								<a
-									href={`${EXPLORER_BASE}${escrowResolveTx}`}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="flex items-center gap-1 text-xs text-green-400 hover:underline shrink-0 font-semibold"
-								>
-									<ExternalLink size={10} />
-									Settle
-								</a>
+
+							{/* TX links row */}
+							{(escrowCreateTx || escrowJoinTx || escrowResolveTx) ? (
+								<>
+									<span className="text-xs text-(--text-tertiary) shrink-0">
+										{escrowStatus === "settled" ? "Settled ·" : "Escrow ·"}
+									</span>
+									{escrowCreateTx && (
+										<a
+											href={`${EXPLORER_BASE}${escrowCreateTx}`}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex items-center gap-1 text-xs text-(--accent-primary) hover:underline shrink-0"
+										>
+											<ExternalLink size={10} />
+											Create
+										</a>
+									)}
+									{escrowJoinTx && (
+										<a
+											href={`${EXPLORER_BASE}${escrowJoinTx}`}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex items-center gap-1 text-xs text-(--accent-primary) hover:underline shrink-0"
+										>
+											<ExternalLink size={10} />
+											Join
+										</a>
+									)}
+									{escrowResolveTx && (
+										<a
+											href={`${EXPLORER_BASE}${escrowResolveTx}`}
+											target="_blank"
+											rel="noopener noreferrer"
+											className="flex items-center gap-1 text-xs text-green-400 hover:underline shrink-0 font-semibold"
+										>
+											<ExternalLink size={10} />
+											Settle
+										</a>
+									)}
+								</>
+							) : (
+								!(status === "finished" && willReceiveTokens) && (
+									<span className="text-xs text-(--text-tertiary)">
+										{escrowStatus === "active" ? "Escrow active" : "Escrow pending…"}
+									</span>
+								)
 							)}
 						</>
-					) : (
-						<span className="text-xs text-(--text-tertiary)">
-							{escrowStatus === "active" ? "Escrow active" : "Escrow pending…"}
-						</span>
 					)}
 				</div>
 			)}
