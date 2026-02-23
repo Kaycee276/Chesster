@@ -36,7 +36,7 @@ class GameModel {
 		// If wager is set, create match on escrow contract
 		if (wagerAmount && tokenAddress && playerWhiteAddress) {
 			try {
-				await escrowService.createMatch(gameCode, tokenAddress, wagerAmount);
+				await escrowService.createMatch(gameCode, playerWhiteAddress, tokenAddress, wagerAmount);
 			} catch (escrowErr) {
 				console.error("Escrow createMatch failed:", escrowErr.message);
 				// Don't fail game creation if escrow fails; log for manual review
@@ -102,7 +102,7 @@ class GameModel {
 		// If wagered game and both players joined, call escrow joinMatch
 		if (game.wager_amount && game.token_address && bothPlayersJoined) {
 			try {
-				await escrowService.joinMatch(gameCode);
+				await escrowService.joinMatch(gameCode, playerAddress);
 			} catch (escrowErr) {
 				console.error("Escrow joinMatch failed:", escrowErr.message);
 				// Log but don't fail join

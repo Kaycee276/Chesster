@@ -9,82 +9,76 @@ interface IERC20 {
 
 /**
  * @title ChessterEscrow
- * @dev Handles equal-stakes chess match wagering with backend-coordinated payouts.
- * Winner receives 95% of the pot, admin (coordinator) receives 5%.
- * Supports both native ETH and ERC20 token wagers.
- * Draw support and automatic refunds after 1 hour timeout.
+ * @dev Coordinator-controlled escrow for wagered chess matches.
+ *
+ * Flow:
+ *   1. Player approves this contract for >= wagerAmount on the chosen ERC-20.
+ *   2. Backend coordinator calls createMatch() — pulls tokens from player1.
+ *   3. Player2 approves this contract, backend calls joinMatch() — pulls from player2.
+ *   4. After the game ends, backend calls resolveMatch() to pay out.
+ *
+ * Payout:  winner 95%  |  coordinator (admin) 5%
+ * Draw:    each player gets their wager back  (no admin cut)
+ * Timeout: anyone can call refundAfterTimeout() 1 hour after creation
+ *          to fully refund deposited players (no admin cut).
+ *
+ * Only ERC-20 tokens are supported; use WETH for ETH-denominated wagers.
  */
 contract ChessterEscrow {
     address public coordinator;
 
     uint256 public constant WINNER_BPS = 9500; // 95%
-    uint256 public constant ADMIN_BPS = 500;   // 5%
-    uint256 public constant BPS_DENOMINATOR = 10000;
+    uint256 public constant ADMIN_BPS  = 500;  // 5%
+    uint256 public constant BPS_DENOM  = 10000;
 
-    // Use address(0) to represent native ETH wagers
-    address public constant NATIVE_ETH = address(0);
-
-    // Match states
     enum MatchStatus { PENDING, ACTIVE, RESOLVED, REFUNDED }
 
     struct Match {
         bytes32 gameCode;
         address player1;
         address player2;
-        address token;       // address(0) = native ETH
-        uint256 wagerAmount;
+        address token;
+        uint256 wagerAmount; // per-player stake
         uint256 totalStaked;
         uint256 createdAt;
         MatchStatus status;
         address winner;
     }
 
-    // gameCode => Match
     mapping(bytes32 => Match) public matches;
 
-    // gameCode => player => amount staked
-    mapping(bytes32 => mapping(address => uint256)) public stakedAmount;
-
-    // Special address to represent a draw
-    address constant DRAW = address(0xdead);
-
-    // Track accumulated admin fees
-    uint256 public accumulatedAdminFees;
-    mapping(address => uint256) public accumulatedTokenFees;
+    // Special address used to signal a draw result
+    address public constant DRAW = address(0xdead);
 
     // Events
     event MatchCreated(
         bytes32 indexed gameCode,
-        address indexed creator,
+        address indexed player1,
         address indexed token,
         uint256 wagerAmount
     );
-
     event PlayerJoined(
         bytes32 indexed gameCode,
-        address indexed joiner,
+        address indexed player2,
         uint256 wagerAmount
     );
-
     event MatchResolved(
         bytes32 indexed gameCode,
         address indexed winner,
         uint256 winnerPayout,
         uint256 adminFee
     );
-
     event DrawResolved(
         bytes32 indexed gameCode,
         address indexed player1,
         address indexed player2,
-        uint256 refundAmount
+        uint256 refundEach
     );
-
     event Refunded(
         bytes32 indexed gameCode,
-        address indexed player1,
-        address indexed player2,
-        uint256 refundAmount
+        address player1,
+        address player2,
+        uint256 wagerAmount
     );
 
     modifier onlyCoordinator() {
@@ -96,196 +90,147 @@ contract ChessterEscrow {
         coordinator = msg.sender;
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Core escrow functions (all coordinator-gated except refundAfterTimeout)
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
-     * @dev Creator initiates a match. Send ETH for native wagers,
-     * or set token address + wagerAmount for ERC20.
+     * @notice Coordinator creates a match and pulls the wager from player1.
+     * @dev    player1 must have called token.approve(address(this), wagerAmount)
+     *         before the coordinator calls this.
+     * @param gameCode     keccak256 hash of the human-readable game code
+     * @param player1      Creator's wallet address (the one who approved)
+     * @param token        ERC-20 contract address (use WETH for ETH-denominated)
+     * @param wagerAmount  Amount in token base units (18-decimal assumed)
      */
     function createMatch(
         bytes32 gameCode,
+        address player1,
         address token,
         uint256 wagerAmount
-    ) external payable {
+    ) external onlyCoordinator {
         require(matches[gameCode].createdAt == 0, "match already exists");
+        require(wagerAmount > 0, "wager must be > 0");
+        require(token != address(0), "use an ERC-20 token (WETH for ETH)");
+        require(player1 != address(0), "invalid player1");
 
-        uint256 actualWager;
-
-        if (token == NATIVE_ETH) {
-            require(msg.value > 0, "send ETH as wager");
-            actualWager = msg.value;
-        } else {
-            require(wagerAmount > 0, "wager must be > 0");
-            require(msg.value == 0, "do not send ETH for token wager");
-            actualWager = wagerAmount;
-            bool success = IERC20(token).transferFrom(
-                msg.sender,
-                address(this),
-                wagerAmount
-            );
-            require(success, "transfer failed");
-        }
+        bool ok = IERC20(token).transferFrom(player1, address(this), wagerAmount);
+        require(ok, "token pull from player1 failed - did player1 approve?");
 
         matches[gameCode] = Match({
-            gameCode: gameCode,
-            player1: msg.sender,
-            player2: address(0),
-            token: token,
-            wagerAmount: actualWager,
-            totalStaked: actualWager,
-            createdAt: block.timestamp,
-            status: MatchStatus.PENDING,
-            winner: address(0)
+            gameCode:    gameCode,
+            player1:     player1,
+            player2:     address(0),
+            token:       token,
+            wagerAmount: wagerAmount,
+            totalStaked: wagerAmount,
+            createdAt:   block.timestamp,
+            status:      MatchStatus.PENDING,
+            winner:      address(0)
         });
 
-        stakedAmount[gameCode][msg.sender] = actualWager;
-
-        emit MatchCreated(gameCode, msg.sender, token, actualWager);
+        emit MatchCreated(gameCode, player1, token, wagerAmount);
     }
 
     /**
-     * @dev Second player joins the match with the same wager amount.
+     * @notice Coordinator joins the match on behalf of player2 and pulls their wager.
+     * @dev    player2 must have called token.approve(address(this), wagerAmount)
+     *         before the coordinator calls this.
+     * @param gameCode  Same bytes32 used in createMatch
+     * @param player2   Joiner's wallet address (the one who approved)
      */
-    function joinMatch(bytes32 gameCode) external payable {
+    function joinMatch(bytes32 gameCode, address player2) external onlyCoordinator {
         Match storage m = matches[gameCode];
-        require(m.createdAt != 0, "match not found");
+        require(m.createdAt != 0,            "match not found");
         require(m.status == MatchStatus.PENDING, "match not pending");
-        require(m.player2 == address(0), "match already has 2 players");
-        require(msg.sender != m.player1, "cannot join own match");
+        require(m.player2 == address(0),     "match already has 2 players");
+        require(player2 != address(0),        "invalid player2");
+        require(player2 != m.player1,         "cannot join own match");
 
-        if (m.token == NATIVE_ETH) {
-            require(msg.value == m.wagerAmount, "must match wager amount");
-        } else {
-            require(msg.value == 0, "do not send ETH for token wager");
-            bool success = IERC20(m.token).transferFrom(
-                msg.sender,
-                address(this),
-                m.wagerAmount
-            );
-            require(success, "transfer failed");
-        }
+        bool ok = IERC20(m.token).transferFrom(player2, address(this), m.wagerAmount);
+        require(ok, "token pull from player2 failed - did player2 approve?");
 
-        m.player2 = msg.sender;
-        m.status = MatchStatus.ACTIVE;
+        m.player2     = player2;
+        m.status      = MatchStatus.ACTIVE;
         m.totalStaked += m.wagerAmount;
-        stakedAmount[gameCode][msg.sender] = m.wagerAmount;
 
-        emit PlayerJoined(gameCode, msg.sender, m.wagerAmount);
+        emit PlayerJoined(gameCode, player2, m.wagerAmount);
     }
 
     /**
-     * @dev Coordinator resolves match with a winner address.
-     * Winner gets 95%, admin gets 5%.
-     * If draw, both players refunded equally (no admin cut).
+     * @notice Coordinator resolves the match.
+     *         winner == DRAW → each player gets their wager back (no fee).
+     *         winner == player address → winner gets 95%, coordinator gets 5%.
      */
-    function resolveMatch(bytes32 gameCode, address winner)
-        external
-        onlyCoordinator
-    {
+    function resolveMatch(bytes32 gameCode, address winner) external onlyCoordinator {
         Match storage m = matches[gameCode];
-        require(m.createdAt != 0, "match not found");
+        require(m.createdAt != 0,             "match not found");
         require(m.status == MatchStatus.ACTIVE, "match not active");
         require(
             winner == DRAW || winner == m.player1 || winner == m.player2,
-            "invalid winner"
+            "invalid winner address"
         );
 
         m.status = MatchStatus.RESOLVED;
         m.winner = winner;
 
         if (winner == DRAW) {
-            // Refund both players equally, no admin cut on draws
-            uint256 refundEach = m.wagerAmount;
-            _transfer(m.token, m.player1, refundEach);
-            _transfer(m.token, m.player2, refundEach);
-
-            emit DrawResolved(gameCode, m.player1, m.player2, refundEach);
+            IERC20(m.token).transfer(m.player1, m.wagerAmount);
+            IERC20(m.token).transfer(m.player2, m.wagerAmount);
+            emit DrawResolved(gameCode, m.player1, m.player2, m.wagerAmount);
         } else {
-            // 95% to winner, 5% to admin
-            uint256 total = m.totalStaked;
-            uint256 adminFee = (total * ADMIN_BPS) / BPS_DENOMINATOR;
-            uint256 winnerPayout = total - adminFee;
-
-            _transfer(m.token, winner, winnerPayout);
-            _transfer(m.token, coordinator, adminFee);
-
-            emit MatchResolved(gameCode, winner, winnerPayout, adminFee);
+            uint256 total      = m.totalStaked;
+            uint256 adminFee   = (total * ADMIN_BPS) / BPS_DENOM;
+            uint256 winnerPay  = total - adminFee;
+            IERC20(m.token).transfer(winner, winnerPay);
+            IERC20(m.token).transfer(coordinator, adminFee);
+            emit MatchResolved(gameCode, winner, winnerPay, adminFee);
         }
     }
 
     /**
-     * @dev Public refund after 1 hour timeout.
-     * Full refund, no admin cut.
+     * @notice Public safety valve: fully refunds deposited players after 1 hour.
+     *         No admin fee on timeout refunds.
      */
     function refundAfterTimeout(bytes32 gameCode) external {
         Match storage m = matches[gameCode];
-        require(m.createdAt != 0, "match not found");
-        require(m.status != MatchStatus.RESOLVED, "match already resolved");
-        require(m.status != MatchStatus.REFUNDED, "match already refunded");
-        require(
-            block.timestamp >= m.createdAt + 1 hours,
-            "must wait 1 hour from creation"
-        );
+        require(m.createdAt != 0,                       "match not found");
+        require(m.status != MatchStatus.RESOLVED,        "already resolved");
+        require(m.status != MatchStatus.REFUNDED,        "already refunded");
+        require(block.timestamp >= m.createdAt + 1 hours, "wait 1 hour from creation");
 
         m.status = MatchStatus.REFUNDED;
 
         if (m.player1 != address(0)) {
-            _transfer(m.token, m.player1, stakedAmount[gameCode][m.player1]);
+            IERC20(m.token).transfer(m.player1, m.wagerAmount);
         }
-
+        // player2 only deposited if status reached ACTIVE
         if (m.player2 != address(0)) {
-            _transfer(m.token, m.player2, stakedAmount[gameCode][m.player2]);
+            IERC20(m.token).transfer(m.player2, m.wagerAmount);
         }
 
         emit Refunded(gameCode, m.player1, m.player2, m.wagerAmount);
     }
 
-    /**
-     * @dev View function: get match details
-     */
-    function getMatch(bytes32 gameCode)
-        external
-        view
-        returns (Match memory)
-    {
+    // ─────────────────────────────────────────────────────────────────────────
+    // View / admin helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @notice Returns full match details.
+    function getMatch(bytes32 gameCode) external view returns (Match memory) {
         return matches[gameCode];
     }
 
-    /**
-     * @dev Coordinator can transfer role to a new address
-     */
+    /// @notice Transfer coordinator role.
     function setCoordinator(address newCoordinator) external onlyCoordinator {
         require(newCoordinator != address(0), "invalid address");
         coordinator = newCoordinator;
     }
 
-    /**
-     * @dev Emergency: Coordinator can withdraw unclaimed ERC20 funds
-     */
+    /// @notice Emergency: coordinator withdraws ERC-20 tokens.
     function emergencyWithdraw(address token) external onlyCoordinator {
-        if (token == NATIVE_ETH) {
-            uint256 balance = address(this).balance;
-            require(balance > 0, "no balance");
-            (bool success, ) = coordinator.call{value: balance}("");
-            require(success, "ETH transfer failed");
-        } else {
-            uint256 balance = IERC20(token).balanceOf(address(this));
-            require(balance > 0, "no balance");
-            IERC20(token).transfer(coordinator, balance);
-        }
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        require(balance > 0, "no balance");
+        IERC20(token).transfer(coordinator, balance);
     }
-
-    /**
-     * @dev Internal transfer helper supporting both ETH and ERC20
-     */
-    function _transfer(address token, address to, uint256 amount) internal {
-        if (amount == 0) return;
-        if (token == NATIVE_ETH) {
-            (bool success, ) = to.call{value: amount}("");
-            require(success, "ETH transfer failed");
-        } else {
-            bool success = IERC20(token).transfer(to, amount);
-            require(success, "token transfer failed");
-        }
-    }
-
-    receive() external payable {}
 }

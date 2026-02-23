@@ -49,7 +49,7 @@ router.post("/create", async (req, res) => {
 
     res.json({
       success: true,
-      txHash: receipt.transactionHash,
+      txHash: receipt.hash,          // ethers v6: receipt.hash (was .transactionHash in v5)
       blockNumber: receipt.blockNumber,
     });
   } catch (err) {
@@ -74,7 +74,7 @@ router.post("/join", async (req, res) => {
 
     res.json({
       success: true,
-      txHash: receipt.transactionHash,
+      txHash: receipt.hash,
       blockNumber: receipt.blockNumber,
     });
   } catch (err) {
@@ -107,7 +107,7 @@ router.post("/resolve", async (req, res) => {
 
     res.json({
       success: true,
-      txHash: receipt.transactionHash,
+      txHash: receipt.hash,
       blockNumber: receipt.blockNumber,
     });
   } catch (err) {

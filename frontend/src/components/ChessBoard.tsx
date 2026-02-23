@@ -7,7 +7,15 @@ import {
 	AlertTriangle,
 	Flag,
 	Handshake,
+	Lock,
 } from "lucide-react";
+
+const WETH_SEPOLIA = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14";
+
+function tokenLabel(addr: string): string {
+	if (addr.toLowerCase() === WETH_SEPOLIA.toLowerCase()) return "WETH";
+	return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { getPossibleMoves, getCapturedPieces } from "../utils/chessUtils";
@@ -46,7 +54,62 @@ const BLACK_PIECE_STYLE: React.CSSProperties = {
 // Board occupies the smaller of: (viewport width − 8px), (viewport height − 10rem), capped at 600px
 const BOARD_SIZE = "min(calc(100vw - 8px), calc(100svh - 10rem), 600px)";
 
+// ── Skeleton shown while game state loads ─────────────────────────────────────
+function BoardSkeleton() {
+	return (
+		<div className="h-svh w-screen overflow-hidden flex flex-col items-center justify-center bg-(--bg) select-none p-1 gap-1.5">
+			{/* Opponent info bar skeleton */}
+			<div
+				className="h-11 rounded-xl bg-(--bg-secondary) animate-pulse shrink-0"
+				style={{ width: BOARD_SIZE }}
+			/>
+			{/* Board skeleton */}
+			<div
+				className="rounded-sm overflow-hidden shadow-2xl shrink-0"
+				style={{ width: BOARD_SIZE, height: BOARD_SIZE }}
+			>
+				<div
+					style={{
+						display: "grid",
+						gridTemplateColumns: "repeat(8, 1fr)",
+						gridTemplateRows: "repeat(8, 1fr)",
+						height: "100%",
+					}}
+				>
+					{Array.from({ length: 64 }).map((_, i) => (
+						<div
+							key={i}
+							className={`animate-pulse ${
+								(Math.floor(i / 8) + (i % 8)) % 2 === 0
+									? "bg-(--accent-light)/30"
+									: "bg-(--accent-dark)/70"
+							}`}
+						/>
+					))}
+				</div>
+			</div>
+			{/* Player info bar skeleton */}
+			<div
+				className="h-11 rounded-xl bg-(--bg-secondary) animate-pulse shrink-0"
+				style={{ width: BOARD_SIZE }}
+			/>
+			{/* Action bar skeleton */}
+			<div
+				className="h-10 rounded-xl bg-(--bg-secondary) animate-pulse shrink-0"
+				style={{ width: BOARD_SIZE }}
+			/>
+		</div>
+	);
+}
+
+// Outer wrapper: shows skeleton until board data arrives (keeps hooks rule-safe)
 export default function ChessBoard() {
+	const board = useGameStore((s) => s.board);
+	if (!board || board.length === 0) return <BoardSkeleton />;
+	return <ChessBoardInner />;
+}
+
+function ChessBoardInner() {
 	const {
 		board,
 		gameCode,
@@ -75,6 +138,14 @@ export default function ChessBoard() {
 	const winner = useGameStore((s) => s.winner);
 	const drawOffer = useGameStore((s) => s.drawOffer);
 	const secondsLeft = useGameStore((s) => s.secondsLeft);
+	const wagerAmount = useGameStore((s) => s.wagerAmount);
+	const tokenAddress = useGameStore((s) => s.tokenAddress);
+
+	// Pot = each player's stake × 2 (only meaningful once both joined)
+	const potDisplay =
+		wagerAmount && tokenAddress
+			? `${parseFloat(String(wagerAmount)) * 2} ${tokenLabel(tokenAddress)}`
+			: null;
 
 	const capturedByCurrentPlayer = useMemo(
 		() => getCapturedPieces(board, currentTurn),
@@ -249,7 +320,7 @@ export default function ChessBoard() {
 
 			{/* ── Chess Board ── */}
 			<div
-				className="shrink-0 rounded-sm overflow-hidden shadow-2xl"
+				className={`shrink-0 rounded-sm overflow-hidden shadow-2xl relative transition-opacity ${isMoving ? "opacity-70" : "opacity-100"}`}
 				style={
 					{
 						width: BOARD_SIZE,
@@ -421,16 +492,31 @@ export default function ChessBoard() {
 					)}
 				</div>
 
-				{/* Game code copy */}
-				<button
-					onClick={copyGameCode}
-					disabled={!gameCode}
-					title="Copy game code"
-					className="flex items-center gap-1.5 px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600 text-(--text-secondary) hover:text-white rounded-lg text-xs font-mono transition-colors disabled:opacity-40"
-				>
-					{copied ? <Check size={11} /> : <Copy size={11} />}
-					{gameCode}
-				</button>
+				{/* Right side: stake badge + game code */}
+				<div className="flex items-center gap-1.5 shrink-0">
+					{potDisplay && (
+						<div
+							title="Total pot locked in escrow"
+							className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border ${
+								status === "finished" && winner !== "draw" && winner === playerColor
+									? "bg-green-500/15 border-green-500/30 text-green-400"
+									: "bg-yellow-500/10 border-yellow-500/25 text-yellow-400"
+							}`}
+						>
+							<Lock size={9} />
+							{potDisplay}
+						</div>
+					)}
+					<button
+						onClick={copyGameCode}
+						disabled={!gameCode}
+						title="Copy game code"
+						className="flex items-center gap-1.5 px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600 text-(--text-secondary) hover:text-white rounded-lg text-xs font-mono transition-colors disabled:opacity-40"
+					>
+						{copied ? <Check size={11} /> : <Copy size={11} />}
+						{gameCode}
+					</button>
+				</div>
 			</div>
 		</div>
 	);

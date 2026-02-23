@@ -25,8 +25,16 @@ interface GameStore {
 		piece: string;
 	} | null;
 	selectedSquare: [number, number] | null;
+	// Escrow / wager info (populated from fetched game state)
+	wagerAmount?: number | string | null;
+	tokenAddress?: string | null;
+	escrowStatus?: string | null;
 
-	createGame: (walletAddress: string) => Promise<void>;
+	createGame: (
+		walletAddress: string,
+		tokenAddress?: string,
+		wagerAmount?: string,
+	) => Promise<void>;
 	joinGame: (code: string, color: "white" | "black", walletAddress: string) => Promise<void>;
 	rejoinGame: (code: string) => Promise<void>;
 	fetchGameState: () => Promise<void>;
@@ -61,11 +69,20 @@ export const useGameStore = create<GameStore>()(
 			capturedBlack: [],
 			lastMove: null,
 			selectedSquare: null,
+			wagerAmount: null,
+			tokenAddress: null,
+			escrowStatus: null,
 
-			createGame: async (walletAddress: string) => {
-				const data = await api.createGame("chess", walletAddress);
+			createGame: async (
+				walletAddress: string,
+				tokenAddress?: string,
+				wagerAmount?: string,
+			) => {
+				const data = await api.createGame("chess", walletAddress, tokenAddress, wagerAmount);
 				if (data.success) {
 					await get().joinGame(data.data.game_code, "white", walletAddress);
+				} else {
+					throw new Error(data.error || "Failed to create game");
 				}
 			},
 
@@ -106,6 +123,9 @@ export const useGameStore = create<GameStore>()(
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
 						lastMove: data.data.last_move ?? null,
+						wagerAmount: data.data.wager_amount ?? null,
+						tokenAddress: data.data.token_address ?? null,
+						escrowStatus: data.data.escrow_status ?? null,
 					});
 
 					socketService.connect();
@@ -138,6 +158,9 @@ export const useGameStore = create<GameStore>()(
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
 						lastMove: data.data.last_move ?? null,
+						wagerAmount: data.data.wager_amount ?? null,
+						tokenAddress: data.data.token_address ?? null,
+						escrowStatus: data.data.escrow_status ?? null,
 					});
 				}
 			},
@@ -182,6 +205,9 @@ export const useGameStore = create<GameStore>()(
 					capturedWhite: data.captured_white ?? [],
 					capturedBlack: data.captured_black ?? [],
 					lastMove: data.last_move ?? null,
+					wagerAmount: data.wager_amount ?? null,
+					tokenAddress: data.token_address ?? null,
+					escrowStatus: data.escrow_status ?? null,
 				});
 			},
 
@@ -231,6 +257,9 @@ export const useGameStore = create<GameStore>()(
 					status: "",
 					secondsLeft: 45,
 					selectedSquare: null,
+					wagerAmount: null,
+					tokenAddress: null,
+					escrowStatus: null,
 				});
 			},
 
@@ -258,7 +287,6 @@ export const useGameNotifications = () => {
 	const currentTurn = useGameStore((s) => s.currentTurn);
 	const drawOffer = useGameStore((s) => s.drawOffer);
 
-	// Handle game finished
 	useEffect(() => {
 		if (status === "finished") {
 			if (winner === "draw") {
@@ -271,14 +299,12 @@ export const useGameNotifications = () => {
 		}
 	}, [status, winner, playerColor, addToast]);
 
-	// Handle check notification
 	useEffect(() => {
 		if (inCheck && currentTurn === playerColor && status === "active") {
 			addToast("Your king is in check!", "error");
 		}
 	}, [inCheck, currentTurn, playerColor, status, addToast]);
 
-	// Handle draw offer notification
 	useEffect(() => {
 		if (drawOffer && drawOffer !== playerColor && status === "active") {
 			addToast("Opponent offered a draw", "info");
