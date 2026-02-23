@@ -6,7 +6,6 @@ export const api = {
 	createGame: async (
 		gameType = "chess",
 		playerAddress?: string,
-		tokenAddress?: string,
 		wagerAmount?: string,
 	) => {
 		const res = await fetch(`${API_URL}/games`, {
@@ -15,7 +14,6 @@ export const api = {
 			body: JSON.stringify({
 				gameType,
 				playerWhiteAddress: playerAddress,
-				tokenAddress: tokenAddress || undefined,
 				wagerAmount: wagerAmount ? parseFloat(wagerAmount) : undefined,
 			}),
 		});

@@ -8,104 +8,70 @@
     "type": "function",
     "name": "ADMIN_BPS",
     "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
+    "outputs": [{ "name": "", "type": "uint256", "internalType": "uint256" }],
     "stateMutability": "view"
   },
   {
     "type": "function",
     "name": "BPS_DENOM",
     "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
+    "outputs": [{ "name": "", "type": "uint256", "internalType": "uint256" }],
     "stateMutability": "view"
   },
   {
     "type": "function",
     "name": "DRAW",
     "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }],
     "stateMutability": "view"
   },
   {
     "type": "function",
     "name": "WINNER_BPS",
     "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
+    "outputs": [{ "name": "", "type": "uint256", "internalType": "uint256" }],
     "stateMutability": "view"
   },
   {
     "type": "function",
     "name": "coordinator",
     "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "outputs": [{ "name": "", "type": "address", "internalType": "address" }],
     "stateMutability": "view"
   },
   {
     "type": "function",
     "name": "createMatch",
     "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "player1",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "wagerAmount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
+      { "name": "gameCode", "type": "bytes32", "internalType": "bytes32" }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "joinMatch",
+    "inputs": [
+      { "name": "gameCode", "type": "bytes32", "internalType": "bytes32" }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "resolveMatch",
+    "inputs": [
+      { "name": "gameCode", "type": "bytes32", "internalType": "bytes32" },
+      { "name": "winner", "type": "address", "internalType": "address" }
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
     "type": "function",
-    "name": "emergencyWithdraw",
+    "name": "refundAfterTimeout",
     "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      }
+      { "name": "gameCode", "type": "bytes32", "internalType": "bytes32" }
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
@@ -114,11 +80,7 @@
     "type": "function",
     "name": "getMatch",
     "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
+      { "name": "gameCode", "type": "bytes32", "internalType": "bytes32" }
     ],
     "outputs": [
       {
@@ -126,51 +88,14 @@
         "type": "tuple",
         "internalType": "struct ChessterEscrow.Match",
         "components": [
-          {
-            "name": "gameCode",
-            "type": "bytes32",
-            "internalType": "bytes32"
-          },
-          {
-            "name": "player1",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "player2",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "token",
-            "type": "address",
-            "internalType": "address"
-          },
-          {
-            "name": "wagerAmount",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "totalStaked",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "createdAt",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
-            "name": "status",
-            "type": "uint8",
-            "internalType": "enum ChessterEscrow.MatchStatus"
-          },
-          {
-            "name": "winner",
-            "type": "address",
-            "internalType": "address"
-          }
+          { "name": "gameCode",    "type": "bytes32", "internalType": "bytes32" },
+          { "name": "player1",     "type": "address", "internalType": "address" },
+          { "name": "player2",     "type": "address", "internalType": "address" },
+          { "name": "wagerAmount", "type": "uint256", "internalType": "uint256" },
+          { "name": "totalStaked", "type": "uint256", "internalType": "uint256" },
+          { "name": "createdAt",   "type": "uint256", "internalType": "uint256" },
+          { "name": "status",      "type": "uint8",   "internalType": "enum ChessterEscrow.MatchStatus" },
+          { "name": "winner",      "type": "address", "internalType": "address" }
         ]
       }
     ],
@@ -178,109 +103,24 @@
   },
   {
     "type": "function",
-    "name": "joinMatch",
-    "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "player2",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "matches",
-    "inputs": [
-      {
-        "name": "",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
+    "inputs": [{ "name": "", "type": "bytes32", "internalType": "bytes32" }],
     "outputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "player1",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "player2",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "wagerAmount",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "totalStaked",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "createdAt",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "status",
-        "type": "uint8",
-        "internalType": "enum ChessterEscrow.MatchStatus"
-      },
-      {
-        "name": "winner",
-        "type": "address",
-        "internalType": "address"
-      }
+      { "name": "gameCode",    "type": "bytes32", "internalType": "bytes32" },
+      { "name": "player1",     "type": "address", "internalType": "address" },
+      { "name": "player2",     "type": "address", "internalType": "address" },
+      { "name": "wagerAmount", "type": "uint256", "internalType": "uint256" },
+      { "name": "totalStaked", "type": "uint256", "internalType": "uint256" },
+      { "name": "createdAt",   "type": "uint256", "internalType": "uint256" },
+      { "name": "status",      "type": "uint8",   "internalType": "enum ChessterEscrow.MatchStatus" },
+      { "name": "winner",      "type": "address", "internalType": "address" }
     ],
     "stateMutability": "view"
   },
   {
     "type": "function",
-    "name": "refundAfterTimeout",
-    "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "resolveMatch",
-    "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "winner",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
+    "name": "emergencyWithdraw",
+    "inputs": [],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
@@ -288,105 +128,18 @@
     "type": "function",
     "name": "setCoordinator",
     "inputs": [
-      {
-        "name": "newCoordinator",
-        "type": "address",
-        "internalType": "address"
-      }
+      { "name": "newCoordinator", "type": "address", "internalType": "address" }
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
     "type": "event",
-    "name": "DrawResolved",
-    "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "player1",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "player2",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "refundEach",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "MatchCreated",
     "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "player1",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "token",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "wagerAmount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "MatchResolved",
-    "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "winner",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "winnerPayout",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      },
-      {
-        "name": "adminFee",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
+      { "name": "gameCode",    "type": "bytes32", "indexed": true,  "internalType": "bytes32" },
+      { "name": "player1",     "type": "address", "indexed": true,  "internalType": "address" },
+      { "name": "wagerAmount", "type": "uint256", "indexed": false, "internalType": "uint256" }
     ],
     "anonymous": false
   },
@@ -394,24 +147,31 @@
     "type": "event",
     "name": "PlayerJoined",
     "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "player2",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      },
-      {
-        "name": "wagerAmount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
+      { "name": "gameCode",    "type": "bytes32", "indexed": true,  "internalType": "bytes32" },
+      { "name": "player2",     "type": "address", "indexed": true,  "internalType": "address" },
+      { "name": "wagerAmount", "type": "uint256", "indexed": false, "internalType": "uint256" }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MatchResolved",
+    "inputs": [
+      { "name": "gameCode",     "type": "bytes32", "indexed": true,  "internalType": "bytes32" },
+      { "name": "winner",       "type": "address", "indexed": true,  "internalType": "address" },
+      { "name": "winnerPayout", "type": "uint256", "indexed": false, "internalType": "uint256" },
+      { "name": "adminFee",     "type": "uint256", "indexed": false, "internalType": "uint256" }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "DrawResolved",
+    "inputs": [
+      { "name": "gameCode",   "type": "bytes32", "indexed": true,  "internalType": "bytes32" },
+      { "name": "player1",    "type": "address", "indexed": true,  "internalType": "address" },
+      { "name": "player2",    "type": "address", "indexed": true,  "internalType": "address" },
+      { "name": "refundEach", "type": "uint256", "indexed": false, "internalType": "uint256" }
     ],
     "anonymous": false
   },
@@ -419,30 +179,10 @@
     "type": "event",
     "name": "Refunded",
     "inputs": [
-      {
-        "name": "gameCode",
-        "type": "bytes32",
-        "indexed": true,
-        "internalType": "bytes32"
-      },
-      {
-        "name": "player1",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
-        "name": "player2",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
-        "name": "wagerAmount",
-        "type": "uint256",
-        "indexed": false,
-        "internalType": "uint256"
-      }
+      { "name": "gameCode",    "type": "bytes32", "indexed": true,  "internalType": "bytes32" },
+      { "name": "player1",     "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "player2",     "type": "address", "indexed": false, "internalType": "address" },
+      { "name": "wagerAmount", "type": "uint256", "indexed": false, "internalType": "uint256" }
     ],
     "anonymous": false
   }

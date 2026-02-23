@@ -66,3 +66,9 @@ ALTER TABLE moves ENABLE ROW LEVEL SECURITY;
 -- Policies (allow all for now, customize based on your auth needs)
 CREATE POLICY "Allow all operations on games" ON games FOR ALL USING (true);
 CREATE POLICY "Allow all operations on moves" ON moves FOR ALL USING (true);
+
+
+  ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS escrow_create_tx  TEXT,
+    ADD COLUMN IF NOT EXISTS escrow_join_tx    TEXT,
+    ADD COLUMN IF NOT EXISTS escrow_resolve_tx TEXT;

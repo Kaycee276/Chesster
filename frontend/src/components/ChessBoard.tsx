@@ -8,9 +8,11 @@ import {
 	Flag,
 	Handshake,
 	Lock,
+	ExternalLink,
 } from "lucide-react";
 
 const WETH_SEPOLIA = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14";
+const EXPLORER_BASE = "https://sepolia.etherscan.io/tx/";
 
 function tokenLabel(addr: string): string {
 	if (addr.toLowerCase() === WETH_SEPOLIA.toLowerCase()) return "WETH";
@@ -140,6 +142,10 @@ function ChessBoardInner() {
 	const secondsLeft = useGameStore((s) => s.secondsLeft);
 	const wagerAmount = useGameStore((s) => s.wagerAmount);
 	const tokenAddress = useGameStore((s) => s.tokenAddress);
+	const escrowStatus = useGameStore((s) => s.escrowStatus);
+	const escrowCreateTx = useGameStore((s) => s.escrowCreateTx);
+	const escrowJoinTx = useGameStore((s) => s.escrowJoinTx);
+	const escrowResolveTx = useGameStore((s) => s.escrowResolveTx);
 
 	// Pot = each player's stake × 2 (only meaningful once both joined)
 	const potDisplay =
@@ -446,6 +452,69 @@ function ChessBoardInner() {
 					)}
 				</div>
 			</div>
+
+			
+			{/* ── Escrow TX Links (wagered games only) ── */}
+			{wagerAmount && (
+				<div
+					className={`flex items-center gap-2 px-3 py-2 rounded-xl border shrink-0 flex-wrap ${
+						escrowStatus === "failed"
+							? "bg-red-500/10 border-red-500/30"
+							: "bg-(--bg-secondary) border-(--border)"
+					}`}
+					style={{ width: BOARD_SIZE }}
+				>
+					{escrowStatus === "failed" ? (
+						<span className="flex items-center gap-1 text-xs text-red-400 font-semibold">
+							<AlertTriangle size={10} />
+							Escrow failed — contact support
+						</span>
+					) : (escrowCreateTx || escrowJoinTx || escrowResolveTx) ? (
+						<>
+							<span className="text-xs text-(--text-tertiary) shrink-0">
+								{escrowStatus === "settled" ? "Settled ·" : "Escrow ·"}
+							</span>
+							{escrowCreateTx && (
+								<a
+									href={`${EXPLORER_BASE}${escrowCreateTx}`}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="flex items-center gap-1 text-xs text-(--accent-primary) hover:underline shrink-0"
+								>
+									<ExternalLink size={10} />
+									Create
+								</a>
+							)}
+							{escrowJoinTx && (
+								<a
+									href={`${EXPLORER_BASE}${escrowJoinTx}`}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="flex items-center gap-1 text-xs text-(--accent-primary) hover:underline shrink-0"
+								>
+									<ExternalLink size={10} />
+									Join
+								</a>
+							)}
+							{escrowResolveTx && (
+								<a
+									href={`${EXPLORER_BASE}${escrowResolveTx}`}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="flex items-center gap-1 text-xs text-green-400 hover:underline shrink-0 font-semibold"
+								>
+									<ExternalLink size={10} />
+									Settle
+								</a>
+							)}
+						</>
+					) : (
+						<span className="text-xs text-(--text-tertiary)">
+							{escrowStatus === "active" ? "Escrow active" : "Escrow pending…"}
+						</span>
+					)}
+				</div>
+			)}
 
 			{/* ── Action Bar ── */}
 			<div

@@ -39,44 +39,9 @@ function gameCodeToBytes32(gameCode) {
 }
 
 /**
- * Coordinator creates a match, pulling wagerAmount of ERC-20 from player1.
- * Requires player1 to have already called token.approve(escrowAddress, wagerAmount).
- *
- * @param {string} gameCode        - Human-readable game code (e.g. "ABC123")
- * @param {string} player1Address  - Creator's wallet address
- * @param {string} tokenAddress    - ERC-20 token contract address
- * @param {string|number} wagerAmount - Wager in human units (parsed to 18-dec wei)
- */
-async function createMatch(gameCode, player1Address, tokenAddress, wagerAmount) {
-	if (!contract) throw new Error("Escrow contract not configured");
-	const gameCodeBytes32 = gameCodeToBytes32(gameCode);
-	const tx = await contract.createMatch(
-		gameCodeBytes32,
-		player1Address,
-		tokenAddress,
-		ethers.parseEther(wagerAmount.toString()), // ethers v6 — was ethers.utils.parseEther() in v5
-	);
-	const receipt = await tx.wait();
-	return receipt;
-}
-
-/**
- * Coordinator joins match on behalf of player2, pulling their wager.
- * Requires player2 to have already called token.approve(escrowAddress, wagerAmount).
- *
- * @param {string} gameCode        - Human-readable game code
- * @param {string} player2Address  - Joiner's wallet address
- */
-async function joinMatch(gameCode, player2Address) {
-	if (!contract) throw new Error("Escrow contract not configured");
-	const gameCodeBytes32 = gameCodeToBytes32(gameCode);
-	const tx = await contract.joinMatch(gameCodeBytes32, player2Address);
-	const receipt = await tx.wait();
-	return receipt;
-}
-
-/**
  * Coordinator resolves the match (onlyCoordinator in contract).
+ * Players deposit ETH directly via createMatch/joinMatch on the frontend.
+ *
  * @param {string} gameCode  - Human-readable game code
  * @param {string} winner    - Player address, or DRAW_ADDRESS for a draw
  */
@@ -95,12 +60,10 @@ async function getMatch(gameCode) {
 	if (!contract) throw new Error("Escrow contract not configured");
 	const gameCodeBytes32 = gameCodeToBytes32(gameCode);
 	const m = await contract.getMatch(gameCodeBytes32);
-	// Full ABI decodes the struct with named fields (m.player1, m.wagerAmount, etc.)
 	return {
 		gameCode:    m.gameCode,
 		player1:     m.player1,
 		player2:     m.player2,
-		token:       m.token,
 		wagerAmount: m.wagerAmount.toString(),
 		totalStaked: m.totalStaked.toString(),
 		createdAt:   Number(m.createdAt),  // BigInt → Number
@@ -121,8 +84,6 @@ async function resolveAsDraw(gameCode) {
 
 module.exports = {
 	init,
-	createMatch,
-	joinMatch,
 	resolveMatch,
 	resolveWithWinner,
 	resolveAsDraw,

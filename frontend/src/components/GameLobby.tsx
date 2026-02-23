@@ -8,29 +8,28 @@ import {
 	useAppKitProvider,
 } from "@reown/appkit/react";
 import { ethers } from "ethers";
+import { api } from "../api/gameApi";
 
-// WETH on Sepolia — use for ETH-denominated wagers
-const WETH_SEPOLIA = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14";
 const ESCROW_ADDRESS = import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS || "";
 const BACKEND_URL =
 	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
 
-const ERC20_APPROVE_ABI = [
-	"function approve(address spender, uint256 amount) returns (bool)",
-	"function allowance(address owner, address spender) view returns (uint256)",
+// Minimal ABI for the ETH escrow — players call these directly
+const ESCROW_ETH_ABI = [
+	"function createMatch(bytes32 gameCode) external payable",
+	"function joinMatch(bytes32 gameCode) external payable",
 ];
 
 type Step =
 	| "idle"
-	| "approving"
 	| "creating"
+	| "depositing"
 	| "fetching"
-	| "join-approving"
+	| "join-confirming"
 	| "joining";
 
 interface WagerInfo {
 	wagerAmount: string;
-	tokenAddress: string;
 }
 
 // ── Spinner ───────────────────────────────────────────────────────────────────
@@ -87,18 +86,18 @@ function LoadingOverlay({
 	wagerEnabled: boolean;
 }) {
 	const labels: Partial<Record<Step, { title: string; sub?: string }>> = {
-		approving: {
-			title: "Approve in wallet…",
-			sub: "Confirm the token approval in MetaMask to continue",
-		},
 		creating: {
-			title: wagerEnabled ? "Creating game on-chain…" : "Creating game…",
-			sub: wagerEnabled ? "Locking wager into escrow contract" : undefined,
+			title: "Creating game…",
+			sub: wagerEnabled ? "Setting up the game on the server" : undefined,
+		},
+		depositing: {
+			title: "Confirm in wallet…",
+			sub: "Send ETH to the escrow contract",
 		},
 		fetching: { title: "Checking game…" },
 		joining: {
 			title: wagerEnabled ? "Joining game on-chain…" : "Joining game…",
-			sub: wagerEnabled ? "Locking wager into escrow contract" : undefined,
+			sub: wagerEnabled ? "Locking ETH into escrow contract" : undefined,
 		},
 	};
 
@@ -115,41 +114,36 @@ function LoadingOverlay({
 						{info.sub}
 					</p>
 				)}
-				{/* Step indicator for multi-step wager flow */}
-				{wagerEnabled &&
-					(step === "approving" ||
-						step === "creating" ||
-						step === "joining") && (
-						<div className="flex items-center gap-2 mt-1">
-							<div
-								className={`flex items-center gap-1.5 text-xs ${
-									step === "approving"
-										? "text-(--accent-primary) font-semibold"
-										: "text-green-500"
-								}`}
-							>
-								{step === "approving" ? (
-									<Spinner size={10} />
-								) : (
-									<span className="text-green-500">✓</span>
-								)}
-								Approve
-							</div>
-							<div className="w-4 h-px bg-(--border)" />
-							<div
-								className={`flex items-center gap-1.5 text-xs ${
-									step === "creating" || step === "joining"
-										? "text-(--accent-primary) font-semibold"
-										: "text-(--text-tertiary)"
-								}`}
-							>
-								{(step === "creating" || step === "joining") && (
-									<Spinner size={10} />
-								)}
-								{step === "creating" ? "Create" : "Join"}
-							</div>
+				{/* Step indicator for wager deposit + join flow */}
+				{wagerEnabled && (step === "depositing" || step === "joining") && (
+					<div className="flex items-center gap-2 mt-1">
+						<div
+							className={`flex items-center gap-1.5 text-xs ${
+								step === "depositing"
+									? "text-(--accent-primary) font-semibold"
+									: "text-green-500"
+							}`}
+						>
+							{step === "depositing" ? (
+								<Spinner size={10} />
+							) : (
+								<span className="text-green-500">✓</span>
+							)}
+							Deposit
 						</div>
-					)}
+						<div className="w-4 h-px bg-(--border)" />
+						<div
+							className={`flex items-center gap-1.5 text-xs ${
+								step === "joining"
+									? "text-(--accent-primary) font-semibold"
+									: "text-(--text-tertiary)"
+							}`}
+						>
+							{step === "joining" && <Spinner size={10} />}
+							Join
+						</div>
+					</div>
+				)}
 			</div>
 		</div>
 	);
@@ -160,18 +154,13 @@ function WagerConfirmPanel({
 	info,
 	onConfirm,
 	onCancel,
-	isApproving,
+	isDepositing,
 }: {
 	info: WagerInfo;
 	onConfirm: () => void;
 	onCancel: () => void;
-	isApproving: boolean;
+	isDepositing: boolean;
 }) {
-	const isWeth = info.tokenAddress.toLowerCase() === WETH_SEPOLIA.toLowerCase();
-	const label = isWeth
-		? "WETH"
-		: `${info.tokenAddress.slice(0, 6)}…${info.tokenAddress.slice(-4)}`;
-
 	return (
 		<div className="h-svh w-screen flex flex-col items-center justify-center bg-(--bg) p-4">
 			<div className="absolute top-4 right-4">
@@ -187,7 +176,7 @@ function WagerConfirmPanel({
 					<p className="text-2xl font-bold">
 						{info.wagerAmount}{" "}
 						<span className="text-base font-semibold text-(--text-secondary)">
-							{label}
+							ETH
 						</span>
 					</p>
 				</div>
@@ -196,26 +185,26 @@ function WagerConfirmPanel({
 					<p>• Winner takes 95% of the pot</p>
 					<p>• 5% platform fee on wins</p>
 					<p>• Draws refund both players in full</p>
-					<p>• Your wallet will ask to approve the token transfer</p>
+					<p>• Your wallet will ask to confirm the ETH transfer</p>
 				</div>
 
 				<button
 					onClick={onConfirm}
-					disabled={isApproving}
+					disabled={isDepositing}
 					className="w-full py-3 font-bold bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition-all flex items-center justify-center gap-2"
 				>
-					{isApproving ? (
+					{isDepositing ? (
 						<>
 							<Spinner size={16} />
-							Approving…
+							Depositing…
 						</>
 					) : (
-						"Approve & Join"
+						"Send ETH & Join"
 					)}
 				</button>
 				<button
 					onClick={onCancel}
-					disabled={isApproving}
+					disabled={isDepositing}
 					className="w-full py-2.5 text-sm text-(--text-secondary) hover:text-(--text) bg-(--bg-tertiary) rounded-xl transition-all disabled:opacity-40"
 				>
 					Cancel
@@ -229,8 +218,6 @@ function WagerConfirmPanel({
 export default function GameLobby() {
 	const [gameCode, setGameCode] = useState("");
 	const [wagerEnabled, setWagerEnabled] = useState(false);
-	const [tokenChoice, setTokenChoice] = useState<"weth" | "custom">("weth");
-	const [customToken, setCustomToken] = useState("");
 	const [wagerAmount, setWagerAmount] = useState("");
 	const [step, setStep] = useState<Step>("idle");
 	const [pendingWager, setPendingWager] = useState<WagerInfo | null>(null);
@@ -241,17 +228,19 @@ export default function GameLobby() {
 	const { address, isConnected } = useAppKitAccount();
 	const { walletProvider } = useAppKitProvider("eip155");
 
-	const effectiveToken = tokenChoice === "weth" ? WETH_SEPOLIA : customToken;
 	const isLoading = step !== "idle";
 
-	// Approve `escrowAddress` to pull `amount` of `tokenAddress` from the connected wallet
-	const approveToken = async (tokenAddress: string, amount: string) => {
+	// ── Deposit ETH to escrow contract ────────────────────────────────────────
+	const depositETH = async (fnName: "createMatch" | "joinMatch", code: string, amount: string) => {
 		if (!walletProvider) throw new Error("Wallet not connected");
+		if (!ESCROW_ADDRESS) throw new Error("Escrow contract address not configured (set VITE_ESCROW_CONTRACT_ADDRESS)");
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const provider = new ethers.BrowserProvider(walletProvider as any);
 		const signer = await provider.getSigner();
-		const token = new ethers.Contract(tokenAddress, ERC20_APPROVE_ABI, signer);
-		const tx = await token.approve(ESCROW_ADDRESS, ethers.parseEther(amount));
+		const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ETH_ABI, signer);
+		const tx = await contract[fnName](ethers.id(code), {
+			value: ethers.parseEther(amount),
+		});
 		await tx.wait();
 	};
 
@@ -263,10 +252,6 @@ export default function GameLobby() {
 		}
 
 		if (wagerEnabled) {
-			if (!effectiveToken || (tokenChoice === "custom" && !customToken)) {
-				addToast("Enter a valid token address", "error");
-				return;
-			}
 			if (!wagerAmount || parseFloat(wagerAmount) <= 0) {
 				addToast("Enter a valid wager amount", "error");
 				return;
@@ -279,42 +264,59 @@ export default function GameLobby() {
 				return;
 			}
 
-			// Step 1 — token approval
-			setStep("approving");
+			// Step 1 — create game record on backend (gets us the game code)
+			setStep("creating");
+			let createdGameCode: string;
 			try {
-				await approveToken(effectiveToken, wagerAmount);
+				const data = await api.createGame("chess", address, wagerAmount);
+				if (!data.success) throw new Error(data.error || "Failed to create game");
+				createdGameCode = data.data.game_code;
 			} catch (err: unknown) {
 				setStep("idle");
-				const msg =
-					err instanceof Error
-						? err.message
-						: "Token approval failed or cancelled";
+				const msg = err instanceof Error ? err.message : "Failed to create game";
+				addToast(msg, "error");
+				return;
+			}
+
+			// Step 2 — deposit ETH directly to escrow contract
+			setStep("depositing");
+			try {
+				await depositETH("createMatch", createdGameCode, wagerAmount);
+			} catch (err: unknown) {
+				setStep("idle");
+				const msg = err instanceof Error ? err.message : "ETH deposit failed";
 				addToast(
-					msg.includes("rejected") ? "Approval cancelled" : msg,
+					msg.includes("rejected") || msg.includes("denied")
+						? "Deposit cancelled"
+						: msg,
 					"error",
 				);
 				return;
 			}
 
-			// Step 2 — create game (backend pulls via approved allowance)
-			setStep("creating");
+			// Step 3 — register as white player in the store (socket connection etc.)
+			try {
+				await joinGame(createdGameCode, "white", address);
+				navigate(`/${createdGameCode}`);
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : "Something went wrong";
+				addToast(msg, "error");
+			} finally {
+				setStep("idle");
+			}
 		} else {
+			// Non-wagered — simple path
 			setStep("creating");
-		}
-
-		try {
-			await createGame(
-				address,
-				wagerEnabled ? effectiveToken : undefined,
-				wagerEnabled ? wagerAmount : undefined,
-			);
-			const code = useGameStore.getState().gameCode;
-			if (code) navigate(`/${code}`);
-		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : "Something went wrong";
-			addToast(msg, "error");
-		} finally {
-			setStep("idle");
+			try {
+				await createGame(address);
+				const code = useGameStore.getState().gameCode;
+				if (code) navigate(`/${code}`);
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : "Something went wrong";
+				addToast(msg, "error");
+			} finally {
+				setStep("idle");
+			}
 		}
 	};
 
@@ -328,15 +330,12 @@ export default function GameLobby() {
 
 		// Fetch game to check for wager
 		setStep("fetching");
-		let gameData: {
-			wager_amount?: number | null;
-			token_address?: string | null;
-		};
+		let wagerInfo: { wager_amount?: number | null } = {};
 		try {
 			const res = await fetch(`${BACKEND_URL}api/games/${gameCode}`);
 			const json = await res.json();
 			if (!json.success) throw new Error(json.error || "Game not found");
-			gameData = json.data;
+			wagerInfo = json.data;
 		} catch (err: unknown) {
 			setStep("idle");
 			const msg = err instanceof Error ? err.message : "Game not found";
@@ -344,13 +343,10 @@ export default function GameLobby() {
 			return;
 		}
 
-		if (gameData.wager_amount && gameData.token_address) {
+		if (wagerInfo.wager_amount) {
 			// Show the wager confirmation panel
-			setPendingWager({
-				wagerAmount: gameData.wager_amount.toString(),
-				tokenAddress: gameData.token_address,
-			});
-			setStep("join-approving");
+			setPendingWager({ wagerAmount: wagerInfo.wager_amount.toString() });
+			setStep("join-confirming");
 			return;
 		}
 
@@ -367,20 +363,27 @@ export default function GameLobby() {
 		}
 	};
 
-	// ── Approve & join (after wager confirmation) ─────────────────────────────
-	const handleApproveAndJoin = async () => {
+	// ── Deposit ETH & join (after wager confirmation) ─────────────────────────
+	const handleDepositAndJoin = async () => {
 		if (!pendingWager || !address) return;
 
-		setStep("approving");
+		// Step 1 — deposit ETH to contract
+		setStep("depositing");
 		try {
-			await approveToken(pendingWager.tokenAddress, pendingWager.wagerAmount);
+			await depositETH("joinMatch", gameCode, pendingWager.wagerAmount);
 		} catch (err: unknown) {
-			setStep("join-approving"); // go back to confirm panel
-			const msg = err instanceof Error ? err.message : "Token approval failed";
-			addToast(msg.includes("rejected") ? "Approval cancelled" : msg, "error");
+			setStep("join-confirming"); // back to confirm panel
+			const msg = err instanceof Error ? err.message : "ETH deposit failed";
+			addToast(
+				msg.includes("rejected") || msg.includes("denied")
+					? "Deposit cancelled"
+					: msg,
+				"error",
+			);
 			return;
 		}
 
+		// Step 2 — join game in backend
 		setStep("joining");
 		try {
 			await joinGame(gameCode, "black", address);
@@ -395,16 +398,16 @@ export default function GameLobby() {
 	};
 
 	// ── Show wager confirmation panel ─────────────────────────────────────────
-	if (step === "join-approving" && pendingWager) {
+	if (step === "join-confirming" && pendingWager) {
 		return (
 			<WagerConfirmPanel
 				info={pendingWager}
-				onConfirm={handleApproveAndJoin}
+				onConfirm={handleDepositAndJoin}
 				onCancel={() => {
 					setStep("idle");
 					setPendingWager(null);
 				}}
-				isApproving={false}
+				isDepositing={false}
 			/>
 		);
 	}
@@ -418,7 +421,7 @@ export default function GameLobby() {
 	return (
 		<div className="h-svh w-screen overflow-hidden flex flex-col items-center justify-center bg-(--bg) p-4 gap-6 relative">
 			{/* Loading overlay */}
-			{isLoading && step !== "join-approving" && (
+			{isLoading && step !== "join-confirming" && (
 				<LoadingOverlay
 					step={step}
 					wagerEnabled={wagerEnabled || !!pendingWager}
@@ -472,50 +475,21 @@ export default function GameLobby() {
 							Wager settings
 						</p>
 
-						{/* Token selector */}
-						<div className="flex gap-2">
-							<button
-								onClick={() => setTokenChoice("weth")}
-								className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${
-									tokenChoice === "weth"
-										? "bg-(--accent-dark) border-(--accent-dark) text-white"
-										: "bg-(--bg) border-(--border) text-(--text-secondary) hover:border-(--accent-primary)/50"
-								}`}
-							>
-								WETH (Sepolia)
-							</button>
-							<button
-								onClick={() => setTokenChoice("custom")}
-								className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${
-									tokenChoice === "custom"
-										? "bg-(--accent-dark) border-(--accent-dark) text-white"
-										: "bg-(--bg) border-(--border) text-(--text-secondary) hover:border-(--accent-primary)/50"
-								}`}
-							>
-								Custom token
-							</button>
-						</div>
-
-						{tokenChoice === "custom" && (
-							<input
-								type="text"
-								placeholder="0x… ERC-20 token address"
-								value={customToken}
-								onChange={(e) => setCustomToken(e.target.value)}
-								className="w-full px-3 py-2 text-xs border border-(--border) rounded-lg bg-(--bg) text-(--text) placeholder:text-(--text-tertiary) outline-none focus:ring-2 focus:ring-(--accent-primary) font-mono"
-							/>
-						)}
-
 						{/* Amount */}
-						<input
-							type="number"
-							placeholder="Amount (e.g. 0.01)"
-							value={wagerAmount}
-							min="0"
-							step="0.001"
-							onChange={(e) => setWagerAmount(e.target.value)}
-							className="w-full px-3 py-2 text-sm border border-(--border) rounded-lg bg-(--bg) text-(--text) placeholder:text-(--text-tertiary) outline-none focus:ring-2 focus:ring-(--accent-primary)"
-						/>
+						<div className="relative">
+							<input
+								type="number"
+								placeholder="Amount (e.g. 0.01)"
+								value={wagerAmount}
+								min="0"
+								step="0.001"
+								onChange={(e) => setWagerAmount(e.target.value)}
+								className="w-full px-3 py-2 pr-14 text-sm border border-(--border) rounded-lg bg-(--bg) text-(--text) placeholder:text-(--text-tertiary) outline-none focus:ring-2 focus:ring-(--accent-primary)"
+							/>
+							<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-(--text-tertiary) pointer-events-none">
+								ETH
+							</span>
+						</div>
 
 						<p className="text-xs text-(--text-tertiary) leading-relaxed">
 							Winner takes 95% · 5% platform fee · Draws refund both players
@@ -529,13 +503,18 @@ export default function GameLobby() {
 					disabled={isLoading || !isConnected}
 					className="w-full px-6 py-3.5 text-base font-bold bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-2xl shadow-lg active:scale-[0.98] flex items-center justify-center gap-2"
 				>
-					{step === "approving" || step === "creating" ? (
+					{step === "creating" ? (
 						<>
 							<Spinner size={16} />
-							{step === "approving" ? "Approving…" : "Creating…"}
+							Creating…
+						</>
+					) : step === "depositing" && wagerEnabled ? (
+						<>
+							<Spinner size={16} />
+							Confirm in wallet…
 						</>
 					) : wagerEnabled ? (
-						"Approve & Create Game"
+						"Create Game & Wager ETH"
 					) : (
 						"Create New Game"
 					)}

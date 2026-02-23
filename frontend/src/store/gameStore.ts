@@ -29,10 +29,12 @@ interface GameStore {
 	wagerAmount?: number | string | null;
 	tokenAddress?: string | null;
 	escrowStatus?: string | null;
+	escrowCreateTx?: string | null;
+	escrowJoinTx?: string | null;
+	escrowResolveTx?: string | null;
 
 	createGame: (
 		walletAddress: string,
-		tokenAddress?: string,
 		wagerAmount?: string,
 	) => Promise<void>;
 	joinGame: (code: string, color: "white" | "black", walletAddress: string) => Promise<void>;
@@ -72,13 +74,15 @@ export const useGameStore = create<GameStore>()(
 			wagerAmount: null,
 			tokenAddress: null,
 			escrowStatus: null,
+			escrowCreateTx: null,
+			escrowJoinTx: null,
+			escrowResolveTx: null,
 
 			createGame: async (
 				walletAddress: string,
-				tokenAddress?: string,
 				wagerAmount?: string,
 			) => {
-				const data = await api.createGame("chess", walletAddress, tokenAddress, wagerAmount);
+				const data = await api.createGame("chess", walletAddress, wagerAmount);
 				if (data.success) {
 					await get().joinGame(data.data.game_code, "white", walletAddress);
 				} else {
@@ -126,6 +130,9 @@ export const useGameStore = create<GameStore>()(
 						wagerAmount: data.data.wager_amount ?? null,
 						tokenAddress: data.data.token_address ?? null,
 						escrowStatus: data.data.escrow_status ?? null,
+						escrowCreateTx: data.data.escrow_create_tx ?? null,
+						escrowJoinTx: data.data.escrow_join_tx ?? null,
+						escrowResolveTx: data.data.escrow_resolve_tx ?? null,
 					});
 
 					socketService.connect();
@@ -161,6 +168,9 @@ export const useGameStore = create<GameStore>()(
 						wagerAmount: data.data.wager_amount ?? null,
 						tokenAddress: data.data.token_address ?? null,
 						escrowStatus: data.data.escrow_status ?? null,
+						escrowCreateTx: data.data.escrow_create_tx ?? null,
+						escrowJoinTx: data.data.escrow_join_tx ?? null,
+						escrowResolveTx: data.data.escrow_resolve_tx ?? null,
 					});
 				}
 			},
@@ -208,6 +218,9 @@ export const useGameStore = create<GameStore>()(
 					wagerAmount: data.wager_amount ?? null,
 					tokenAddress: data.token_address ?? null,
 					escrowStatus: data.escrow_status ?? null,
+					escrowCreateTx: data.escrow_create_tx ?? null,
+					escrowJoinTx: data.escrow_join_tx ?? null,
+					escrowResolveTx: data.escrow_resolve_tx ?? null,
 				});
 			},
 
@@ -260,6 +273,9 @@ export const useGameStore = create<GameStore>()(
 					wagerAmount: null,
 					tokenAddress: null,
 					escrowStatus: null,
+					escrowCreateTx: null,
+					escrowJoinTx: null,
+					escrowResolveTx: null,
 				});
 			},
 
@@ -286,6 +302,8 @@ export const useGameNotifications = () => {
 	const inCheck = useGameStore((s) => s.inCheck);
 	const currentTurn = useGameStore((s) => s.currentTurn);
 	const drawOffer = useGameStore((s) => s.drawOffer);
+	const wagerAmount = useGameStore((s) => s.wagerAmount);
+	const fetchGameState = useGameStore((s) => s.fetchGameState);
 
 	useEffect(() => {
 		if (status === "finished") {
@@ -296,8 +314,12 @@ export const useGameNotifications = () => {
 			} else {
 				addToast("You lost. Checkmate!", "error");
 			}
+			// Re-fetch so escrow tx hashes (written after resolution) are picked up
+			if (wagerAmount) {
+				setTimeout(() => fetchGameState(), 3000);
+			}
 		}
-	}, [status, winner, playerColor, addToast]);
+	}, [status, winner, playerColor, wagerAmount, fetchGameState, addToast]);
 
 	useEffect(() => {
 		if (inCheck && currentTurn === playerColor && status === "active") {

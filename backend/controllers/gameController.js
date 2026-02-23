@@ -4,12 +4,10 @@ const timerService = require("../services/timerService");
 class GameController {
 	async createGame(req, res) {
 		try {
-			const { gameType, wagerAmount, tokenAddress, playerWhiteAddress } =
-				req.body;
+			const { gameType, wagerAmount, playerWhiteAddress } = req.body;
 			const game = await gameModel.createGame(
 				gameType,
 				wagerAmount,
-				tokenAddress,
 				playerWhiteAddress,
 			);
 			res.status(201).json({ success: true, data: game });

@@ -5,11 +5,13 @@ const escrowService = require("../services/escrowService");
 // Initialize escrow service
 escrowService.init();
 
+// On-chain MatchStatus enum values
+const ON_CHAIN_STATUS = { PENDING: 0, ACTIVE: 1, RESOLVED: 2, REFUNDED: 3 };
+
 class GameModel {
 	async createGame(
 		gameType = "chess",
 		wagerAmount = null,
-		tokenAddress = null,
 		playerWhiteAddress = null,
 	) {
 		const gameCode = this.generateGameCode();
@@ -24,7 +26,6 @@ class GameModel {
 				current_turn: "white",
 				status: "waiting",
 				wager_amount: wagerAmount,
-				token_address: tokenAddress,
 				player_white_address: playerWhiteAddress,
 				escrow_status: wagerAmount ? "pending" : null,
 			})
@@ -32,17 +33,6 @@ class GameModel {
 			.single();
 
 		if (error) throw error;
-
-		// If wager is set, create match on escrow contract
-		if (wagerAmount && tokenAddress && playerWhiteAddress) {
-			try {
-				await escrowService.createMatch(gameCode, playerWhiteAddress, tokenAddress, wagerAmount);
-			} catch (escrowErr) {
-				console.error("Escrow createMatch failed:", escrowErr.message);
-				// Don't fail game creation if escrow fails; log for manual review
-			}
-		}
-
 		return data;
 	}
 
@@ -89,6 +79,7 @@ class GameModel {
 				[updateField]: true,
 				[addressField]: playerAddress,
 				status: bothPlayersJoined ? "active" : "waiting",
+				escrow_status: bothPlayersJoined && game.wager_amount ? "active" : game.escrow_status,
 				...(bothPlayersJoined
 					? { turn_started_at: new Date().toISOString() }
 					: {}),
@@ -98,17 +89,6 @@ class GameModel {
 			.single();
 
 		if (error) throw error;
-
-		// If wagered game and both players joined, call escrow joinMatch
-		if (game.wager_amount && game.token_address && bothPlayersJoined) {
-			try {
-				await escrowService.joinMatch(gameCode, playerAddress);
-			} catch (escrowErr) {
-				console.error("Escrow joinMatch failed:", escrowErr.message);
-				// Log but don't fail join
-			}
-		}
-
 		return data;
 	}
 
@@ -121,6 +101,87 @@ class GameModel {
 
 		if (error) throw error;
 		return data;
+	}
+
+	/**
+	 * Resolve on-chain escrow for a finished game.
+	 * Players deposit ETH directly via the frontend, so we only need to call
+	 * resolveMatch (coordinator role). Checks on-chain state first.
+	 *
+	 * @param {string} gameCode - human-readable game code
+	 * @param {object} dbGame   - full game row from DB (needs player addresses)
+	 * @param {string} winner   - "white" | "black" | "draw"
+	 */
+	async _settleEscrow(gameCode, dbGame, winner) {
+		if (!dbGame.wager_amount) return; // free game, no escrow
+
+		// ── 1. Fetch on-chain match state ────────────────────────────────────
+		let onChain;
+		try {
+			onChain = await escrowService.getMatch(gameCode);
+		} catch (err) {
+			console.error(`[Escrow] getMatch failed for ${gameCode}:`, err.message);
+			await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+			return;
+		}
+
+		const chainStatus = onChain.status; // 0=PENDING 1=ACTIVE 2=RESOLVED 3=REFUNDED
+
+		// ── 2. Already resolved / refunded ───────────────────────────────────
+		if (chainStatus === ON_CHAIN_STATUS.RESOLVED) {
+			await supabase.from("games").update({ escrow_status: "settled" }).eq("game_code", gameCode);
+			console.log(`[Escrow] ${gameCode} already RESOLVED on-chain — DB updated`);
+			return;
+		}
+		if (chainStatus === ON_CHAIN_STATUS.REFUNDED) {
+			await supabase.from("games").update({ escrow_status: "refunded" }).eq("game_code", gameCode);
+			console.log(`[Escrow] ${gameCode} already REFUNDED on-chain — DB updated`);
+			return;
+		}
+
+		// ── 3. Match not found on-chain ───────────────────────────────────────
+		if (onChain.createdAt === 0) {
+			console.error(`[Escrow] ${gameCode} not found on-chain — player may not have deposited`);
+			await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+			return;
+		}
+
+		// ── 4. Match is PENDING (player2 never deposited) — can't resolve ────
+		if (chainStatus === ON_CHAIN_STATUS.PENDING) {
+			console.error(`[Escrow] ${gameCode} is PENDING on-chain — player2 never deposited ETH`);
+			await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+			return;
+		}
+
+		// ── 5. Match is ACTIVE — resolve it ──────────────────────────────────
+		try {
+			let receipt;
+			if (winner === "draw") {
+				receipt = await escrowService.resolveAsDraw(gameCode);
+			} else {
+				const winnerAddress = winner === "white"
+					? dbGame.player_white_address
+					: dbGame.player_black_address;
+
+				if (!winnerAddress) {
+					console.error(`[Escrow] ${gameCode} — no address found for winner="${winner}"`);
+					await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+					return;
+				}
+
+				receipt = await escrowService.resolveWithWinner(gameCode, winnerAddress);
+			}
+
+			await supabase
+				.from("games")
+				.update({ escrow_resolve_tx: receipt.hash, escrow_status: "settled" })
+				.eq("game_code", gameCode);
+
+			console.log(`[Escrow] ${gameCode} settled — tx: ${receipt.hash}`);
+		} catch (resolveErr) {
+			console.error(`[Escrow] resolveMatch FAILED for ${gameCode}:`, resolveErr.message);
+			await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+		}
 	}
 
 	async makeMove(gameCode, from, to, promotion = null) {
@@ -226,29 +287,11 @@ class GameModel {
 
 		if (updateError) throw updateError;
 
-		// If game finished, resolve on-chain escrow
+		// If game finished, resolve on-chain escrow (non-blocking — don't fail the move)
 		if (newStatus === "finished") {
-			try {
-				if (winner === "draw") {
-					await escrowService.resolveAsDraw(gameCode);
-				} else {
-					// winner is 'white' or 'black', need to map to player address
-					const playerField =
-						winner === "white" ? "player_white" : "player_black";
-					const winnerAddress =
-						updatedGame[
-							playerField === "player_white"
-								? "player_white_address"
-								: "player_black_address"
-						];
-					if (winnerAddress) {
-						await escrowService.resolveWithWinner(gameCode, winnerAddress);
-					}
-				}
-			} catch (escrowErr) {
-				console.error("Escrow resolution failed:", escrowErr.message);
-				// Log but don't fail the game update
-			}
+			this._settleEscrow(gameCode, updatedGame, winner).catch((err) => {
+				console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
+			});
 		}
 
 		const { error: moveError } = await supabase.from("moves").insert({
@@ -285,17 +328,9 @@ class GameModel {
 
 		if (error) throw error;
 
-		// Resolve escrow with winner address
-		try {
-			const winnerField =
-				winner === "white" ? "player_white_address" : "player_black_address";
-			const winnerAddress = data[winnerField];
-			if (winnerAddress) {
-				await escrowService.resolveWithWinner(gameCode, winnerAddress);
-			}
-		} catch (escrowErr) {
-			console.error("Escrow resolution failed:", escrowErr.message);
-		}
+		this._settleEscrow(gameCode, data, winner).catch((err) => {
+			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
+		});
 
 		return data;
 	}
@@ -322,12 +357,9 @@ class GameModel {
 
 		if (error) throw error;
 
-		// Resolve escrow as draw
-		try {
-			await escrowService.resolveAsDraw(gameCode);
-		} catch (escrowErr) {
-			console.error("Escrow resolution failed:", escrowErr.message);
-		}
+		this._settleEscrow(gameCode, data, "draw").catch((err) => {
+			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
+		});
 
 		return data;
 	}

@@ -4,50 +4,19 @@ pragma solidity ^0.8.17;
 import "forge-std/Test.sol";
 import "../src/ChessterEscrow.sol";
 
-contract MockERC20 {
-    mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
-
-    function mint(address to, uint256 amount) external {
-        balanceOf[to] += amount;
-    }
-
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        require(allowance[from][msg.sender] >= amount, "insufficient allowance");
-        require(balanceOf[from] >= amount, "insufficient balance");
-        allowance[from][msg.sender] -= amount;
-        balanceOf[from] -= amount;
-        balanceOf[to] += amount;
-        return true;
-    }
-
-    function transfer(address to, uint256 amount) external returns (bool) {
-        require(balanceOf[msg.sender] >= amount, "insufficient balance");
-        balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
-        return true;
-    }
-}
-
 /**
- * @dev In the redesigned contract ALL match operations are coordinator-gated.
- *      The test contract itself deploys ChessterEscrow, so address(this) IS the coordinator.
+ * @dev In the redesigned contract:
+ *   - Players call createMatch/joinMatch directly with ETH (payable).
+ *   - Only the coordinator calls resolveMatch.
+ *   - The test contract itself deploys ChessterEscrow, so address(this) IS the coordinator.
  *
- *      Flow:
- *        1. player1 approves escrow for wagerAmount
- *        2. coordinator (this) calls createMatch(gameCode, player1, token, wagerAmount)
- *        3. player2 approves escrow for wagerAmount
- *        4. coordinator (this) calls joinMatch(gameCode, player2)
- *        5. coordinator calls resolveMatch(gameCode, winner)
+ * Flow:
+ *   1. player1 calls createMatch(gameCode) with msg.value = wagerAmount
+ *   2. player2 calls joinMatch(gameCode)  with msg.value = wagerAmount
+ *   3. coordinator (this) calls resolveMatch(gameCode, winner)
  */
 contract ChessterEscrowTest is Test {
     ChessterEscrow public escrow;
-    MockERC20      public token;
 
     address public player1;
     address public player2;
@@ -59,93 +28,82 @@ contract ChessterEscrowTest is Test {
         player1 = makeAddr("player1");
         player2 = makeAddr("player2");
 
+        // Give players ETH
+        vm.deal(player1, 100 ether);
+        vm.deal(player2, 100 ether);
+
         // Deploy — address(this) becomes coordinator
         escrow = new ChessterEscrow();
-        token  = new MockERC20();
-
-        // Mint tokens to players
-        token.mint(player1, 100 ether);
-        token.mint(player2, 100 ether);
     }
 
-    // ── Helper: players approve + coordinator creates & joins ─────────────────
+    // ── Helper: players deposit ETH and match becomes ACTIVE ─────────────────
 
     function _setupMatch() internal {
         vm.prank(player1);
-        token.approve(address(escrow), wagerAmount);
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
+        escrow.createMatch{value: wagerAmount}(gameCode);
 
         vm.prank(player2);
-        token.approve(address(escrow), wagerAmount);
-        escrow.joinMatch(gameCode, player2);
+        escrow.joinMatch{value: wagerAmount}(gameCode);
     }
 
     // ── Create match ──────────────────────────────────────────────────────────
 
     function test_CreateMatch() public {
         vm.prank(player1);
-        token.approve(address(escrow), wagerAmount);
-
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
+        escrow.createMatch{value: wagerAmount}(gameCode);
 
         ChessterEscrow.Match memory m = escrow.getMatch(gameCode);
         assertEq(m.player1,     player1);
-        assertEq(m.token,       address(token));
         assertEq(m.wagerAmount, wagerAmount);
         assertEq(m.totalStaked, wagerAmount);
         assertEq(uint256(m.status), 0); // PENDING
+        assertEq(address(escrow).balance, wagerAmount);
     }
 
-    function testFail_CreateMatch_NoApproval() public {
-        // player1 did NOT approve — should revert
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
+    function testFail_CreateMatch_ZeroValue() public {
+        vm.prank(player1);
+        escrow.createMatch{value: 0}(gameCode); // should revert
     }
 
     function testFail_CreateMatch_Duplicate() public {
         vm.prank(player1);
-        token.approve(address(escrow), wagerAmount * 2);
+        escrow.createMatch{value: wagerAmount}(gameCode);
 
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount); // duplicate
+        vm.prank(player1);
+        escrow.createMatch{value: wagerAmount}(gameCode); // duplicate — should revert
     }
 
     // ── Join match ────────────────────────────────────────────────────────────
 
     function test_JoinMatch() public {
         vm.prank(player1);
-        token.approve(address(escrow), wagerAmount);
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
+        escrow.createMatch{value: wagerAmount}(gameCode);
 
         vm.prank(player2);
-        token.approve(address(escrow), wagerAmount);
-        escrow.joinMatch(gameCode, player2);
+        escrow.joinMatch{value: wagerAmount}(gameCode);
 
         ChessterEscrow.Match memory m = escrow.getMatch(gameCode);
         assertEq(m.player2,     player2);
         assertEq(m.totalStaked, 2 ether);
         assertEq(uint256(m.status), 1); // ACTIVE
+        assertEq(address(escrow).balance, 2 ether);
     }
 
     function testFail_JoinOwnMatch() public {
         vm.prank(player1);
-        token.approve(address(escrow), wagerAmount * 2);
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
+        escrow.createMatch{value: wagerAmount}(gameCode);
 
         // player1 tries to join their own match
-        escrow.joinMatch(gameCode, player1);
+        vm.prank(player1);
+        escrow.joinMatch{value: wagerAmount}(gameCode);
     }
 
-    function testFail_JoinMatch_NotCoordinator() public {
+    function testFail_JoinMatch_WrongAmount() public {
         vm.prank(player1);
-        token.approve(address(escrow), wagerAmount);
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
+        escrow.createMatch{value: wagerAmount}(gameCode);
 
         vm.prank(player2);
-        token.approve(address(escrow), wagerAmount);
-
-        // player2 tries to call joinMatch directly (not coordinator)
-        vm.prank(player2);
-        escrow.joinMatch(gameCode, player2);
+        escrow.joinMatch{value: wagerAmount / 2}(gameCode); // wrong amount — should revert
     }
 
     // ── Resolve: winner ───────────────────────────────────────────────────────
@@ -153,7 +111,8 @@ contract ChessterEscrowTest is Test {
     function test_ResolveMatch_Winner() public {
         _setupMatch();
 
-        uint256 tokenBalBefore = token.balanceOf(player1);
+        uint256 balBefore      = player1.balance;
+        uint256 coordBalBefore = address(this).balance;
         escrow.resolveMatch(gameCode, player1);
 
         ChessterEscrow.Match memory m = escrow.getMatch(gameCode);
@@ -161,18 +120,18 @@ contract ChessterEscrowTest is Test {
         assertEq(m.winner, player1);
 
         // player1 gets 95% of 2 ether = 1.9 ether
-        assertEq(token.balanceOf(player1) - tokenBalBefore, 1.9 ether);
+        assertEq(player1.balance - balBefore, 1.9 ether);
         // coordinator gets 5% = 0.1 ether  (coordinator == address(this))
-        assertEq(token.balanceOf(address(this)), 0.1 ether);
+        assertEq(address(this).balance - coordBalBefore, 0.1 ether);
     }
 
     function test_ResolveMatch_Player2Wins() public {
         _setupMatch();
 
-        uint256 balBefore = token.balanceOf(player2);
+        uint256 balBefore = player2.balance;
         escrow.resolveMatch(gameCode, player2);
 
-        assertEq(token.balanceOf(player2) - balBefore, 1.9 ether);
+        assertEq(player2.balance - balBefore, 1.9 ether);
     }
 
     // ── Resolve: draw ─────────────────────────────────────────────────────────
@@ -180,32 +139,30 @@ contract ChessterEscrowTest is Test {
     function test_ResolveMatch_Draw() public {
         _setupMatch();
 
-        uint256 bal1Before = token.balanceOf(player1);
-        uint256 bal2Before = token.balanceOf(player2);
+        uint256 bal1Before = player1.balance;
+        uint256 bal2Before = player2.balance;
 
         escrow.resolveMatch(gameCode, address(0xdead));
 
         // Each player refunded their wager in full (no admin cut on draw)
-        assertEq(token.balanceOf(player1) - bal1Before, wagerAmount);
-        assertEq(token.balanceOf(player2) - bal2Before, wagerAmount);
+        assertEq(player1.balance - bal1Before, wagerAmount);
+        assertEq(player2.balance - bal2Before, wagerAmount);
         // Coordinator gets nothing on a draw
-        assertEq(token.balanceOf(address(this)), 0);
+        assertEq(address(escrow).balance, 0);
     }
 
     // ── Timeout refund ────────────────────────────────────────────────────────
 
     function test_RefundAfterTimeout_PendingMatch() public {
-        // Only player1 has deposited (PENDING state)
         vm.prank(player1);
-        token.approve(address(escrow), wagerAmount);
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
+        escrow.createMatch{value: wagerAmount}(gameCode);
 
         vm.warp(block.timestamp + 1 hours + 1);
 
-        uint256 balBefore = token.balanceOf(player1);
+        uint256 balBefore = player1.balance;
         escrow.refundAfterTimeout(gameCode);
 
-        assertEq(token.balanceOf(player1) - balBefore, wagerAmount);
+        assertEq(player1.balance - balBefore, wagerAmount);
 
         ChessterEscrow.Match memory m = escrow.getMatch(gameCode);
         assertEq(uint256(m.status), 3); // REFUNDED
@@ -216,19 +173,18 @@ contract ChessterEscrowTest is Test {
 
         vm.warp(block.timestamp + 1 hours + 1);
 
-        uint256 bal1Before = token.balanceOf(player1);
-        uint256 bal2Before = token.balanceOf(player2);
+        uint256 bal1Before = player1.balance;
+        uint256 bal2Before = player2.balance;
 
         escrow.refundAfterTimeout(gameCode);
 
-        assertEq(token.balanceOf(player1) - bal1Before, wagerAmount);
-        assertEq(token.balanceOf(player2) - bal2Before, wagerAmount);
+        assertEq(player1.balance - bal1Before, wagerAmount);
+        assertEq(player2.balance - bal2Before, wagerAmount);
     }
 
     function testFail_RefundTooEarly() public {
         vm.prank(player1);
-        token.approve(address(escrow), wagerAmount);
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
+        escrow.createMatch{value: wagerAmount}(gameCode);
 
         // Must wait 1 hour — should revert
         escrow.refundAfterTimeout(gameCode);
@@ -243,14 +199,6 @@ contract ChessterEscrowTest is Test {
         escrow.resolveMatch(gameCode, player1);
     }
 
-    function testFail_CreateMatch_NotCoordinator() public {
-        vm.prank(player1);
-        token.approve(address(escrow), wagerAmount);
-
-        vm.prank(player1); // player1 is NOT coordinator
-        escrow.createMatch(gameCode, player1, address(token), wagerAmount);
-    }
-
     // ── Admin ─────────────────────────────────────────────────────────────────
 
     function test_SetCoordinator() public {
@@ -263,4 +211,7 @@ contract ChessterEscrowTest is Test {
         vm.prank(player1);
         escrow.setCoordinator(player1);
     }
+
+    // Allow this test contract to receive ETH (coordinator fee)
+    receive() external payable {}
 }

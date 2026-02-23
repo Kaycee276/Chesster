@@ -18,4 +18,7 @@ export interface GameState {
 	escrow_status?: string | null;
 	player_white_address?: string | null;
 	player_black_address?: string | null;
+	escrow_create_tx?: string | null;
+	escrow_join_tx?: string | null;
+	escrow_resolve_tx?: string | null;
 }
