@@ -182,8 +182,7 @@ function WagerConfirmPanel({
 				</div>
 
 				<div className="bg-(--bg) rounded-xl p-3 flex flex-col gap-1 text-xs text-(--text-tertiary)">
-					<p>• Winner takes 95% of the pot</p>
-					<p>• 5% platform fee on wins</p>
+					<p>• Winner takes the pot</p>
 					<p>• Draws refund both players in full</p>
 					<p>• Your wallet will ask to confirm the ETH transfer</p>
 				</div>
@@ -492,7 +491,7 @@ export default function GameLobby() {
 						</div>
 
 						<p className="text-xs text-(--text-tertiary) leading-relaxed">
-							Winner takes 95% · 5% platform fee · Draws refund both players
+							Winner takes the pot · Draws refund both players
 						</p>
 					</div>
 				)}

@@ -233,7 +233,7 @@ export default function GamePage() {
 								• Total pot: {(parseFloat(String(wagerAmount)) * 2).toString()}{" "}
 								{tokenLabel(tokenAddr)}
 							</p>
-							<p>• Winner takes 95% · 5% platform fee</p>
+							<p>• Winner takes the pot</p>
 							<p>• Draws refund both players in full</p>
 						</div>
 
