@@ -11,6 +11,7 @@ import {
 	ExternalLink,
 	Loader2,
 	CheckCircle2,
+	X,
 } from "lucide-react";
 
 const WETH_SEPOLIA = "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14";
@@ -20,7 +21,7 @@ function tokenLabel(addr: string): string {
 	if (addr.toLowerCase() === WETH_SEPOLIA.toLowerCase()) return "WETH";
 	return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { getPossibleMoves, getCapturedPieces } from "../utils/chessUtils";
 import PromotionModal from "./PromotionModal";
@@ -137,6 +138,7 @@ function ChessBoardInner() {
 		from: [number, number];
 		to: [number, number];
 	} | null>(null);
+	const [showPayoutModal, setShowPayoutModal] = useState(false);
 
 	const inCheck = useGameStore((s) => s.inCheck);
 	const winner = useGameStore((s) => s.winner);
@@ -167,6 +169,13 @@ function ChessBoardInner() {
 	);
 
 	useGameNotifications();
+
+	// Auto-open payout modal when the game ends and this player is due a payout
+	useEffect(() => {
+		if (status === "finished" && willReceiveTokens) {
+			setShowPayoutModal(true);
+		}
+	}, [status, willReceiveTokens]);
 
 	const possibleMoves = useMemo(() => {
 		if (!selectedSquare || !playerColor || status !== "active") return [];
@@ -307,6 +316,84 @@ function ChessBoardInner() {
 		<div className="h-svh w-screen overflow-hidden flex flex-col items-center justify-center bg-(--bg) select-none p-1 gap-1.5">
 			{promotionMove && (
 				<PromotionModal onSelect={handlePromotion} color={playerColor!} />
+			)}
+
+			{/* ── Payout Modal ── */}
+			{showPayoutModal && wagerAmount && tokenAddress && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+					<div className="relative w-full max-w-sm mx-4 bg-(--bg-secondary) border border-(--border) rounded-2xl p-6 flex flex-col gap-5 shadow-2xl">
+						{/* Close button — only after payout is confirmed */}
+						{escrowResolveTx && (
+							<button
+								onClick={() => setShowPayoutModal(false)}
+								className="absolute top-4 right-4 text-(--text-tertiary) hover:text-(--text) transition-colors"
+							>
+								<X size={16} />
+							</button>
+						)}
+
+						{/* Title */}
+						<div className="flex flex-col gap-0.5">
+							<p className="text-xs font-semibold uppercase tracking-widest text-(--text-tertiary)">
+								{winner === "draw" ? "Draw Payout" : "Payout"}
+							</p>
+							<h3 className="text-xl font-bold">
+								{winner === "draw" ? "Returning your wager" : "Sending your winnings"}
+							</h3>
+						</div>
+
+						{/* Amount */}
+						<div className="bg-(--bg) rounded-xl p-4 flex flex-col gap-0.5">
+							<p className="text-xs text-(--text-tertiary)">Amount</p>
+							<p className="text-2xl font-bold">
+								{winner === "draw"
+									? `${wagerAmount} `
+									: `${(parseFloat(String(wagerAmount)) * 2 * 0.95).toFixed(6)} `}
+								<span className="text-base font-semibold text-(--text-secondary)">
+									{tokenLabel(tokenAddress)}
+								</span>
+							</p>
+						</div>
+
+						{/* Status */}
+						{escrowResolveTx ? (
+							<div className="flex flex-col gap-3">
+								<div className="flex items-center gap-2 text-green-400">
+									<CheckCircle2 size={20} className="shrink-0" />
+									<span className="font-semibold">
+										{winner === "draw" ? "Wager returned!" : "Tokens sent to your wallet!"}
+									</span>
+								</div>
+								<a
+									href={`${EXPLORER_BASE}${escrowResolveTx}`}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-green-500/15 border border-green-500/30 text-green-400 hover:bg-green-500/25 transition-colors text-sm font-semibold"
+								>
+									<ExternalLink size={14} />
+									View transaction on Etherscan
+								</a>
+								<p className="text-xs text-(--text-tertiary) text-center">
+									Payout visible under the "Internal Txns" tab of the contract address
+								</p>
+							</div>
+						) : (
+							<div className="flex flex-col gap-2">
+								<div className="flex items-center gap-2 text-yellow-400">
+									<Loader2 size={18} className="animate-spin shrink-0" />
+									<span className="font-medium text-sm">
+										{winner === "draw"
+											? "Returning your wager on-chain…"
+											: "Sending tokens to your wallet on-chain…"}
+									</span>
+								</div>
+								<p className="text-xs text-(--text-tertiary)">
+									This may take a few seconds. Please keep this tab open.
+								</p>
+							</div>
+						)}
+					</div>
+				</div>
 			)}
 
 			{/* ── Opponent Info Bar ── */}
