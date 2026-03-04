@@ -161,7 +161,7 @@ class GameModel {
 
 		const { data, error } = await supabase
 			.from("games")
-			.update({ status: "finished", winner })
+			.update({ status: "finished", winner, end_reason: "time" })
 			.eq("game_code", gameCode)
 			.select()
 			.single();
@@ -332,13 +332,16 @@ class GameModel {
 
 		let newStatus = game.status;
 		let winner = null;
+		let endReason = null;
 
 		if (kingCaptured || isCheckmate) {
 			newStatus = "finished";
 			winner = game.current_turn;
+			endReason = "checkmate";
 		} else if (isStalemate) {
 			newStatus = "finished";
 			winner = "draw";
+			endReason = "stalemate";
 		}
 
 		const { data: updatedGame, error: updateError } = await supabase
@@ -350,6 +353,7 @@ class GameModel {
 				in_check: isCheck,
 				status: newStatus,
 				winner: winner,
+				end_reason: endReason,
 				captured_white: newCapturedWhite,
 				captured_black: newCapturedBlack,
 				turn_started_at: new Date().toISOString(),
@@ -394,7 +398,7 @@ class GameModel {
 		const winner = playerColor === "white" ? "black" : "white";
 		const { data, error } = await supabase
 			.from("games")
-			.update({ status: "finished", winner })
+			.update({ status: "finished", winner, end_reason: "resignation" })
 			.eq("game_code", gameCode)
 			.select()
 			.single();
@@ -423,7 +427,7 @@ class GameModel {
 	async acceptDraw(gameCode) {
 		const { data, error } = await supabase
 			.from("games")
-			.update({ status: "finished", winner: "draw", draw_offer: null })
+			.update({ status: "finished", winner: "draw", draw_offer: null, end_reason: "draw_agreed" })
 			.eq("game_code", gameCode)
 			.select()
 			.single();

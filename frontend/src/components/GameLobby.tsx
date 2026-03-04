@@ -547,7 +547,7 @@ export default function GameLobby() {
 
 	// ── Main lobby ────────────────────────────────────────────────────────────
 	return (
-		<div className="min-h-svh w-screen overflow-y-auto flex flex-col items-center bg-(--bg) px-4 pt-14 pb-12 gap-8 relative">
+		<div className="min-h-svh w-screen overflow-y-auto flex flex-col items-center bg-(--bg) px-4 pt-9 pb-12 gap-8 relative">
 			{isLoading && step !== "join-confirming" && (
 				<LoadingOverlay
 					step={step}

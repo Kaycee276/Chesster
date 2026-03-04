@@ -14,6 +14,7 @@ interface GameStore {
 	status: string;
 	inCheck?: boolean;
 	winner?: string | null;
+	endReason?: string | null;
 	drawOffer?: string | null;
 	turnStartedAt?: string | null;
 	secondsLeft: number;
@@ -66,6 +67,7 @@ export const useGameStore = create<GameStore>()(
 			status: "",
 			inCheck: false,
 			winner: null,
+			endReason: null,
 			drawOffer: null,
 			turnStartedAt: null,
 			secondsLeft: 600,
@@ -309,6 +311,7 @@ export const useGameNotifications = () => {
 	const addToast = useToastStore((s) => s.addToast);
 	const status = useGameStore((s) => s.status);
 	const winner = useGameStore((s) => s.winner);
+	const endReason = useGameStore((s) => s.endReason);
 	const playerColor = useGameStore((s) => s.playerColor);
 	const inCheck = useGameStore((s) => s.inCheck);
 	const currentTurn = useGameStore((s) => s.currentTurn);
@@ -318,16 +321,34 @@ export const useGameNotifications = () => {
 	const fetchGameState = useGameStore((s) => s.fetchGameState);
 
 	useEffect(() => {
-		if (status === "finished") {
-			if (winner === "draw") {
-				addToast("Game ended in a draw!", "info");
-			} else if (winner === playerColor) {
-				addToast("You won! Checkmate!", "success");
-			} else {
-				addToast("You lost. Checkmate!", "error");
-			}
+		if (status !== "finished") return;
+
+		const won = winner === playerColor;
+		const isDraw = winner === "draw";
+
+		if (isDraw) {
+			const msg =
+				endReason === "stalemate"   ? "Draw by stalemate!" :
+				endReason === "draw_agreed" ? "Draw agreed — well played!" :
+				endReason === "time"        ? "Time's up — equal material, it's a draw!" :
+				"Game ended in a draw!";
+			addToast(msg, "info");
+		} else if (won) {
+			const msg =
+				endReason === "checkmate"   ? "You won by checkmate!" :
+				endReason === "resignation" ? "You won — opponent resigned!" :
+				endReason === "time"        ? "Time's up — you had more material!" :
+				"You won!";
+			addToast(msg, "success");
+		} else {
+			const msg =
+				endReason === "checkmate"   ? "You lost by checkmate." :
+				endReason === "resignation" ? "You resigned." :
+				endReason === "time"        ? "Time's up — opponent had more material." :
+				"You lost.";
+			addToast(msg, "error");
 		}
-	}, [status, winner, playerColor, addToast]);
+	}, [status, winner, endReason, playerColor, addToast]);
 
 	// Poll for escrow settlement every 3 s until settled or failed
 	useEffect(() => {

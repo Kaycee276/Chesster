@@ -645,16 +645,15 @@ function ChessBoardInner() {
 			>
 				{/* Game actions */}
 				<div className="flex items-center gap-1.5">
-					{status === "finished" && (
+					{status === "finished" ? (
 						<button
 							onClick={handleLeaveGame}
-							className="px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600 text-(--text-secondary) hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
+							className="px-3 py-1.5 bg-(--accent-dark) hover:bg-(--accent-primary) text-white rounded-lg flex items-center gap-1.5 text-xs font-semibold transition-colors"
 						>
 							<LogOut size={11} />
-							Leave
+							Leave game
 						</button>
-					)}
-					{status === "active" && (
+					) : status === "active" ? (
 						<>
 							<button
 								onClick={handleResign}
@@ -682,7 +681,7 @@ function ChessBoardInner() {
 								</button>
 							)}
 						</>
-					)}
+					) : null}
 				</div>
 
 				{/* Shared game timer */}
