@@ -167,7 +167,7 @@ export default function GamePage() {
 	// Fetching game info
 	if (fetchingInfo) {
 		return (
-			<div className="flex flex-col items-center justify-center min-h-svh gap-4 bg-(--bg)">
+			<div className="flex flex-col items-center justify-center h-svh overflow-hidden gap-4 bg-(--bg)">
 				<Spinner size={28} />
 				<p className="text-sm text-(--text-secondary)">Loading game…</p>
 			</div>
@@ -176,7 +176,7 @@ export default function GamePage() {
 
 	// Join prompt
 	return (
-		<div className="flex flex-col items-center justify-center min-h-svh gap-6 bg-(--bg) p-4">
+		<div className="flex flex-col items-center justify-center h-svh overflow-hidden gap-6 bg-(--bg) p-4">
 			<div className="absolute top-4 right-4">
 				<AppKitButton />
 			</div>

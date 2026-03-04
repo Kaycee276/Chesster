@@ -273,15 +273,15 @@ function PendingGamesList({
 	};
 
 	return (
-		<div className="w-full flex flex-col gap-2">
-			<div className="flex items-center gap-2 text-xs text-(--text-tertiary) px-1">
+		<div className="flex flex-col gap-2 min-h-0">
+			<div className="flex items-center gap-2 text-xs text-(--text-tertiary) px-1 shrink-0">
 				<Users size={12} />
 				<span>Open games waiting for a player</span>
 				<span className="ml-auto bg-(--bg-tertiary) rounded-full px-1.5 py-0.5 font-mono text-[10px]">
 					{games.length}
 				</span>
 			</div>
-			<div className="flex flex-col gap-1.5">
+			<div className="flex flex-col gap-1.5 overflow-y-auto max-h-40 lg:max-h-52">
 				{games.map((g) => (
 					<div
 						key={g.game_code}
@@ -547,7 +547,7 @@ export default function GameLobby() {
 
 	// ── Main lobby ────────────────────────────────────────────────────────────
 	return (
-		<div className="min-h-svh w-screen overflow-y-auto flex flex-col items-center bg-(--bg) px-4 pt-9 pb-12 gap-8 relative">
+		<div className="h-svh w-screen overflow-hidden flex flex-col bg-(--bg) relative">
 			{isLoading && step !== "join-confirming" && (
 				<LoadingOverlay
 					step={step}
@@ -555,192 +555,184 @@ export default function GameLobby() {
 				/>
 			)}
 
-			<div className="fixed top-4 left-4 z-10">
-				<h1 className="text-2xl font-bold tracking-tight">Chesster</h1>
-			</div>
-
-			{/* Wallet button */}
-			<div className="fixed top-4 right-4 z-10">
-				<AppKitButton />
-			</div>
-
-			{/* Logo */}
-			<div className="flex flex-col items-center text-center pt-4">
-				<p className="text-(--text-secondary) text-sm ">
+			{/* ── Header bar ── */}
+			<header className="shrink-0 h-14 flex items-center justify-between px-5 sm:px-8 border-b border-(--border)/40">
+				<h1 className="text-xl font-bold tracking-tight">Chesster</h1>
+				<p className="text-(--text-tertiary) text-xs hidden md:block">
 					{isConnected
-						? "Ready to play — create or join a game"
+						? "Create or join a game below"
 						: "Connect your wallet to play on-chain chess"}
 				</p>
-			</div>
+				<AppKitButton />
+			</header>
 
-			{/* ── Two-column layout ── */}
-			<div className="w-full max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-				{/* ── LEFT: Create game ── */}
-				<div className="flex flex-col gap-3">
-					<p className="text-xs font-semibold text-(--text-tertiary) uppercase tracking-widest px-1">
-						Create a game
-					</p>
+			{/* ── Centered body ── */}
+			<main className="flex-1 min-h-0 flex items-center justify-center p-4 sm:p-6 lg:p-10">
+				<div className="w-full max-w-3xl lg:max-w-4xl flex flex-col sm:flex-row bg-(--bg-secondary) border border-(--border) rounded-2xl shadow-2xl overflow-hidden" style={{ maxHeight: "calc(100vh - 56px - 32px)" }}>
 
-					{/* Time control selector */}
-					{isConnected && (
-						<div className="flex flex-col gap-2 p-3 bg-(--bg-secondary) border border-(--border) rounded-xl">
-							<div className="flex items-center gap-1.5 text-xs font-semibold text-(--text-tertiary) uppercase tracking-wider">
-								<Clock size={11} />
-								Game duration
-							</div>
-							<div className="grid grid-cols-3 gap-1.5">
-								{TIME_CONTROLS.map((tc) => (
-									<button
-										key={tc.seconds}
-										onClick={() => setSelectedTimeControl(tc)}
-										className={`flex flex-col items-center py-2.5 px-1 rounded-lg border text-xs transition-all ${
-											selectedTimeControl.seconds === tc.seconds
-												? "border-(--accent-primary) bg-(--accent-dark)/20 text-white font-semibold"
-												: "border-(--border) bg-(--bg) text-(--text-secondary) hover:border-(--accent-primary)/50"
-										}`}
-									>
-										<span className="font-bold text-sm">{tc.label}</span>
-										<span
-											className={`text-[10px] mt-0.5 ${
+					{/* ── LEFT: Create game ── */}
+					<div className="flex-1 flex flex-col gap-3 p-5 sm:p-6 overflow-y-auto">
+						<p className="text-xs font-semibold text-(--text-tertiary) uppercase tracking-widest">
+							Create a game
+						</p>
+
+						{/* Time control selector */}
+						{isConnected && (
+							<div className="flex flex-col gap-2 p-3 bg-(--bg) border border-(--border) rounded-xl">
+								<div className="flex items-center gap-1.5 text-xs font-semibold text-(--text-tertiary) uppercase tracking-wider">
+									<Clock size={11} />
+									Game duration
+								</div>
+								<div className="grid grid-cols-3 gap-1.5">
+									{TIME_CONTROLS.map((tc) => (
+										<button
+											key={tc.seconds}
+											onClick={() => setSelectedTimeControl(tc)}
+											className={`flex flex-col items-center py-2 px-1 rounded-lg border text-xs transition-all ${
 												selectedTimeControl.seconds === tc.seconds
-													? "text-(--accent-primary)"
-													: "text-(--text-tertiary)"
+													? "border-(--accent-primary) bg-(--accent-dark)/20 text-white font-semibold"
+													: "border-(--border) bg-(--bg-secondary) text-(--text-secondary) hover:border-(--accent-primary)/50"
 											}`}
 										>
-											{tc.tag}
-										</span>
-									</button>
-								))}
+											<span className="font-bold text-sm">{tc.label}</span>
+											<span
+												className={`text-[10px] mt-0.5 ${
+													selectedTimeControl.seconds === tc.seconds
+														? "text-(--accent-primary)"
+														: "text-(--text-tertiary)"
+												}`}
+											>
+												{tc.tag}
+											</span>
+										</button>
+									))}
+								</div>
 							</div>
-						</div>
-					)}
+						)}
 
-					{/* Wager toggle */}
-					{isConnected && (
-						<button
-							onClick={() => setWagerEnabled((v) => !v)}
-							className="flex items-center justify-between px-4 py-2.5 bg-(--bg-secondary) border border-(--border) rounded-xl w-full transition-colors hover:border-(--accent-primary)/50"
-						>
-							<span className="text-sm text-(--text-secondary)">
-								{wagerEnabled ? "Wager enabled" : "Play with wager"}
-							</span>
-							<div
-								className={`relative w-10 h-5 rounded-full transition-colors ${
-									wagerEnabled ? "bg-(--accent-dark)" : "bg-(--bg-tertiary)"
-								}`}
+						{/* Wager toggle */}
+						{isConnected && (
+							<button
+								onClick={() => setWagerEnabled((v) => !v)}
+								className="flex items-center justify-between px-4 py-2.5 bg-(--bg) border border-(--border) rounded-xl w-full transition-colors hover:border-(--accent-primary)/50"
 							>
-								<div
-									className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
-										wagerEnabled ? "translate-x-5" : "translate-x-0.5"
-									}`}
-								/>
-							</div>
-						</button>
-					)}
-
-					{/* Wager settings */}
-					{wagerEnabled && isConnected && (
-						<div className="flex flex-col gap-2 p-3 bg-(--bg-secondary) border border-(--border) rounded-xl">
-							<p className="text-xs font-semibold text-(--text-tertiary) uppercase tracking-wider">
-								Wager amount
-							</p>
-							<div className="relative">
-								<input
-									type="number"
-									placeholder="e.g. 0.01"
-									value={wagerAmount}
-									min="0"
-									step="0.001"
-									onChange={(e) => setWagerAmount(e.target.value)}
-									className="w-full px-3 py-2 pr-14 text-sm border border-(--border) rounded-lg bg-(--bg) text-(--text) placeholder:text-(--text-tertiary) outline-none focus:ring-2 focus:ring-(--accent-primary)"
-								/>
-								<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-(--text-tertiary) pointer-events-none">
-									ETH
+								<span className="text-sm text-(--text-secondary)">
+									{wagerEnabled ? "Wager enabled" : "Play with wager"}
 								</span>
+								<div
+									className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${
+										wagerEnabled ? "bg-(--accent-dark)" : "bg-(--bg-tertiary)"
+									}`}
+								>
+									<div
+										className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+											wagerEnabled ? "translate-x-5" : "translate-x-0.5"
+										}`}
+									/>
+								</div>
+							</button>
+						)}
+
+						{/* Wager settings */}
+						{wagerEnabled && isConnected && (
+							<div className="flex flex-col gap-2 p-3 bg-(--bg) border border-(--border) rounded-xl">
+								<p className="text-xs font-semibold text-(--text-tertiary) uppercase tracking-wider">
+									Wager amount
+								</p>
+								<div className="relative">
+									<input
+										type="number"
+										placeholder="e.g. 0.01"
+										value={wagerAmount}
+										min="0"
+										step="0.001"
+										onChange={(e) => setWagerAmount(e.target.value)}
+										className="w-full px-3 py-2 pr-14 text-sm border border-(--border) rounded-lg bg-(--bg-secondary) text-(--text) placeholder:text-(--text-tertiary) outline-none focus:ring-2 focus:ring-(--accent-primary)"
+									/>
+									<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-(--text-tertiary) pointer-events-none">
+										ETH
+									</span>
+								</div>
+								<p className="text-xs text-(--text-tertiary) leading-relaxed">
+									Winner takes the pot &#183; Draws refund both players
+								</p>
 							</div>
-							<p className="text-xs text-(--text-tertiary) leading-relaxed">
-								Winner takes the pot &#183; Draws refund both players
-							</p>
-						</div>
-					)}
-
-					{/* Create button */}
-					<button
-						onClick={handleCreateGame}
-						disabled={isLoading || !isConnected}
-						className="w-full px-6 py-3.5 text-base font-bold bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-2xl shadow-lg active:scale-[0.98] flex items-center justify-center gap-2"
-					>
-						{step === "creating" ? (
-							<>
-								<Spinner size={16} />
-								Creating&#8230;
-							</>
-						) : step === "depositing" && wagerEnabled ? (
-							<>
-								<Spinner size={16} />
-								Confirm in wallet&#8230;
-							</>
-						) : wagerEnabled ? (
-							"Create Game & Wager ETH"
-						) : (
-							"Create New Game"
 						)}
-					</button>
-				</div>
 
-				{/* ── Vertical divider (sm+) / horizontal divider (mobile) ── */}
-				<div className="hidden sm:flex flex-col items-center self-stretch">
-					<div className="flex-1 w-px bg-(--border)" />
-					<span className="text-[10px] text-(--text-tertiary) py-2 rotate-90 sm:rotate-0">
-						or
-					</span>
-					<div className="flex-1 w-px bg-(--border)" />
-				</div>
-				<div className="flex sm:hidden items-center gap-3 text-xs text-(--text-tertiary)">
-					<div className="flex-1 h-px bg-(--border)" />
-					<span>or</span>
-					<div className="flex-1 h-px bg-(--border)" />
-				</div>
+						{/* Spacer to push button to bottom on large screens */}
+						<div className="flex-1" />
 
-				{/* ── RIGHT: Join + Pending games ── */}
-				<div className="flex flex-col gap-3">
-					<p className="text-xs font-semibold text-(--text-tertiary) uppercase tracking-widest px-1">
-						Join a game
-					</p>
+						{/* Create button */}
+						<button
+							onClick={handleCreateGame}
+							disabled={isLoading || !isConnected}
+							className="w-full px-6 py-3 text-base font-bold bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl shadow-lg active:scale-[0.98] flex items-center justify-center gap-2"
+						>
+							{step === "creating" ? (
+								<>
+									<Spinner size={16} />
+									Creating&#8230;
+								</>
+							) : step === "depositing" && wagerEnabled ? (
+								<>
+									<Spinner size={16} />
+									Confirm in wallet&#8230;
+								</>
+							) : wagerEnabled ? (
+								"Create Game & Wager ETH"
+							) : (
+								"Create New Game"
+							)}
+						</button>
+					</div>
 
-					<input
-						type="text"
-						placeholder="Enter game code"
-						value={gameCode}
-						onChange={(e) => setGameCode(e.target.value.toUpperCase())}
-						onKeyDown={(e) =>
-							e.key === "Enter" && !isLoading && handleJoinGame()
-						}
-						maxLength={10}
-						disabled={isLoading}
-						className="w-full px-4 py-3 text-base border border-(--border) rounded-xl text-center uppercase outline-none focus:ring-2 focus:ring-(--accent-primary) bg-(--bg-secondary) text-(--text) placeholder:text-(--text-tertiary) transition-all tracking-widest font-mono disabled:opacity-50"
-					/>
-					<button
-						onClick={handleJoinGame}
-						disabled={!gameCode.trim() || isLoading || !isConnected}
-						className="w-full px-6 py-3.5 text-base font-bold bg-(--bg-tertiary) hover:bg-(--bg-secondary) border border-(--border) disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-2xl active:scale-[0.98] flex items-center justify-center gap-2"
-					>
-						{step === "fetching" || step === "joining" ? (
-							<>
-								<Spinner size={16} />
-								{step === "fetching" ? "Checking…" : "Joining…"}
-							</>
-						) : (
-							"Join Game"
+					{/* ── Divider ── */}
+					<div className="h-px sm:h-auto sm:w-px bg-(--border)/50 flex sm:flex-col items-center justify-center shrink-0">
+						<span className="text-[10px] text-(--text-tertiary) px-3 sm:px-0 sm:py-3 bg-(--bg-secondary)">
+							or
+						</span>
+					</div>
+
+					{/* ── RIGHT: Join + Pending games ── */}
+					<div className="flex-1 flex flex-col gap-3 p-5 sm:p-6 overflow-y-auto">
+						<p className="text-xs font-semibold text-(--text-tertiary) uppercase tracking-widest">
+							Join a game
+						</p>
+
+						<input
+							type="text"
+							placeholder="Enter game code"
+							value={gameCode}
+							onChange={(e) => setGameCode(e.target.value.toUpperCase())}
+							onKeyDown={(e) =>
+								e.key === "Enter" && !isLoading && handleJoinGame()
+							}
+							maxLength={10}
+							disabled={isLoading}
+							className="w-full px-4 py-3 text-base border border-(--border) rounded-xl text-center uppercase outline-none focus:ring-2 focus:ring-(--accent-primary) bg-(--bg) text-(--text) placeholder:text-(--text-tertiary) transition-all tracking-widest font-mono disabled:opacity-50"
+						/>
+						<button
+							onClick={handleJoinGame}
+							disabled={!gameCode.trim() || isLoading || !isConnected}
+							className="w-full px-6 py-3 text-base font-bold bg-(--bg-tertiary) hover:bg-(--bg) border border-(--border) disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl active:scale-[0.98] flex items-center justify-center gap-2"
+						>
+							{step === "fetching" || step === "joining" ? (
+								<>
+									<Spinner size={16} />
+									{step === "fetching" ? "Checking\u2026" : "Joining\u2026"}
+								</>
+							) : (
+								"Join Game"
+							)}
+						</button>
+
+						{/* Pending games list */}
+						{isConnected && (
+							<PendingGamesList onJoin={handleJoinByCode} disabled={isLoading} />
 						)}
-					</button>
-
-					{/* Pending games list */}
-					{isConnected && (
-						<PendingGamesList onJoin={handleJoinByCode} disabled={isLoading} />
-					)}
+					</div>
 				</div>
-			</div>
+			</main>
 		</div>
 	);
 }
