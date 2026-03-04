@@ -23,12 +23,12 @@ const ESCROW_ETH_ABI = [
 
 // ── Time control options ───────────────────────────────────────────────────────
 const TIME_CONTROLS = [
-	{ label: "1 min", seconds: 60, tag: "Bullet" },
-	{ label: "3 min", seconds: 180, tag: "Blitz" },
 	{ label: "5 min", seconds: 300, tag: "Blitz" },
 	{ label: "10 min", seconds: 600, tag: "Rapid" },
 	{ label: "15 min", seconds: 900, tag: "Rapid" },
 	{ label: "30 min", seconds: 1800, tag: "Classical" },
+	{ label: "45 min", seconds: 2700, tag: "Classical" },
+	{ label: "60 min", seconds: 3600, tag: "Classical" },
 ];
 
 type Step =
@@ -115,7 +115,9 @@ function LoadingOverlay({
 		},
 		fetching: { title: "Checking game\u2026" },
 		joining: {
-			title: wagerEnabled ? "Joining game on-chain\u2026" : "Joining game\u2026",
+			title: wagerEnabled
+				? "Joining game on-chain\u2026"
+				: "Joining game\u2026",
 			sub: wagerEnabled ? "Locking ETH into escrow contract" : undefined,
 		},
 	};
@@ -330,7 +332,9 @@ export default function GameLobby() {
 	const [gameCode, setGameCode] = useState("");
 	const [wagerEnabled, setWagerEnabled] = useState(false);
 	const [wagerAmount, setWagerAmount] = useState("");
-	const [selectedTimeControl, setSelectedTimeControl] = useState(TIME_CONTROLS[3]); // 10 min default
+	const [selectedTimeControl, setSelectedTimeControl] = useState(
+		TIME_CONTROLS[3],
+	); // 10 min default
 	const [step, setStep] = useState<Step>("idle");
 	const [pendingWager, setPendingWager] = useState<WagerInfo | null>(null);
 
@@ -343,13 +347,24 @@ export default function GameLobby() {
 	const isLoading = step !== "idle";
 
 	// ── Deposit ETH to escrow contract ────────────────────────────────────────
-	const depositETH = async (fnName: "createMatch" | "joinMatch", code: string, amount: string) => {
+	const depositETH = async (
+		fnName: "createMatch" | "joinMatch",
+		code: string,
+		amount: string,
+	) => {
 		if (!walletProvider) throw new Error("Wallet not connected");
-		if (!ESCROW_ADDRESS) throw new Error("Escrow contract address not configured (set VITE_ESCROW_CONTRACT_ADDRESS)");
+		if (!ESCROW_ADDRESS)
+			throw new Error(
+				"Escrow contract address not configured (set VITE_ESCROW_CONTRACT_ADDRESS)",
+			);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const provider = new ethers.BrowserProvider(walletProvider as any);
 		const signer = await provider.getSigner();
-		const contract = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ETH_ABI, signer);
+		const contract = new ethers.Contract(
+			ESCROW_ADDRESS,
+			ESCROW_ETH_ABI,
+			signer,
+		);
 		const tx = await contract[fnName](ethers.id(code), {
 			value: ethers.parseEther(amount),
 		});
@@ -379,12 +394,19 @@ export default function GameLobby() {
 			setStep("creating");
 			let createdGameCode: string;
 			try {
-				const data = await api.createGame("chess", address, wagerAmount, selectedTimeControl.seconds);
-				if (!data.success) throw new Error(data.error || "Failed to create game");
+				const data = await api.createGame(
+					"chess",
+					address,
+					wagerAmount,
+					selectedTimeControl.seconds,
+				);
+				if (!data.success)
+					throw new Error(data.error || "Failed to create game");
 				createdGameCode = data.data.game_code;
 			} catch (err: unknown) {
 				setStep("idle");
-				const msg = err instanceof Error ? err.message : "Failed to create game";
+				const msg =
+					err instanceof Error ? err.message : "Failed to create game";
 				addToast(msg, "error");
 				return;
 			}
@@ -533,15 +555,18 @@ export default function GameLobby() {
 				/>
 			)}
 
+			<div className="fixed top-4 left-4 z-10">
+				<h1 className="text-2xl font-bold tracking-tight">Chesster</h1>
+			</div>
+
 			{/* Wallet button */}
 			<div className="fixed top-4 right-4 z-10">
 				<AppKitButton />
 			</div>
 
 			{/* Logo */}
-			<div className="flex flex-col items-center gap-2 text-center pt-4">
-				<h1 className="text-6xl font-bold tracking-tight">Chesster</h1>
-				<p className="text-(--text-secondary) text-sm">
+			<div className="flex flex-col items-center text-center pt-4">
+				<p className="text-(--text-secondary) text-sm ">
 					{isConnected
 						? "Ready to play — create or join a game"
 						: "Connect your wallet to play on-chain chess"}
@@ -550,7 +575,6 @@ export default function GameLobby() {
 
 			{/* ── Two-column layout ── */}
 			<div className="w-full max-w-2xl grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-
 				{/* ── LEFT: Create game ── */}
 				<div className="flex flex-col gap-3">
 					<p className="text-xs font-semibold text-(--text-tertiary) uppercase tracking-widest px-1">
@@ -576,11 +600,15 @@ export default function GameLobby() {
 										}`}
 									>
 										<span className="font-bold text-sm">{tc.label}</span>
-										<span className={`text-[10px] mt-0.5 ${
-											selectedTimeControl.seconds === tc.seconds
-												? "text-(--accent-primary)"
-												: "text-(--text-tertiary)"
-										}`}>{tc.tag}</span>
+										<span
+											className={`text-[10px] mt-0.5 ${
+												selectedTimeControl.seconds === tc.seconds
+													? "text-(--accent-primary)"
+													: "text-(--text-tertiary)"
+											}`}
+										>
+											{tc.tag}
+										</span>
 									</button>
 								))}
 							</div>
@@ -663,7 +691,9 @@ export default function GameLobby() {
 				{/* ── Vertical divider (sm+) / horizontal divider (mobile) ── */}
 				<div className="hidden sm:flex flex-col items-center self-stretch">
 					<div className="flex-1 w-px bg-(--border)" />
-					<span className="text-[10px] text-(--text-tertiary) py-2 rotate-90 sm:rotate-0">or</span>
+					<span className="text-[10px] text-(--text-tertiary) py-2 rotate-90 sm:rotate-0">
+						or
+					</span>
 					<div className="flex-1 w-px bg-(--border)" />
 				</div>
 				<div className="flex sm:hidden items-center gap-3 text-xs text-(--text-tertiary)">
@@ -683,7 +713,9 @@ export default function GameLobby() {
 						placeholder="Enter game code"
 						value={gameCode}
 						onChange={(e) => setGameCode(e.target.value.toUpperCase())}
-						onKeyDown={(e) => e.key === "Enter" && !isLoading && handleJoinGame()}
+						onKeyDown={(e) =>
+							e.key === "Enter" && !isLoading && handleJoinGame()
+						}
 						maxLength={10}
 						disabled={isLoading}
 						className="w-full px-4 py-3 text-base border border-(--border) rounded-xl text-center uppercase outline-none focus:ring-2 focus:ring-(--accent-primary) bg-(--bg-secondary) text-(--text) placeholder:text-(--text-tertiary) transition-all tracking-widest font-mono disabled:opacity-50"
@@ -708,7 +740,6 @@ export default function GameLobby() {
 						<PendingGamesList onJoin={handleJoinByCode} disabled={isLoading} />
 					)}
 				</div>
-
 			</div>
 		</div>
 	);
