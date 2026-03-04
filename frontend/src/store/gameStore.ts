@@ -16,9 +16,7 @@ interface GameStore {
 	winner?: string | null;
 	drawOffer?: string | null;
 	turnStartedAt?: string | null;
-	// Per-player chess clock
-	whiteTimeLeft: number;
-	blackTimeLeft: number;
+	secondsLeft: number;
 	timeControlSeconds: number;
 	capturedWhite?: string[];
 	capturedBlack?: string[];
@@ -70,8 +68,7 @@ export const useGameStore = create<GameStore>()(
 			winner: null,
 			drawOffer: null,
 			turnStartedAt: null,
-			whiteTimeLeft: 600,
-			blackTimeLeft: 600,
+			secondsLeft: 600,
 			timeControlSeconds: 600,
 			capturedWhite: [],
 			capturedBlack: [],
@@ -108,8 +105,8 @@ export const useGameStore = create<GameStore>()(
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
 					});
-					socketService.onTimerTick(({ whiteTimeLeft, blackTimeLeft }) => {
-						set({ whiteTimeLeft, blackTimeLeft });
+					socketService.onTimerTick(({ secondsLeft }) => {
+						set({ secondsLeft });
 					});
 				} else {
 					throw new Error(data.error);
@@ -132,8 +129,7 @@ export const useGameStore = create<GameStore>()(
 						winner: data.data.winner ?? null,
 						drawOffer: data.data.draw_offer ?? null,
 						turnStartedAt: data.data.turn_started_at ?? null,
-						whiteTimeLeft: data.data.white_time_left ?? tcs,
-						blackTimeLeft: data.data.black_time_left ?? tcs,
+						secondsLeft: data.data.time_control_seconds ?? tcs,
 						timeControlSeconds: tcs,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
@@ -151,8 +147,8 @@ export const useGameStore = create<GameStore>()(
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
 					});
-					socketService.onTimerTick(({ whiteTimeLeft, blackTimeLeft }) => {
-						set({ whiteTimeLeft, blackTimeLeft });
+					socketService.onTimerTick(({ secondsLeft }) => {
+						set({ secondsLeft });
 					});
 				} else {
 					throw new Error(data.error);
@@ -174,8 +170,7 @@ export const useGameStore = create<GameStore>()(
 						winner: data.data.winner ?? null,
 						drawOffer: data.data.draw_offer ?? null,
 						turnStartedAt: data.data.turn_started_at ?? null,
-						whiteTimeLeft: data.data.white_time_left ?? tcs,
-						blackTimeLeft: data.data.black_time_left ?? tcs,
+						secondsLeft: data.data.time_control_seconds ?? tcs,
 						timeControlSeconds: tcs,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
@@ -283,8 +278,7 @@ export const useGameStore = create<GameStore>()(
 					board: [],
 					currentTurn: "white",
 					status: "",
-					whiteTimeLeft: 600,
-					blackTimeLeft: 600,
+					secondsLeft: 600,
 					timeControlSeconds: 600,
 					selectedSquare: null,
 					wagerAmount: null,

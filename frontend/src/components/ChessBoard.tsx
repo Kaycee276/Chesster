@@ -143,8 +143,7 @@ function ChessBoardInner() {
 	const inCheck = useGameStore((s) => s.inCheck);
 	const winner = useGameStore((s) => s.winner);
 	const drawOffer = useGameStore((s) => s.drawOffer);
-	const whiteTimeLeft = useGameStore((s) => s.whiteTimeLeft);
-	const blackTimeLeft = useGameStore((s) => s.blackTimeLeft);
+	const secondsLeft = useGameStore((s) => s.secondsLeft);
 	const timeControlSeconds = useGameStore((s) => s.timeControlSeconds);
 	const wagerAmount = useGameStore((s) => s.wagerAmount);
 	const tokenAddress = useGameStore((s) => s.tokenAddress);
@@ -410,13 +409,6 @@ function ChessBoardInner() {
 					</span>
 				</div>
 				<div className="flex items-center gap-2 shrink-0">
-					{status === "active" && (
-						<TurnTimer
-							secondsLeft={opponentColor === "white" ? whiteTimeLeft : blackTimeLeft}
-							totalSeconds={timeControlSeconds}
-							isMyTurn={!isMyTurn}
-						/>
-					)}
 					{status === "active" && isMyTurn && (
 						<span className="text-xs text-(--text-tertiary) italic">
 							thinking…
@@ -533,13 +525,6 @@ function ChessBoardInner() {
 							<AlertTriangle size={10} />
 							CHECK!
 						</span>
-					)}
-					{status === "active" && (
-						<TurnTimer
-							secondsLeft={playerColor === "white" ? whiteTimeLeft : blackTimeLeft}
-							totalSeconds={timeControlSeconds}
-							isMyTurn={isMyTurn}
-						/>
 					)}
 					{status === "active" && !isMyTurn && (
 						<span className="text-xs text-(--text-tertiary) italic">
@@ -699,6 +684,11 @@ function ChessBoardInner() {
 						</>
 					)}
 				</div>
+
+				{/* Shared game timer */}
+				{status === "active" && (
+					<TurnTimer secondsLeft={secondsLeft} totalSeconds={timeControlSeconds} />
+				)}
 
 				{/* Right side: stake badge + game code */}
 				<div className="flex items-center gap-1.5 shrink-0">

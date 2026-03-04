@@ -74,7 +74,11 @@ CREATE POLICY "Allow all operations on moves" ON moves FOR ALL USING (true);
     ADD COLUMN IF NOT EXISTS escrow_resolve_tx TEXT;
 
 
-  ALTER TABLE games
-  ADD COLUMN IF NOT EXISTS time_control_seconds INTEGER DEFAULT 600,
-  ADD COLUMN IF NOT EXISTS white_time_left INTEGER,
-  ADD COLUMN IF NOT EXISTS black_time_left INTEGER;
+-- Migration: add game duration time control
+ALTER TABLE games
+  ADD COLUMN IF NOT EXISTS time_control_seconds INTEGER DEFAULT 600;
+
+-- Drop per-player clock columns (replaced by shared game timer)
+ALTER TABLE games
+  DROP COLUMN IF EXISTS white_time_left,
+  DROP COLUMN IF EXISTS black_time_left;

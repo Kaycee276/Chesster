@@ -31,10 +31,7 @@ class GameController {
 			io.to(gameCode).emit("game-update", game);
 
 			if (game.status === "active") {
-				const tcs = game.time_control_seconds || 600;
-				const whiteLeft = game.white_time_left ?? tcs;
-				const blackLeft = game.black_time_left ?? tcs;
-				timerService.startClock(gameCode, whiteLeft, blackLeft, "white");
+				timerService.startTimer(gameCode, game.time_control_seconds || 600);
 			}
 
 			res.json({ success: true, data: game });
@@ -67,24 +64,12 @@ class GameController {
 			const { gameCode } = req.params;
 			const { from, to, promotion } = req.body;
 
-			// Snapshot time before switching turn so we persist it
-			const times = timerService.getTime(gameCode);
-
-			const game = await gameModel.makeMove(
-				gameCode,
-				from,
-				to,
-				promotion,
-				times?.whiteLeft ?? null,
-				times?.blackLeft ?? null,
-			);
+			const game = await gameModel.makeMove(gameCode, from, to, promotion);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
 
-			if (game.status === "active") {
-				timerService.switchTurn(gameCode, game.current_turn);
-			} else {
+			if (game.status !== "active") {
 				timerService.clearTimer(gameCode);
 			}
 

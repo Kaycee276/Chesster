@@ -30,8 +30,6 @@ class GameModel {
 				player_white_address: playerWhiteAddress,
 				escrow_status: wagerAmount ? "pending" : null,
 				time_control_seconds: timeControlSeconds,
-				white_time_left: timeControlSeconds,
-				black_time_left: timeControlSeconds,
 			})
 			.select()
 			.single();
@@ -137,7 +135,30 @@ class GameModel {
 		return data.filter((g) => g.created_at >= oneHourAgo);
 	}
 
-	async loseByTime(gameCode, winner) {
+	/**
+	 * End a game when the shared timer expires.
+	 * Winner = player with the most material on the board (by piece value).
+	 * Piece values: Q=9, R=5, B=3, N=3, P=1. Draw if equal.
+	 */
+	async endByTime(gameCode) {
+		const game = await this.getGame(gameCode);
+		if (!game || game.status !== "active") return game;
+
+		const PIECE_VALUE = { q: 9, r: 5, b: 3, n: 3, p: 1 };
+		let whiteScore = 0;
+		let blackScore = 0;
+
+		for (const row of game.board_state) {
+			for (const cell of row) {
+				if (cell === "." || cell.toLowerCase() === "k") continue;
+				const val = PIECE_VALUE[cell.toLowerCase()] || 0;
+				if (cell === cell.toUpperCase()) whiteScore += val;
+				else blackScore += val;
+			}
+		}
+
+		const winner = whiteScore > blackScore ? "white" : blackScore > whiteScore ? "black" : "draw";
+
 		const { data, error } = await supabase
 			.from("games")
 			.update({ status: "finished", winner })
@@ -151,6 +172,7 @@ class GameModel {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
 
+		console.log(`[GameModel] ${gameCode} ended by time — white ${whiteScore} vs black ${blackScore} → ${winner}`);
 		return data;
 	}
 
@@ -235,7 +257,7 @@ class GameModel {
 		}
 	}
 
-	async makeMove(gameCode, from, to, promotion = null, whiteTimeLeft = null, blackTimeLeft = null) {
+	async makeMove(gameCode, from, to, promotion = null) {
 		const game = await this.getGame(gameCode);
 
 		if (game.status !== "active") throw new Error("Game not active");
@@ -331,8 +353,6 @@ class GameModel {
 				captured_white: newCapturedWhite,
 				captured_black: newCapturedBlack,
 				turn_started_at: new Date().toISOString(),
-				...(whiteTimeLeft !== null ? { white_time_left: whiteTimeLeft } : {}),
-				...(blackTimeLeft !== null ? { black_time_left: blackTimeLeft } : {}),
 			})
 			.eq("game_code", gameCode)
 			.select()
