@@ -72,3 +72,9 @@ CREATE POLICY "Allow all operations on moves" ON moves FOR ALL USING (true);
     ADD COLUMN IF NOT EXISTS escrow_create_tx  TEXT,
     ADD COLUMN IF NOT EXISTS escrow_join_tx    TEXT,
     ADD COLUMN IF NOT EXISTS escrow_resolve_tx TEXT;
+
+
+  ALTER TABLE games
+  ADD COLUMN IF NOT EXISTS time_control_seconds INTEGER DEFAULT 600,
+  ADD COLUMN IF NOT EXISTS white_time_left INTEGER,
+  ADD COLUMN IF NOT EXISTS black_time_left INTEGER;

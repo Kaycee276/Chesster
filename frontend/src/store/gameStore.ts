@@ -16,7 +16,10 @@ interface GameStore {
 	winner?: string | null;
 	drawOffer?: string | null;
 	turnStartedAt?: string | null;
-	secondsLeft: number;
+	// Per-player chess clock
+	whiteTimeLeft: number;
+	blackTimeLeft: number;
+	timeControlSeconds: number;
 	capturedWhite?: string[];
 	capturedBlack?: string[];
 	lastMove?: {
@@ -36,6 +39,7 @@ interface GameStore {
 	createGame: (
 		walletAddress: string,
 		wagerAmount?: string,
+		timeControlSeconds?: number,
 	) => Promise<void>;
 	joinGame: (code: string, color: "white" | "black", walletAddress: string) => Promise<void>;
 	rejoinGame: (code: string) => Promise<void>;
@@ -66,7 +70,9 @@ export const useGameStore = create<GameStore>()(
 			winner: null,
 			drawOffer: null,
 			turnStartedAt: null,
-			secondsLeft: 45,
+			whiteTimeLeft: 600,
+			blackTimeLeft: 600,
+			timeControlSeconds: 600,
 			capturedWhite: [],
 			capturedBlack: [],
 			lastMove: null,
@@ -81,8 +87,9 @@ export const useGameStore = create<GameStore>()(
 			createGame: async (
 				walletAddress: string,
 				wagerAmount?: string,
+				timeControlSeconds?: number,
 			) => {
-				const data = await api.createGame("chess", walletAddress, wagerAmount);
+				const data = await api.createGame("chess", walletAddress, wagerAmount, timeControlSeconds);
 				if (data.success) {
 					await get().joinGame(data.data.game_code, "white", walletAddress);
 				} else {
@@ -101,8 +108,8 @@ export const useGameStore = create<GameStore>()(
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
 					});
-					socketService.onTimerTick(({ secondsLeft }) => {
-						set({ secondsLeft });
+					socketService.onTimerTick(({ whiteTimeLeft, blackTimeLeft }) => {
+						set({ whiteTimeLeft, blackTimeLeft });
 					});
 				} else {
 					throw new Error(data.error);
@@ -115,6 +122,7 @@ export const useGameStore = create<GameStore>()(
 
 				const data = await api.getGame(code);
 				if (data.success) {
+					const tcs = data.data.time_control_seconds ?? 600;
 					set({
 						gameCode: code,
 						board: data.data.board_state,
@@ -124,6 +132,9 @@ export const useGameStore = create<GameStore>()(
 						winner: data.data.winner ?? null,
 						drawOffer: data.data.draw_offer ?? null,
 						turnStartedAt: data.data.turn_started_at ?? null,
+						whiteTimeLeft: data.data.white_time_left ?? tcs,
+						blackTimeLeft: data.data.black_time_left ?? tcs,
+						timeControlSeconds: tcs,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
 						lastMove: data.data.last_move ?? null,
@@ -140,8 +151,8 @@ export const useGameStore = create<GameStore>()(
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
 					});
-					socketService.onTimerTick(({ secondsLeft }) => {
-						set({ secondsLeft });
+					socketService.onTimerTick(({ whiteTimeLeft, blackTimeLeft }) => {
+						set({ whiteTimeLeft, blackTimeLeft });
 					});
 				} else {
 					throw new Error(data.error);
@@ -154,6 +165,7 @@ export const useGameStore = create<GameStore>()(
 
 				const data = await api.getGame(gameCode);
 				if (data.success) {
+					const tcs = data.data.time_control_seconds ?? 600;
 					set({
 						board: data.data.board_state,
 						currentTurn: data.data.current_turn,
@@ -162,6 +174,9 @@ export const useGameStore = create<GameStore>()(
 						winner: data.data.winner ?? null,
 						drawOffer: data.data.draw_offer ?? null,
 						turnStartedAt: data.data.turn_started_at ?? null,
+						whiteTimeLeft: data.data.white_time_left ?? tcs,
+						blackTimeLeft: data.data.black_time_left ?? tcs,
+						timeControlSeconds: tcs,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
 						lastMove: data.data.last_move ?? null,
@@ -268,7 +283,9 @@ export const useGameStore = create<GameStore>()(
 					board: [],
 					currentTurn: "white",
 					status: "",
-					secondsLeft: 45,
+					whiteTimeLeft: 600,
+					blackTimeLeft: 600,
+					timeControlSeconds: 600,
 					selectedSquare: null,
 					wagerAmount: null,
 					tokenAddress: null,

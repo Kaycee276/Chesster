@@ -143,7 +143,9 @@ function ChessBoardInner() {
 	const inCheck = useGameStore((s) => s.inCheck);
 	const winner = useGameStore((s) => s.winner);
 	const drawOffer = useGameStore((s) => s.drawOffer);
-	const secondsLeft = useGameStore((s) => s.secondsLeft);
+	const whiteTimeLeft = useGameStore((s) => s.whiteTimeLeft);
+	const blackTimeLeft = useGameStore((s) => s.blackTimeLeft);
+	const timeControlSeconds = useGameStore((s) => s.timeControlSeconds);
 	const wagerAmount = useGameStore((s) => s.wagerAmount);
 	const tokenAddress = useGameStore((s) => s.tokenAddress);
 	const escrowStatus = useGameStore((s) => s.escrowStatus);
@@ -408,8 +410,12 @@ function ChessBoardInner() {
 					</span>
 				</div>
 				<div className="flex items-center gap-2 shrink-0">
-					{status === "active" && !isMyTurn && (
-						<TurnTimer secondsLeft={secondsLeft} isMyTurn={false} />
+					{status === "active" && (
+						<TurnTimer
+							secondsLeft={opponentColor === "white" ? whiteTimeLeft : blackTimeLeft}
+							totalSeconds={timeControlSeconds}
+							isMyTurn={!isMyTurn}
+						/>
 					)}
 					{status === "active" && isMyTurn && (
 						<span className="text-xs text-(--text-tertiary) italic">
@@ -528,8 +534,12 @@ function ChessBoardInner() {
 							CHECK!
 						</span>
 					)}
-					{status === "active" && isMyTurn && (
-						<TurnTimer secondsLeft={secondsLeft} isMyTurn={true} />
+					{status === "active" && (
+						<TurnTimer
+							secondsLeft={playerColor === "white" ? whiteTimeLeft : blackTimeLeft}
+							totalSeconds={timeControlSeconds}
+							isMyTurn={isMyTurn}
+						/>
 					)}
 					{status === "active" && !isMyTurn && (
 						<span className="text-xs text-(--text-tertiary) italic">
@@ -650,13 +660,15 @@ function ChessBoardInner() {
 			>
 				{/* Game actions */}
 				<div className="flex items-center gap-1.5">
-					<button
-						onClick={handleLeaveGame}
-						className="px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600 text-(--text-secondary) hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
-					>
-						<LogOut size={11} />
-						Leave
-					</button>
+					{status === "finished" && (
+						<button
+							onClick={handleLeaveGame}
+							className="px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600 text-(--text-secondary) hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
+						>
+							<LogOut size={11} />
+							Leave
+						</button>
+					)}
 					{status === "active" && (
 						<>
 							<button

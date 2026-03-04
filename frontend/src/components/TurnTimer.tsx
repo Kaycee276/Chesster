@@ -1,16 +1,21 @@
 import { Timer } from "lucide-react";
 
-const TURN_TIME_LIMIT = 45;
-
 interface TurnTimerProps {
 	secondsLeft: number;
+	totalSeconds: number;
 	isMyTurn: boolean;
 }
 
-export default function TurnTimer({ secondsLeft, isMyTurn }: TurnTimerProps) {
-	const pct = (secondsLeft / TURN_TIME_LIMIT) * 100;
-	const urgent = secondsLeft <= 10;
-	const display = Math.ceil(secondsLeft);
+function formatTime(s: number): string {
+	const m = Math.floor(s / 60);
+	const sec = Math.max(0, Math.ceil(s % 60));
+	return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+export default function TurnTimer({ secondsLeft, totalSeconds, isMyTurn }: TurnTimerProps) {
+	const pct = totalSeconds > 0 ? (secondsLeft / totalSeconds) * 100 : 0;
+	const urgent = secondsLeft <= 30;
+	const display = formatTime(secondsLeft);
 
 	return (
 		<div
@@ -18,16 +23,16 @@ export default function TurnTimer({ secondsLeft, isMyTurn }: TurnTimerProps) {
 		>
 			<Timer size={12} className={urgent && isMyTurn ? "text-red-500" : ""} />
 			<span
-				className={`font-mono font-bold text-sm ${urgent && isMyTurn ? "text-red-500 animate-pulse" : ""}`}
+				className={`font-mono font-bold text-sm tabular-nums ${urgent && isMyTurn ? "text-red-500 animate-pulse" : ""}`}
 			>
-				{display}s
+				{display}
 			</span>
 			<div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
 				<div
 					className={`h-full rounded-full transition-all duration-1000 ${
 						urgent ? "bg-red-500" : pct > 50 ? "bg-green-500" : "bg-yellow-400"
 					}`}
-					style={{ width: `${pct}%` }}
+					style={{ width: `${Math.max(0, pct)}%` }}
 				/>
 			</div>
 		</div>

@@ -4,11 +4,12 @@ const timerService = require("../services/timerService");
 class GameController {
 	async createGame(req, res) {
 		try {
-			const { gameType, wagerAmount, playerWhiteAddress } = req.body;
+			const { gameType, wagerAmount, playerWhiteAddress, timeControlSeconds } = req.body;
 			const game = await gameModel.createGame(
 				gameType,
 				wagerAmount,
 				playerWhiteAddress,
+				timeControlSeconds || 600,
 			);
 			res.status(201).json({ success: true, data: game });
 		} catch (error) {
@@ -30,7 +31,10 @@ class GameController {
 			io.to(gameCode).emit("game-update", game);
 
 			if (game.status === "active") {
-				timerService.startTimer(gameCode);
+				const tcs = game.time_control_seconds || 600;
+				const whiteLeft = game.white_time_left ?? tcs;
+				const blackLeft = game.black_time_left ?? tcs;
+				timerService.startClock(gameCode, whiteLeft, blackLeft, "white");
 			}
 
 			res.json({ success: true, data: game });
@@ -49,17 +53,37 @@ class GameController {
 		}
 	}
 
+	async getPendingGames(req, res) {
+		try {
+			const games = await gameModel.getPendingGames();
+			res.json({ success: true, data: games });
+		} catch (error) {
+			res.status(500).json({ success: false, error: error.message });
+		}
+	}
+
 	async makeMove(req, res) {
 		try {
 			const { gameCode } = req.params;
 			const { from, to, promotion } = req.body;
-			const game = await gameModel.makeMove(gameCode, from, to, promotion);
+
+			// Snapshot time before switching turn so we persist it
+			const times = timerService.getTime(gameCode);
+
+			const game = await gameModel.makeMove(
+				gameCode,
+				from,
+				to,
+				promotion,
+				times?.whiteLeft ?? null,
+				times?.blackLeft ?? null,
+			);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
 
 			if (game.status === "active") {
-				timerService.startTimer(gameCode);
+				timerService.switchTurn(gameCode, game.current_turn);
 			} else {
 				timerService.clearTimer(gameCode);
 			}

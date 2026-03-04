@@ -12,6 +12,10 @@ export interface GameState {
 	winner?: string | null;
 	draw_offer?: string | null;
 	turn_started_at?: string | null;
+	// Timer / time control fields
+	time_control_seconds?: number | null;
+	white_time_left?: number | null;
+	black_time_left?: number | null;
 	// Escrow / wager fields
 	wager_amount?: number | string | null;
 	token_address?: string | null;

@@ -1,66 +1,105 @@
-const TURN_TIME_LIMIT_SECONDS = 45;
-
 class TimerService {
 	constructor() {
-		this.timers = new Map(); // gameCode -> { timeout, interval }
+		this.clocks = new Map(); // gameCode -> { whiteLeft, blackLeft, currentTurn, interval }
 		this.io = null;
-		this.TURN_TIME_LIMIT_SECONDS = TURN_TIME_LIMIT_SECONDS;
 	}
 
 	init(io) {
 		this.io = io;
 	}
 
-	startTimer(gameCode) {
+	/**
+	 * Start (or restart) the chess clock for a game.
+	 * @param {string} gameCode
+	 * @param {number} whiteLeft  - seconds remaining for white
+	 * @param {number} blackLeft  - seconds remaining for black
+	 * @param {string} currentTurn - "white" | "black"
+	 */
+	startClock(gameCode, whiteLeft, blackLeft, currentTurn) {
 		this.clearTimer(gameCode);
 
-		let secondsLeft = TURN_TIME_LIMIT_SECONDS;
+		const state = {
+			whiteLeft: Math.max(0, whiteLeft),
+			blackLeft: Math.max(0, blackLeft),
+			currentTurn,
+		};
 
-		// Broadcast initial value immediately
+		// Broadcast initial state immediately
 		if (this.io) {
-			this.io.to(gameCode).emit("timer-tick", { secondsLeft });
+			this.io.to(gameCode).emit("timer-tick", {
+				whiteTimeLeft: state.whiteLeft,
+				blackTimeLeft: state.blackLeft,
+			});
 		}
 
-		// Tick every second and broadcast remaining time to both players
-		const interval = setInterval(() => {
-			secondsLeft -= 1;
+		const interval = setInterval(async () => {
+			if (state.currentTurn === "white") {
+				state.whiteLeft = Math.max(0, state.whiteLeft - 1);
+			} else {
+				state.blackLeft = Math.max(0, state.blackLeft - 1);
+			}
+
 			if (this.io) {
-				this.io.to(gameCode).emit("timer-tick", { secondsLeft: Math.max(0, secondsLeft) });
+				this.io.to(gameCode).emit("timer-tick", {
+					whiteTimeLeft: state.whiteLeft,
+					blackTimeLeft: state.blackLeft,
+				});
+			}
+
+			// Check for time-out
+			const timedOut =
+				(state.currentTurn === "white" && state.whiteLeft <= 0) ||
+				(state.currentTurn === "black" && state.blackLeft <= 0);
+
+			if (timedOut) {
+				this.clearTimer(gameCode);
+				try {
+					const gameModel = require("../models/gameModel");
+					const winner = state.currentTurn === "white" ? "black" : "white";
+					const game = await gameModel.loseByTime(gameCode, winner);
+					if (this.io && game) {
+						this.io.to(gameCode).emit("game-update", game);
+					}
+				} catch (err) {
+					console.error(`[TimerService] loseByTime failed for ${gameCode}:`, err.message);
+				}
 			}
 		}, 1000);
 
-		// Forfeit the turn when time runs out
-		const timeout = setTimeout(async () => {
-			this.clearTimer(gameCode);
-			try {
-				// Lazy require to avoid circular dependency
-				const gameModel = require("../models/gameModel");
-				const game = await gameModel.forfeitTurn(gameCode);
-				if (this.io && game) {
-					this.io.to(gameCode).emit("game-update", game);
-				}
-				// Start next player's timer if game is still active
-				if (game && game.status === "active") {
-					this.startTimer(gameCode);
-				}
-			} catch (err) {
-				console.error(
-					`[TimerService] Failed to forfeit turn for ${gameCode}:`,
-					err.message,
-				);
-			}
-		}, TURN_TIME_LIMIT_SECONDS * 1000);
+		this.clocks.set(gameCode, { state, interval });
+	}
 
-		this.timers.set(gameCode, { timeout, interval });
+	/**
+	 * Switch whose clock is ticking (called after a move).
+	 * Returns current { whiteLeft, blackLeft } so controller can persist to DB.
+	 */
+	switchTurn(gameCode, newTurn) {
+		const entry = this.clocks.get(gameCode);
+		if (entry) {
+			entry.state.currentTurn = newTurn;
+			return { whiteLeft: entry.state.whiteLeft, blackLeft: entry.state.blackLeft };
+		}
+		return null;
+	}
+
+	/** Get current time left for both players */
+	getTime(gameCode) {
+		const entry = this.clocks.get(gameCode);
+		if (!entry) return null;
+		return { whiteLeft: entry.state.whiteLeft, blackLeft: entry.state.blackLeft };
 	}
 
 	clearTimer(gameCode) {
-		const timer = this.timers.get(gameCode);
-		if (timer) {
-			clearTimeout(timer.timeout);
-			clearInterval(timer.interval);
-			this.timers.delete(gameCode);
+		const entry = this.clocks.get(gameCode);
+		if (entry) {
+			clearInterval(entry.interval);
+			this.clocks.delete(gameCode);
 		}
+	}
+
+	// Legacy alias — no-op now
+	startTimer() {
+		console.warn("[TimerService] startTimer() called — use startClock() instead");
 	}
 }
 

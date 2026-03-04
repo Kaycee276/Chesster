@@ -13,6 +13,7 @@ class GameModel {
 		gameType = "chess",
 		wagerAmount = null,
 		playerWhiteAddress = null,
+		timeControlSeconds = 600,
 	) {
 		const gameCode = this.generateGameCode();
 		const initialBoard = chessEngine.initBoard();
@@ -28,6 +29,9 @@ class GameModel {
 				wager_amount: wagerAmount,
 				player_white_address: playerWhiteAddress,
 				escrow_status: wagerAmount ? "pending" : null,
+				time_control_seconds: timeControlSeconds,
+				white_time_left: timeControlSeconds,
+				black_time_left: timeControlSeconds,
 			})
 			.select()
 			.single();
@@ -100,6 +104,53 @@ class GameModel {
 			.single();
 
 		if (error) throw error;
+		return data;
+	}
+
+	async getPendingGames() {
+		const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+		const { data, error } = await supabase
+			.from("games")
+			.select("game_code, created_at, wager_amount, time_control_seconds, player_white_address")
+			.eq("status", "waiting")
+			.order("created_at", { ascending: false })
+			.limit(30);
+
+		if (error) throw error;
+
+		// Mark expired games as cancelled (non-blocking)
+		const expired = data.filter((g) => g.created_at < oneHourAgo);
+		if (expired.length > 0) {
+			const codes = expired.map((g) => g.game_code);
+			supabase
+				.from("games")
+				.update({ status: "cancelled" })
+				.in("game_code", codes)
+				.then(() => {
+					console.log(`[GameModel] Cancelled ${codes.length} expired pending games`);
+				})
+				.catch(console.error);
+		}
+
+		// Return only games still within the 1-hour window
+		return data.filter((g) => g.created_at >= oneHourAgo);
+	}
+
+	async loseByTime(gameCode, winner) {
+		const { data, error } = await supabase
+			.from("games")
+			.update({ status: "finished", winner })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+
+		this._settleEscrow(gameCode, data, winner).catch((err) => {
+			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
+		});
+
 		return data;
 	}
 
@@ -184,7 +235,7 @@ class GameModel {
 		}
 	}
 
-	async makeMove(gameCode, from, to, promotion = null) {
+	async makeMove(gameCode, from, to, promotion = null, whiteTimeLeft = null, blackTimeLeft = null) {
 		const game = await this.getGame(gameCode);
 
 		if (game.status !== "active") throw new Error("Game not active");
@@ -280,6 +331,8 @@ class GameModel {
 				captured_white: newCapturedWhite,
 				captured_black: newCapturedBlack,
 				turn_started_at: new Date().toISOString(),
+				...(whiteTimeLeft !== null ? { white_time_left: whiteTimeLeft } : {}),
+				...(blackTimeLeft !== null ? { black_time_left: blackTimeLeft } : {}),
 			})
 			.eq("game_code", gameCode)
 			.select()

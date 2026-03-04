@@ -7,6 +7,7 @@ export const api = {
 		gameType = "chess",
 		playerAddress?: string,
 		wagerAmount?: string,
+		timeControlSeconds?: number,
 	) => {
 		const res = await fetch(`${API_URL}/games`, {
 			method: "POST",
@@ -15,6 +16,7 @@ export const api = {
 				gameType,
 				playerWhiteAddress: playerAddress,
 				wagerAmount: wagerAmount ? parseFloat(wagerAmount) : undefined,
+				timeControlSeconds: timeControlSeconds ?? 600,
 			}),
 		});
 		return res.json();
@@ -35,6 +37,11 @@ export const api = {
 
 	getGame: async (gameCode: string) => {
 		const res = await fetch(`${API_URL}/games/${gameCode}`);
+		return res.json();
+	},
+
+	getPendingGames: async () => {
+		const res = await fetch(`${API_URL}/games/pending`);
 		return res.json();
 	},
 

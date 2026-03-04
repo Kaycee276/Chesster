@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
@@ -9,6 +9,7 @@ import {
 } from "@reown/appkit/react";
 import { ethers } from "ethers";
 import { api } from "../api/gameApi";
+import { Clock, Users, ChevronRight } from "lucide-react";
 
 const ESCROW_ADDRESS = import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS || "";
 const BACKEND_URL =
@@ -18,6 +19,16 @@ const BACKEND_URL =
 const ESCROW_ETH_ABI = [
 	"function createMatch(bytes32 gameCode) external payable",
 	"function joinMatch(bytes32 gameCode) external payable",
+];
+
+// ── Time control options ───────────────────────────────────────────────────────
+const TIME_CONTROLS = [
+	{ label: "1 min", seconds: 60, tag: "Bullet" },
+	{ label: "3 min", seconds: 180, tag: "Blitz" },
+	{ label: "5 min", seconds: 300, tag: "Blitz" },
+	{ label: "10 min", seconds: 600, tag: "Rapid" },
+	{ label: "15 min", seconds: 900, tag: "Rapid" },
+	{ label: "30 min", seconds: 1800, tag: "Classical" },
 ];
 
 type Step =
@@ -30,6 +41,14 @@ type Step =
 
 interface WagerInfo {
 	wagerAmount: string;
+}
+
+interface PendingGame {
+	game_code: string;
+	created_at: string;
+	wager_amount: number | null;
+	time_control_seconds: number | null;
+	player_white_address: string | null;
 }
 
 // ── Spinner ───────────────────────────────────────────────────────────────────
@@ -87,16 +106,16 @@ function LoadingOverlay({
 }) {
 	const labels: Partial<Record<Step, { title: string; sub?: string }>> = {
 		creating: {
-			title: "Creating game…",
+			title: "Creating game\u2026",
 			sub: wagerEnabled ? "Setting up the game on the server" : undefined,
 		},
 		depositing: {
-			title: "Confirm in wallet…",
+			title: "Confirm in wallet\u2026",
 			sub: "Send ETH to the escrow contract",
 		},
-		fetching: { title: "Checking game…" },
+		fetching: { title: "Checking game\u2026" },
 		joining: {
-			title: wagerEnabled ? "Joining game on-chain…" : "Joining game…",
+			title: wagerEnabled ? "Joining game on-chain\u2026" : "Joining game\u2026",
 			sub: wagerEnabled ? "Locking ETH into escrow contract" : undefined,
 		},
 	};
@@ -114,7 +133,6 @@ function LoadingOverlay({
 						{info.sub}
 					</p>
 				)}
-				{/* Step indicator for wager deposit + join flow */}
 				{wagerEnabled && (step === "depositing" || step === "joining") && (
 					<div className="flex items-center gap-2 mt-1">
 						<div
@@ -127,7 +145,7 @@ function LoadingOverlay({
 							{step === "depositing" ? (
 								<Spinner size={10} />
 							) : (
-								<span className="text-green-500">✓</span>
+								<span className="text-green-500">&#10003;</span>
 							)}
 							Deposit
 						</div>
@@ -149,7 +167,7 @@ function LoadingOverlay({
 	);
 }
 
-// ── Wager confirm panel (shown before joining a wagered game) ─────────────────
+// ── Wager confirm panel ───────────────────────────────────────────────────────
 function WagerConfirmPanel({
 	info,
 	onConfirm,
@@ -168,7 +186,7 @@ function WagerConfirmPanel({
 			</div>
 			<div className="w-full max-w-xs bg-(--bg-secondary) border border-(--border) rounded-2xl p-5 flex flex-col gap-4 shadow-xl">
 				<div className="text-center flex flex-col gap-1">
-					<div className="text-3xl mb-1">⚠️</div>
+					<div className="text-3xl mb-1">&#9888;&#65039;</div>
 					<h2 className="font-bold text-lg">Wagered Game</h2>
 					<p className="text-sm text-(--text-secondary)">
 						This game requires a wager of
@@ -182,9 +200,9 @@ function WagerConfirmPanel({
 				</div>
 
 				<div className="bg-(--bg) rounded-xl p-3 flex flex-col gap-1 text-xs text-(--text-tertiary)">
-					<p>• Winner takes the pot</p>
-					<p>• Draws refund both players in full</p>
-					<p>• Your wallet will ask to confirm the ETH transfer</p>
+					<p>&#8226; Winner takes the pot</p>
+					<p>&#8226; Draws refund both players in full</p>
+					<p>&#8226; Your wallet will ask to confirm the ETH transfer</p>
 				</div>
 
 				<button
@@ -195,7 +213,7 @@ function WagerConfirmPanel({
 					{isDepositing ? (
 						<>
 							<Spinner size={16} />
-							Depositing…
+							Depositing&#8230;
 						</>
 					) : (
 						"Send ETH & Join"
@@ -213,11 +231,106 @@ function WagerConfirmPanel({
 	);
 }
 
+// ── Pending games list ────────────────────────────────────────────────────────
+function PendingGamesList({
+	onJoin,
+	disabled,
+}: {
+	onJoin: (code: string) => void;
+	disabled: boolean;
+}) {
+	const [games, setGames] = useState<PendingGame[]>([]);
+	const [loading, setLoading] = useState(true);
+
+	useEffect(() => {
+		let active = true;
+		const load = async () => {
+			try {
+				const res = await api.getPendingGames();
+				if (active && res.success) setGames(res.data);
+			} catch {
+				// silently ignore
+			} finally {
+				if (active) setLoading(false);
+			}
+		};
+		load();
+		const id = setInterval(load, 15000);
+		return () => {
+			active = false;
+			clearInterval(id);
+		};
+	}, []);
+
+	if (loading || games.length === 0) return null;
+
+	const fmtTime = (s: number | null) => {
+		if (!s) return "10 min";
+		const m = Math.round(s / 60);
+		return `${m} min`;
+	};
+
+	return (
+		<div className="w-full max-w-xs flex flex-col gap-2">
+			<div className="flex items-center gap-2 text-xs text-(--text-tertiary) px-1">
+				<Users size={12} />
+				<span>Open games waiting for a player</span>
+				<span className="ml-auto bg-(--bg-tertiary) rounded-full px-1.5 py-0.5 font-mono text-[10px]">
+					{games.length}
+				</span>
+			</div>
+			<div className="flex flex-col gap-1.5">
+				{games.map((g) => (
+					<div
+						key={g.game_code}
+						className="flex items-center justify-between px-3 py-2.5 bg-(--bg-secondary) border border-(--border) rounded-xl gap-2"
+					>
+						<div className="flex items-center gap-2 min-w-0">
+							<div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-sm shrink-0">
+								&#9812;
+							</div>
+							<div className="flex flex-col min-w-0">
+								<span className="font-mono text-xs font-bold tracking-widest truncate">
+									{g.game_code}
+								</span>
+								<div className="flex items-center gap-1.5 text-[10px] text-(--text-tertiary)">
+									<Clock size={9} />
+									<span>{fmtTime(g.time_control_seconds)}</span>
+									{g.wager_amount && (
+										<>
+											<span>&#183;</span>
+											<span className="text-yellow-400 font-semibold">
+												{g.wager_amount} ETH
+											</span>
+										</>
+									)}
+								</div>
+							</div>
+						</div>
+						<button
+							onClick={() => onJoin(g.game_code)}
+							disabled={disabled}
+							className="flex items-center gap-1 px-2.5 py-1.5 bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-xs font-semibold transition-colors shrink-0"
+						>
+							Join
+							<ChevronRight size={11} />
+						</button>
+					</div>
+				))}
+			</div>
+			<p className="text-[10px] text-(--text-tertiary) text-center px-1 leading-relaxed">
+				Games pending for over 1 hour are automatically cancelled and refunded.
+			</p>
+		</div>
+	);
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function GameLobby() {
 	const [gameCode, setGameCode] = useState("");
 	const [wagerEnabled, setWagerEnabled] = useState(false);
 	const [wagerAmount, setWagerAmount] = useState("");
+	const [selectedTimeControl, setSelectedTimeControl] = useState(TIME_CONTROLS[3]); // 10 min default
 	const [step, setStep] = useState<Step>("idle");
 	const [pendingWager, setPendingWager] = useState<WagerInfo | null>(null);
 
@@ -263,11 +376,10 @@ export default function GameLobby() {
 				return;
 			}
 
-			// Step 1 — create game record on backend (gets us the game code)
 			setStep("creating");
 			let createdGameCode: string;
 			try {
-				const data = await api.createGame("chess", address, wagerAmount);
+				const data = await api.createGame("chess", address, wagerAmount, selectedTimeControl.seconds);
 				if (!data.success) throw new Error(data.error || "Failed to create game");
 				createdGameCode = data.data.game_code;
 			} catch (err: unknown) {
@@ -277,7 +389,6 @@ export default function GameLobby() {
 				return;
 			}
 
-			// Step 2 — deposit ETH directly to escrow contract
 			setStep("depositing");
 			try {
 				await depositETH("createMatch", createdGameCode, wagerAmount);
@@ -293,7 +404,6 @@ export default function GameLobby() {
 				return;
 			}
 
-			// Step 3 — register as white player in the store (socket connection etc.)
 			try {
 				await joinGame(createdGameCode, "white", address);
 				navigate(`/${createdGameCode}`);
@@ -304,10 +414,9 @@ export default function GameLobby() {
 				setStep("idle");
 			}
 		} else {
-			// Non-wagered — simple path
 			setStep("creating");
 			try {
-				await createGame(address);
+				await createGame(address, undefined, selectedTimeControl.seconds);
 				const code = useGameStore.getState().gameCode;
 				if (code) navigate(`/${code}`);
 			} catch (err: unknown) {
@@ -319,19 +428,20 @@ export default function GameLobby() {
 		}
 	};
 
-	// ── Join game ─────────────────────────────────────────────────────────────
-	const handleJoinGame = async () => {
+	// ── Join game by code ─────────────────────────────────────────────────────
+	const handleJoinByCode = async (code: string) => {
 		if (!isConnected || !address) {
 			addToast("Please connect your wallet first", "error");
 			return;
 		}
-		if (!gameCode.trim()) return;
+		const trimmed = code.trim().toUpperCase();
+		if (!trimmed) return;
 
-		// Fetch game to check for wager
 		setStep("fetching");
+		setGameCode(trimmed);
 		let wagerInfo: { wager_amount?: number | null } = {};
 		try {
-			const res = await fetch(`${BACKEND_URL}api/games/${gameCode}`);
+			const res = await fetch(`${BACKEND_URL}api/games/${trimmed}`);
 			const json = await res.json();
 			if (!json.success) throw new Error(json.error || "Game not found");
 			wagerInfo = json.data;
@@ -343,17 +453,15 @@ export default function GameLobby() {
 		}
 
 		if (wagerInfo.wager_amount) {
-			// Show the wager confirmation panel
 			setPendingWager({ wagerAmount: wagerInfo.wager_amount.toString() });
 			setStep("join-confirming");
 			return;
 		}
 
-		// Non-wagered game — join directly
 		setStep("joining");
 		try {
-			await joinGame(gameCode, "black", address);
-			navigate(`/${gameCode}`);
+			await joinGame(trimmed, "black", address);
+			navigate(`/${trimmed}`);
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "Something went wrong";
 			addToast(msg, "error");
@@ -362,16 +470,17 @@ export default function GameLobby() {
 		}
 	};
 
+	const handleJoinGame = () => handleJoinByCode(gameCode);
+
 	// ── Deposit ETH & join (after wager confirmation) ─────────────────────────
 	const handleDepositAndJoin = async () => {
 		if (!pendingWager || !address) return;
 
-		// Step 1 — deposit ETH to contract
 		setStep("depositing");
 		try {
 			await depositETH("joinMatch", gameCode, pendingWager.wagerAmount);
 		} catch (err: unknown) {
-			setStep("join-confirming"); // back to confirm panel
+			setStep("join-confirming");
 			const msg = err instanceof Error ? err.message : "ETH deposit failed";
 			addToast(
 				msg.includes("rejected") || msg.includes("denied")
@@ -382,7 +491,6 @@ export default function GameLobby() {
 			return;
 		}
 
-		// Step 2 — join game in backend
 		setStep("joining");
 		try {
 			await joinGame(gameCode, "black", address);
@@ -411,15 +519,13 @@ export default function GameLobby() {
 		);
 	}
 
-	// ── Show skeleton while wallet state initializes ──────────────────────────
 	if (step === "fetching" && !isLoading) {
 		return <LobbySkeleton />;
 	}
 
 	// ── Main lobby ────────────────────────────────────────────────────────────
 	return (
-		<div className="h-svh w-screen overflow-hidden flex flex-col items-center justify-center bg-(--bg) p-4 gap-6 relative">
-			{/* Loading overlay */}
+		<div className="min-h-svh w-screen overflow-y-auto flex flex-col items-center justify-start bg-(--bg) p-4 pt-16 gap-6 relative">
 			{isLoading && step !== "join-confirming" && (
 				<LoadingOverlay
 					step={step}
@@ -428,7 +534,7 @@ export default function GameLobby() {
 			)}
 
 			{/* Wallet button */}
-			<div className="absolute top-4 right-4">
+			<div className="fixed top-4 right-4 z-10">
 				<AppKitButton />
 			</div>
 
@@ -444,6 +550,37 @@ export default function GameLobby() {
 
 			{/* Actions */}
 			<div className="flex flex-col gap-3 w-full max-w-xs">
+
+				{/* Time control selector */}
+				{isConnected && (
+					<div className="flex flex-col gap-2 p-3 bg-(--bg-secondary) border border-(--border) rounded-xl">
+						<div className="flex items-center gap-1.5 text-xs font-semibold text-(--text-tertiary) uppercase tracking-wider">
+							<Clock size={11} />
+							Time control (per player)
+						</div>
+						<div className="grid grid-cols-3 gap-1.5">
+							{TIME_CONTROLS.map((tc) => (
+								<button
+									key={tc.seconds}
+									onClick={() => setSelectedTimeControl(tc)}
+									className={`flex flex-col items-center py-2 px-1 rounded-lg border text-xs transition-all ${
+										selectedTimeControl.seconds === tc.seconds
+											? "border-(--accent-primary) bg-(--accent-dark)/20 text-white font-semibold"
+											: "border-(--border) bg-(--bg) text-(--text-secondary) hover:border-(--accent-primary)/50"
+									}`}
+								>
+									<span className="font-bold">{tc.label}</span>
+									<span className={`text-[10px] mt-0.5 ${
+										selectedTimeControl.seconds === tc.seconds
+											? "text-(--accent-primary)"
+											: "text-(--text-tertiary)"
+									}`}>{tc.tag}</span>
+								</button>
+							))}
+						</div>
+					</div>
+				)}
+
 				{/* Wager toggle */}
 				{isConnected && (
 					<button
@@ -467,14 +604,12 @@ export default function GameLobby() {
 					</button>
 				)}
 
-				{/* Wager settings (revealed when toggle is on) */}
+				{/* Wager settings */}
 				{wagerEnabled && isConnected && (
 					<div className="flex flex-col gap-2 p-3 bg-(--bg-secondary) border border-(--border) rounded-xl">
 						<p className="text-xs font-semibold text-(--text-tertiary) uppercase tracking-wider">
 							Wager settings
 						</p>
-
-						{/* Amount */}
 						<div className="relative">
 							<input
 								type="number"
@@ -489,9 +624,8 @@ export default function GameLobby() {
 								ETH
 							</span>
 						</div>
-
 						<p className="text-xs text-(--text-tertiary) leading-relaxed">
-							Winner takes the pot · Draws refund both players
+							Winner takes the pot &#183; Draws refund both players
 						</p>
 					</div>
 				)}
@@ -505,12 +639,12 @@ export default function GameLobby() {
 					{step === "creating" ? (
 						<>
 							<Spinner size={16} />
-							Creating…
+							Creating&#8230;
 						</>
 					) : step === "depositing" && wagerEnabled ? (
 						<>
 							<Spinner size={16} />
-							Confirm in wallet…
+							Confirm in wallet&#8230;
 						</>
 					) : wagerEnabled ? (
 						"Create Game & Wager ETH"
@@ -543,13 +677,20 @@ export default function GameLobby() {
 					{step === "fetching" || step === "joining" ? (
 						<>
 							<Spinner size={16} />
-							{step === "fetching" ? "Checking…" : "Joining…"}
+							{step === "fetching" ? "Checking&#8230;" : "Joining&#8230;"}
 						</>
 					) : (
 						"Join Game"
 					)}
 				</button>
 			</div>
+
+			{/* Pending games list */}
+			{isConnected && (
+				<PendingGamesList onJoin={handleJoinByCode} disabled={isLoading} />
+			)}
+
+			<div className="pb-8" />
 		</div>
 	);
 }
