@@ -339,7 +339,9 @@ function ChessBoardInner() {
 								{winner === "draw" ? "Draw Payout" : "Payout"}
 							</p>
 							<h3 className="text-xl font-bold">
-								{winner === "draw" ? "Returning your wager" : "Sending your winnings"}
+								{winner === "draw"
+									? "Returning your wager, you can leave the game now"
+									: "Sending your winnings, you can leave the game now"}
 							</h3>
 						</div>
 
@@ -362,7 +364,9 @@ function ChessBoardInner() {
 								<div className="flex items-center gap-2 text-green-400">
 									<CheckCircle2 size={20} className="shrink-0" />
 									<span className="font-semibold">
-										{winner === "draw" ? "Wager returned!" : "Tokens sent to your wallet!"}
+										{winner === "draw"
+											? "Wager returned!"
+											: "Tokens sent to your wallet!"}
 									</span>
 								</div>
 								<a
@@ -375,7 +379,8 @@ function ChessBoardInner() {
 									View transaction on Etherscan
 								</a>
 								<p className="text-xs text-(--text-tertiary) text-center">
-									Payout visible under the "Internal Txns" tab of the contract address
+									Payout visible under the "Internal Txns" tab of the contract
+									address
 								</p>
 							</div>
 						) : (
@@ -543,7 +548,6 @@ function ChessBoardInner() {
 				</div>
 			</div>
 
-			
 			{/* ── Escrow TX Links (wagered games only) ── */}
 			{wagerAmount && (
 				<div
@@ -562,8 +566,9 @@ function ChessBoardInner() {
 					) : (
 						<>
 							{/* Sending / sent tokens feedback — shown only to recipients */}
-							{status === "finished" && willReceiveTokens && (
-								escrowResolveTx ? (
+							{status === "finished" &&
+								willReceiveTokens &&
+								(escrowResolveTx ? (
 									<span className="flex items-center gap-1.5 text-xs text-green-400 font-semibold w-full">
 										<CheckCircle2 size={12} className="shrink-0" />
 										{winner === "draw" ? "Wager returned" : "Tokens sent"}
@@ -581,13 +586,14 @@ function ChessBoardInner() {
 								) : (
 									<span className="flex items-center gap-1.5 text-xs text-yellow-400 font-medium w-full">
 										<Loader2 size={12} className="animate-spin shrink-0" />
-										{winner === "draw" ? "Returning your wager…" : "Sending tokens to you…"}
+										{winner === "draw"
+											? "Returning your wager…"
+											: "Sending tokens to you…"}
 									</span>
-								)
-							)}
+								))}
 
 							{/* TX links row */}
-							{(escrowCreateTx || escrowJoinTx || escrowResolveTx) ? (
+							{escrowCreateTx || escrowJoinTx || escrowResolveTx ? (
 								<>
 									<span className="text-xs text-(--text-tertiary) shrink-0">
 										{escrowStatus === "settled" ? "Settled ·" : "Escrow ·"}
@@ -629,7 +635,9 @@ function ChessBoardInner() {
 							) : (
 								!(status === "finished" && willReceiveTokens) && (
 									<span className="text-xs text-(--text-tertiary)">
-										{escrowStatus === "active" ? "Escrow active" : "Escrow pending…"}
+										{escrowStatus === "active"
+											? "Escrow active"
+											: "Escrow pending…"}
 									</span>
 								)
 							)}
@@ -686,7 +694,10 @@ function ChessBoardInner() {
 
 				{/* Shared game timer */}
 				{status === "active" && (
-					<TurnTimer secondsLeft={secondsLeft} totalSeconds={timeControlSeconds} />
+					<TurnTimer
+						secondsLeft={secondsLeft}
+						totalSeconds={timeControlSeconds}
+					/>
 				)}
 
 				{/* Right side: stake badge + game code */}
@@ -695,7 +706,9 @@ function ChessBoardInner() {
 						<div
 							title="Total pot locked in escrow"
 							className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border ${
-								status === "finished" && winner !== "draw" && winner === playerColor
+								status === "finished" &&
+								winner !== "draw" &&
+								winner === playerColor
 									? "bg-green-500/15 border-green-500/30 text-green-400"
 									: "bg-yellow-500/10 border-yellow-500/25 text-yellow-400"
 							}`}
