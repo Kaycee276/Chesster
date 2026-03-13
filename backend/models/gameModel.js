@@ -102,6 +102,37 @@ class GameModel {
 			.single();
 
 		if (error) throw error;
+
+		// Auto-cancel waiting games that have been open for over 1 hour.
+		if (data && data.status === "waiting") {
+			const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+			if (data.created_at < oneHourAgo) {
+				const { data: cancelled } = await supabase
+					.from("games")
+					.update({ status: "cancelled" })
+					.eq("game_code", gameCode)
+					.select()
+					.single();
+				return cancelled ?? data;
+			}
+		}
+
+		// Retry escrow settlement if the game is finished but settlement never
+		// completed (e.g. server restarted). The on-chain check inside
+		// _settleEscrow is idempotent — if already RESOLVED it just syncs the DB.
+		if (
+			data &&
+			data.status === "finished" &&
+			data.wager_amount &&
+			data.escrow_status !== "settled" &&
+			data.escrow_status !== "failed" &&
+			data.escrow_status !== "refunded"
+		) {
+			this._settleEscrow(gameCode, data, data.winner).catch((err) => {
+				console.error(`[Escrow] retry _settleEscrow for ${gameCode}:`, err.message);
+			});
+		}
+
 		return data;
 	}
 
