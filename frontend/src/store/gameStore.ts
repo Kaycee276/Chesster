@@ -1,14 +1,36 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { api } from "../api/gameApi";
 import { socketService } from "../api/socket";
 import { useToastStore } from "./toastStore";
+import { soundService } from "../services/soundService";
 import type { GameState } from "../types/game";
+
+// ── Module-level local countdown timer ────────────────────────────────────────
+let _timerInterval: ReturnType<typeof setInterval> | null = null;
+
+function startLocalTimer() {
+	if (_timerInterval !== null) return; // already running
+	_timerInterval = setInterval(() => {
+		useGameStore.setState((s) => {
+			if (s.status !== "active") return s;
+			return { secondsLeft: Math.max(0, s.secondsLeft - 1) };
+		});
+	}, 1000);
+}
+
+function stopLocalTimer() {
+	if (_timerInterval !== null) {
+		clearInterval(_timerInterval);
+		_timerInterval = null;
+	}
+}
 
 interface GameStore {
 	gameCode: string | null;
 	playerColor: "white" | "black" | null;
+	playerAddress: string | null;
 	board: string[][];
 	currentTurn: "white" | "black";
 	status: string;
@@ -62,6 +84,7 @@ export const useGameStore = create<GameStore>()(
 		(set, get) => ({
 			gameCode: null,
 			playerColor: null,
+			playerAddress: null,
 			board: [],
 			currentTurn: "white",
 			status: "",
@@ -99,7 +122,7 @@ export const useGameStore = create<GameStore>()(
 			joinGame: async (code: string, color: "white" | "black", walletAddress: string) => {
 				const data = await api.joinGame(code, color, walletAddress);
 				if (data.success) {
-					set({ gameCode: code, playerColor: color });
+					set({ gameCode: code, playerColor: color, playerAddress: walletAddress });
 					await get().fetchGameState();
 
 					socketService.connect();
@@ -107,9 +130,10 @@ export const useGameStore = create<GameStore>()(
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
 					});
-					socketService.onTimerTick(({ secondsLeft }) => {
-						set({ secondsLeft });
-					});
+
+					if (get().status === "active") {
+						startLocalTimer();
+					}
 				} else {
 					throw new Error(data.error);
 				}
@@ -122,6 +146,15 @@ export const useGameStore = create<GameStore>()(
 				const data = await api.getGame(code);
 				if (data.success) {
 					const tcs = data.data.time_control_seconds ?? 600;
+					let secondsLeft = tcs;
+					// Use game_started_at (set once when both players join) to compute
+					// elapsed time — gives an accurate timer even after page reload.
+					if (data.data.status === "active" && data.data.game_started_at) {
+						const elapsed = Math.floor(
+							(Date.now() - new Date(data.data.game_started_at).getTime()) / 1000,
+						);
+						secondsLeft = Math.max(0, tcs - elapsed);
+					}
 					set({
 						gameCode: code,
 						board: data.data.board_state,
@@ -129,9 +162,10 @@ export const useGameStore = create<GameStore>()(
 						status: data.data.status,
 						inCheck: data.data.in_check ?? false,
 						winner: data.data.winner ?? null,
+						endReason: data.data.end_reason ?? null,
 						drawOffer: data.data.draw_offer ?? null,
 						turnStartedAt: data.data.turn_started_at ?? null,
-						secondsLeft: data.data.time_control_seconds ?? tcs,
+						secondsLeft,
 						timeControlSeconds: tcs,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
@@ -149,30 +183,46 @@ export const useGameStore = create<GameStore>()(
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
 					});
-					socketService.onTimerTick(({ secondsLeft }) => {
-						set({ secondsLeft });
-					});
+
+					if (data.data.status === "active") {
+						startLocalTimer();
+					}
 				} else {
 					throw new Error(data.error);
 				}
 			},
 
 			fetchGameState: async () => {
-				const { gameCode } = get();
+				const { gameCode, status: prevStatus } = get();
 				if (!gameCode) return;
 
 				const data = await api.getGame(gameCode);
 				if (data.success) {
 					const tcs = data.data.time_control_seconds ?? 600;
+					const nextStatus = data.data.status;
+					const isTransitionToActive = nextStatus === "active" && prevStatus === "waiting";
+
+					// Single source of truth for the timer: game_started_at (set once
+					// when both players join). Both clients compute the same secondsLeft
+					// from the same origin timestamp.
+					let secondsLeft = get().secondsLeft;
+					if (nextStatus === "active" && data.data.game_started_at) {
+						const elapsed = Math.floor(
+							(Date.now() - new Date(data.data.game_started_at).getTime()) / 1000,
+						);
+						secondsLeft = Math.max(0, tcs - elapsed);
+					}
+
 					set({
 						board: data.data.board_state,
 						currentTurn: data.data.current_turn,
-						status: data.data.status,
+						status: nextStatus,
 						inCheck: data.data.in_check ?? false,
 						winner: data.data.winner ?? null,
+						endReason: data.data.end_reason ?? null,
 						drawOffer: data.data.draw_offer ?? null,
 						turnStartedAt: data.data.turn_started_at ?? null,
-						secondsLeft: data.data.time_control_seconds ?? tcs,
+						secondsLeft,
 						timeControlSeconds: tcs,
 						capturedWhite: data.data.captured_white ?? [],
 						capturedBlack: data.data.captured_black ?? [],
@@ -184,6 +234,14 @@ export const useGameStore = create<GameStore>()(
 						escrowJoinTx: data.data.escrow_join_tx ?? null,
 						escrowResolveTx: data.data.escrow_resolve_tx ?? null,
 					});
+
+					if (isTransitionToActive) {
+						startLocalTimer();
+					}
+
+					if (nextStatus === "finished") {
+						stopLocalTimer();
+					}
 				}
 			},
 
@@ -203,6 +261,7 @@ export const useGameStore = create<GameStore>()(
 						status: data.data.status,
 						inCheck: data.data.in_check ?? false,
 						winner: data.data.winner ?? null,
+						endReason: data.data.end_reason ?? null,
 						drawOffer: data.data.draw_offer ?? null,
 						turnStartedAt: data.data.turn_started_at ?? null,
 						capturedWhite: data.data.captured_white ?? [],
@@ -210,20 +269,34 @@ export const useGameStore = create<GameStore>()(
 						lastMove: data.data.last_move ?? null,
 						selectedSquare: null,
 					});
+					if (data.data.status !== "active") {
+						stopLocalTimer();
+					}
 				} else {
 					throw new Error(data.error);
 				}
 			},
 
 			updateGameState: (data: GameState) => {
+				const tcs = data.time_control_seconds ?? get().timeControlSeconds;
+				let secondsLeft = get().secondsLeft;
+				if (data.status === "active" && data.game_started_at) {
+					const elapsed = Math.floor(
+						(Date.now() - new Date(data.game_started_at).getTime()) / 1000,
+					);
+					secondsLeft = Math.max(0, tcs - elapsed);
+				}
 				set({
 					board: data.board_state,
 					currentTurn: data.current_turn,
 					status: data.status,
 					inCheck: data.in_check ?? false,
 					winner: data.winner ?? null,
+					endReason: data.end_reason ?? null,
 					drawOffer: data.draw_offer ?? null,
 					turnStartedAt: data.turn_started_at ?? null,
+					secondsLeft,
+					timeControlSeconds: tcs,
 					capturedWhite: data.captured_white ?? [],
 					capturedBlack: data.captured_black ?? [],
 					lastMove: data.last_move ?? null,
@@ -234,6 +307,9 @@ export const useGameStore = create<GameStore>()(
 					escrowJoinTx: data.escrow_join_tx ?? null,
 					escrowResolveTx: data.escrow_resolve_tx ?? null,
 				});
+				if (data.status !== "active") {
+					stopLocalTimer();
+				}
 			},
 
 			selectSquare: (pos: [number, number] | null) =>
@@ -244,14 +320,15 @@ export const useGameStore = create<GameStore>()(
 				if (!gameCode || !playerColor) return;
 				const data = await api.resignGame(gameCode, playerColor);
 				if (data.success) {
-					set({ status: data.data.status });
+					stopLocalTimer();
+					set({ status: data.data.status, winner: data.data.winner ?? null });
 				}
 			},
 
 			offerDraw: async () => {
-				const { gameCode, playerColor } = get();
+				const { gameCode, playerColor, playerAddress } = get();
 				if (!gameCode || !playerColor) return;
-				const data = await api.offerDraw(gameCode, playerColor);
+				const data = await api.offerDraw(gameCode, playerColor, playerAddress ?? undefined);
 				if (data.success) {
 					set({ status: data.data.status, drawOffer: data.data.draw_offer ?? null });
 				}
@@ -262,21 +339,27 @@ export const useGameStore = create<GameStore>()(
 				if (!gameCode) return;
 				const data = await api.acceptDraw(gameCode);
 				if (data.success) {
-					set({ status: data.data.status });
+					stopLocalTimer();
+					set({
+						status: data.data.status,
+						winner: data.data.winner ?? null,
+						endReason: data.data.end_reason ?? null,
+					});
 				}
 			},
 
 			leaveGame: () => {
 				const { gameCode } = get();
+				stopLocalTimer();
 				if (gameCode) {
 					socketService.leaveGame(gameCode);
 					socketService.offGameUpdate();
-					socketService.offTimerTick();
 					socketService.disconnect();
 				}
 				set({
 					gameCode: null,
 					playerColor: null,
+					playerAddress: null,
 					board: [],
 					currentTurn: "white",
 					status: "",
@@ -313,6 +396,7 @@ export const useGameNotifications = () => {
 	const winner = useGameStore((s) => s.winner);
 	const endReason = useGameStore((s) => s.endReason);
 	const playerColor = useGameStore((s) => s.playerColor);
+	const gameCode = useGameStore((s) => s.gameCode);
 	const inCheck = useGameStore((s) => s.inCheck);
 	const currentTurn = useGameStore((s) => s.currentTurn);
 	const drawOffer = useGameStore((s) => s.drawOffer);
@@ -369,4 +453,95 @@ export const useGameNotifications = () => {
 			addToast("Opponent offered a draw", "info");
 		}
 	}, [drawOffer, playerColor, status, addToast]);
+
+	// Poll the DB every 3 s while waiting for the opponent to join.
+	// Clears automatically when status leaves "waiting".
+	useEffect(() => {
+		if (status !== "waiting" || !gameCode) return;
+		const id = setInterval(fetchGameState, 3000);
+		return () => clearInterval(id);
+	}, [status, gameCode, fetchGameState]);
+
+	// Poll the DB every 3 s while the game is active so opponent moves are
+	// visible even when the Socket.IO game-update is missed/delayed.
+	useEffect(() => {
+		if (status !== "active" || !gameCode) return;
+		const id = setInterval(fetchGameState, 3000);
+		return () => clearInterval(id);
+	}, [status, gameCode, fetchGameState]);
+
+	// Notify Player 1 the moment their opponent joins.
+	const prevStatusRef = useRef(status);
+	useEffect(() => {
+		if (prevStatusRef.current === "waiting" && status === "active") {
+			addToast("Opponent joined — game on!", "success");
+		}
+		prevStatusRef.current = status;
+	}, [status, addToast]);
+};
+
+// ── Sound effects hook ────────────────────────────────────────────────────────
+export const useSoundEffects = () => {
+	const lastMove      = useGameStore((s) => s.lastMove);
+	const capturedWhite = useGameStore((s) => s.capturedWhite);
+	const capturedBlack = useGameStore((s) => s.capturedBlack);
+	const status        = useGameStore((s) => s.status);
+	const inCheck       = useGameStore((s) => s.inCheck);
+
+	const prevCapturedRef = useRef(0);
+	const prevStatusRef   = useRef(status);
+	const prevInCheckRef  = useRef(false);
+	const prevMoveKeyRef  = useRef<string | null>(null);
+
+	// Move / capture / castle / promote sounds
+	useEffect(() => {
+		if (!lastMove) return;
+
+		// Deduplicate: polling sets lastMove to a new object every 3 s even when
+		// no move was made. Compare by value so we only beep on a real new move.
+		const moveKey = `${lastMove.from[0]},${lastMove.from[1]}-${lastMove.to[0]},${lastMove.to[1]}-${lastMove.piece}`;
+		if (moveKey === prevMoveKeyRef.current) return;
+		prevMoveKeyRef.current = moveKey;
+
+		const totalCaptured =
+			(capturedWhite?.length ?? 0) + (capturedBlack?.length ?? 0);
+		const wasCapture = totalCaptured > prevCapturedRef.current;
+		prevCapturedRef.current = totalCaptured;
+
+		const isCastle =
+			lastMove.piece.toLowerCase() === "k" &&
+			Math.abs(lastMove.to[1] - lastMove.from[1]) === 2;
+		const isPromotion =
+			lastMove.piece.toLowerCase() === "p" &&
+			(lastMove.to[0] === 0 || lastMove.to[0] === 7);
+
+		if (isPromotion)     soundService.promote();
+		else if (isCastle)   soundService.castle();
+		else if (wasCapture) soundService.capture();
+		else soundService.move();
+	}, [lastMove]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// Check sound — only on transition to in-check
+	useEffect(() => {
+		if (inCheck && !prevInCheckRef.current && status === "active") {
+			soundService.check();
+		}
+		prevInCheckRef.current = !!inCheck;
+	}, [inCheck, status]);
+
+	// Game start / end sounds
+	useEffect(() => {
+		const prev = prevStatusRef.current;
+		if (prev === "waiting" && status === "active") {
+			soundService.gameStart();
+		}
+		if (prev === "active" && status === "finished") {
+			const winner = useGameStore.getState().winner;
+			setTimeout(() => {
+				if (winner === "draw") soundService.draw();
+				else soundService.gameEnd();
+			}, 300);
+		}
+		prevStatusRef.current = status;
+	}, [status]);
 };

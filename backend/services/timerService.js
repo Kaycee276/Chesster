@@ -19,16 +19,8 @@ class TimerService {
 
 		let secondsLeft = Math.max(0, totalSeconds);
 
-		if (this.io) {
-			this.io.to(gameCode).emit("timer-tick", { secondsLeft });
-		}
-
 		const interval = setInterval(async () => {
 			secondsLeft = Math.max(0, secondsLeft - 1);
-
-			if (this.io) {
-				this.io.to(gameCode).emit("timer-tick", { secondsLeft });
-			}
 
 			if (secondsLeft <= 0) {
 				this.clearTimer(gameCode);

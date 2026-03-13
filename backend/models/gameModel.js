@@ -14,8 +14,9 @@ class GameModel {
 		wagerAmount = null,
 		playerWhiteAddress = null,
 		timeControlSeconds = 600,
+		gameCode = null,
 	) {
-		const gameCode = this.generateGameCode();
+		if (!gameCode) gameCode = this.generateGameCode();
 		const initialBoard = chessEngine.initBoard();
 
 		const { data, error } = await supabase
@@ -75,6 +76,7 @@ class GameModel {
 			playerColor === "white" ? "player_black" : "player_white";
 		const bothPlayersJoined = game[otherField] === true;
 
+		const now = new Date().toISOString();
 		const { data, error } = await supabase
 			.from("games")
 			.update({
@@ -83,7 +85,7 @@ class GameModel {
 				status: bothPlayersJoined ? "active" : "waiting",
 				escrow_status: bothPlayersJoined && game.wager_amount ? "active" : game.escrow_status,
 				...(bothPlayersJoined
-					? { turn_started_at: new Date().toISOString() }
+					? { turn_started_at: now, game_started_at: now }
 					: {}),
 			})
 			.eq("game_code", gameCode)
@@ -263,12 +265,15 @@ class GameModel {
 			if (winner === "draw") {
 				receipt = await escrowService.resolveAsDraw(gameCode);
 			} else {
-				const winnerAddress = winner === "white"
-					? dbGame.player_white_address
-					: dbGame.player_black_address;
+				// Use the on-chain player addresses (from getMatch above) rather than
+				// the DB addresses. The contract's resolveMatch checks
+				// `winner == m.player1 || winner == m.player2`, so using the exact
+				// addresses already stored on-chain eliminates any mismatch revert.
+				// player1 = createMatch caller = white, player2 = joinMatch caller = black.
+				const winnerAddress = winner === "white" ? onChain.player1 : onChain.player2;
 
-				if (!winnerAddress) {
-					console.error(`[Escrow] ${gameCode} — no address found for winner="${winner}"`);
+				if (!winnerAddress || winnerAddress === "0x0000000000000000000000000000000000000000") {
+					console.error(`[Escrow] ${gameCode} — no on-chain address for winner="${winner}"`);
 					await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
 					return;
 				}
@@ -388,6 +393,7 @@ class GameModel {
 				captured_white: newCapturedWhite,
 				captured_black: newCapturedBlack,
 				turn_started_at: new Date().toISOString(),
+				draw_offer: null,
 			})
 			.eq("game_code", gameCode)
 			.select()
@@ -456,6 +462,11 @@ class GameModel {
 	}
 
 	async acceptDraw(gameCode) {
+		const existing = await this.getGame(gameCode);
+		if (!existing) throw new Error("Game not found");
+		if (existing.status !== "active") throw new Error("Game is not active");
+		if (!existing.draw_offer) throw new Error("No draw offer pending");
+
 		const { data, error } = await supabase
 			.from("games")
 			.update({ status: "finished", winner: "draw", draw_offer: null, end_reason: "draw_agreed" })
@@ -464,6 +475,7 @@ class GameModel {
 			.single();
 
 		if (error) throw error;
+		if (!data) throw new Error("Game could not be updated — it may have already ended");
 
 		this._settleEscrow(gameCode, data, "draw").catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);

@@ -8,6 +8,7 @@ export const api = {
 		playerAddress?: string,
 		wagerAmount?: string,
 		timeControlSeconds?: number,
+		gameCode?: string,
 	) => {
 		const res = await fetch(`${API_URL}/games`, {
 			method: "POST",
@@ -17,6 +18,7 @@ export const api = {
 				playerWhiteAddress: playerAddress,
 				wagerAmount: wagerAmount ? parseFloat(wagerAmount) : undefined,
 				timeControlSeconds: timeControlSeconds ?? 600,
+				gameCode,
 			}),
 		});
 		return res.json();
@@ -73,11 +75,11 @@ export const api = {
 		return res.json();
 	},
 
-	offerDraw: async (gameCode: string, playerColor: "white" | "black") => {
+	offerDraw: async (gameCode: string, playerColor: "white" | "black", playerAddress?: string) => {
 		const res = await fetch(`${API_URL}/games/${gameCode}/draw/offer`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ playerColor }),
+			body: JSON.stringify({ playerColor, playerAddress }),
 		});
 		return res.json();
 	},

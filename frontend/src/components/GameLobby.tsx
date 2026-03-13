@@ -107,7 +107,7 @@ function LoadingOverlay({
 	const labels: Partial<Record<Step, { title: string; sub?: string }>> = {
 		creating: {
 			title: "Creating game\u2026",
-			sub: wagerEnabled ? "Setting up the game on the server" : undefined,
+			sub: wagerEnabled ? "Saving game after deposit confirmed" : undefined,
 		},
 		depositing: {
 			title: "Confirm in wallet\u2026",
@@ -391,29 +391,17 @@ export default function GameLobby() {
 				return;
 			}
 
-			setStep("creating");
-			let createdGameCode: string;
-			try {
-				const data = await api.createGame(
-					"chess",
-					address,
-					wagerAmount,
-					selectedTimeControl.seconds,
-				);
-				if (!data.success)
-					throw new Error(data.error || "Failed to create game");
-				createdGameCode = data.data.game_code;
-			} catch (err: unknown) {
-				setStep("idle");
-				const msg =
-					err instanceof Error ? err.message : "Failed to create game";
-				addToast(msg, "error");
-				return;
-			}
+			// Generate game code client-side so we can do the on-chain deposit
+			// BEFORE writing to the DB — the game only appears in the lobby after
+			// the transaction is confirmed.
+			const preGeneratedCode = Math.random()
+				.toString(36)
+				.substring(2, 8)
+				.toUpperCase();
 
 			setStep("depositing");
 			try {
-				await depositETH("createMatch", createdGameCode, wagerAmount);
+				await depositETH("createMatch", preGeneratedCode, wagerAmount);
 			} catch (err: unknown) {
 				setStep("idle");
 				const msg = err instanceof Error ? err.message : "ETH deposit failed";
@@ -426,9 +414,29 @@ export default function GameLobby() {
 				return;
 			}
 
+			// Transaction confirmed — now persist the game to the DB.
+			setStep("creating");
 			try {
-				await joinGame(createdGameCode, "white", address);
-				navigate(`/${createdGameCode}`);
+				const data = await api.createGame(
+					"chess",
+					address,
+					wagerAmount,
+					selectedTimeControl.seconds,
+					preGeneratedCode,
+				);
+				if (!data.success)
+					throw new Error(data.error || "Failed to create game");
+			} catch (err: unknown) {
+				setStep("idle");
+				const msg =
+					err instanceof Error ? err.message : "Failed to create game";
+				addToast(msg, "error");
+				return;
+			}
+
+			try {
+				await joinGame(preGeneratedCode, "white", address);
+				navigate(`/${preGeneratedCode}`);
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : "Something went wrong";
 				addToast(msg, "error");

@@ -133,6 +133,12 @@ button:disabled {
 	cursor: not-allowed;
 }
 
+/* Chess piece slide animation */
+@keyframes pieceSlide {
+	from { transform: translate(var(--piece-dx, 0px), var(--piece-dy, 0px)); }
+	to   { transform: translate(0, 0); }
+}
+
 @media screen and (max-width: 768px) {
 	h1 {
 		font-size: 1.5rem;
