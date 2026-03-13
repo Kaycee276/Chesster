@@ -32,6 +32,7 @@ import { getPossibleMoves, getCapturedPieces } from "../utils/chessUtils";
 import PromotionModal from "./PromotionModal";
 import ConfirmModal from "./ConfirmModal";
 import TurnTimer from "./TurnTimer";
+import ChatPanel from "./ChatPanel";
 
 const PIECE_SYMBOLS: Record<string, string> = {
 	K: "♔",
@@ -741,6 +742,9 @@ function ChessBoardInner() {
 					)}
 				</div>
 			</div>
+
+			{/* ── Chat Panel ── */}
+			<ChatPanel />
 
 			{/* ── Action Bar ── */}
 			<div className="shrink-0 flex items-center justify-between px-2.5 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) gap-1.5 min-w-0 overflow-hidden">

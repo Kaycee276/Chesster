@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { useEffect, useRef } from "react";
 import { api } from "../api/gameApi";
 import { socketService } from "../api/socket";
+import type { ChatMessage } from "../api/socket";
 import { useToastStore } from "./toastStore";
 import { soundService } from "../services/soundService";
 import type { GameState } from "../types/game";
@@ -56,6 +57,10 @@ interface GameStore {
 	escrowCreateTx?: string | null;
 	escrowJoinTx?: string | null;
 	escrowResolveTx?: string | null;
+	// Chat
+	chatMessages: ChatMessage[];
+	unreadCount: number;
+	chatOpen: boolean;
 
 	createGame: (
 		walletAddress: string,
@@ -77,6 +82,10 @@ interface GameStore {
 	acceptDraw: () => Promise<void>;
 	leaveGame: () => void;
 	reset: () => void;
+	loadChatHistory: () => Promise<void>;
+	sendChatMessage: (message: string) => void;
+	addChatMessage: (msg: ChatMessage) => void;
+	setChatOpen: (open: boolean) => void;
 }
 
 export const useGameStore = create<GameStore>()(
@@ -105,6 +114,9 @@ export const useGameStore = create<GameStore>()(
 			escrowCreateTx: null,
 			escrowJoinTx: null,
 			escrowResolveTx: null,
+			chatMessages: [],
+			unreadCount: 0,
+			chatOpen: false,
 
 			createGame: async (
 				walletAddress: string,
@@ -130,6 +142,11 @@ export const useGameStore = create<GameStore>()(
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
 					});
+					socketService.onChatMessage((msg) => {
+						get().addChatMessage(msg);
+					});
+
+					await get().loadChatHistory();
 
 					if (get().status === "active") {
 						startLocalTimer();
@@ -183,6 +200,11 @@ export const useGameStore = create<GameStore>()(
 					socketService.onGameUpdate((gameData) => {
 						get().updateGameState(gameData);
 					});
+					socketService.onChatMessage((msg) => {
+						get().addChatMessage(msg);
+					});
+
+					await get().loadChatHistory();
 
 					if (data.data.status === "active") {
 						startLocalTimer();
@@ -354,6 +376,7 @@ export const useGameStore = create<GameStore>()(
 				if (gameCode) {
 					socketService.leaveGame(gameCode);
 					socketService.offGameUpdate();
+					socketService.offChatMessage();
 					socketService.disconnect();
 				}
 				set({
@@ -372,11 +395,40 @@ export const useGameStore = create<GameStore>()(
 					escrowCreateTx: null,
 					escrowJoinTx: null,
 					escrowResolveTx: null,
+					chatMessages: [],
+					unreadCount: 0,
+					chatOpen: false,
 				});
 			},
 
 			reset: () => {
 				get().leaveGame();
+			},
+
+			loadChatHistory: async () => {
+				const { gameCode } = get();
+				if (!gameCode) return;
+				const data = await api.getChatHistory(gameCode);
+				if (data.success) {
+					set({ chatMessages: data.data });
+				}
+			},
+
+			sendChatMessage: (message: string) => {
+				const { gameCode, playerColor } = get();
+				if (!gameCode || !playerColor) return;
+				socketService.sendChatMessage(gameCode, playerColor, message);
+			},
+
+			addChatMessage: (msg: ChatMessage) => {
+				set((s) => ({
+					chatMessages: [...s.chatMessages, msg],
+					unreadCount: s.chatOpen ? 0 : s.unreadCount + 1,
+				}));
+			},
+
+			setChatOpen: (open: boolean) => {
+				set({ chatOpen: open, unreadCount: open ? 0 : get().unreadCount });
 			},
 		}),
 		{

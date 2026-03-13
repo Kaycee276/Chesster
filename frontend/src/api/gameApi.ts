@@ -91,4 +91,9 @@ export const api = {
 		});
 		return res.json();
 	},
+
+	getChatHistory: async (gameCode: string) => {
+		const res = await fetch(`${API_URL}/games/${gameCode}/chat`);
+		return res.json();
+	},
 };

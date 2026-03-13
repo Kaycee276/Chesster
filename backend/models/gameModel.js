@@ -516,6 +516,18 @@ class GameModel {
 		return data;
 	}
 
+	async getChatMessages(gameCode) {
+		const { data, error } = await supabase
+			.from("chat_messages")
+			.select("id, player_color, message, created_at")
+			.eq("game_code", gameCode)
+			.order("created_at", { ascending: true })
+			.limit(200);
+
+		if (error) throw new Error(error.message);
+		return data || [];
+	}
+
 	generateGameCode() {
 		return Math.random().toString(36).substring(2, 8).toUpperCase();
 	}

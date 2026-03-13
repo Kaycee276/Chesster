@@ -137,6 +137,16 @@ class GameController {
 			res.status(400).json({ success: false, error: error.message });
 		}
 	}
+
+	async getChatMessages(req, res) {
+		try {
+			const { gameCode } = req.params;
+			const messages = await gameModel.getChatMessages(gameCode);
+			res.json({ success: true, data: messages });
+		} catch (error) {
+			res.status(404).json({ success: false, error: error.message });
+		}
+	}
 }
 
 module.exports = new GameController();

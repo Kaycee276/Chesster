@@ -6,6 +6,7 @@ const { Server } = require("socket.io");
 const gameRoutes = require("./routes/gameRoutes");
 const escrowRoutes = require("./routes/escrowRoutes");
 const timerService = require("./services/timerService");
+const supabase = require("./config/supabase");
 
 const app = express();
 const server = http.createServer(app);
@@ -43,6 +44,34 @@ io.on("connection", (socket) => {
 
 	socket.on("leave-game", (gameCode) => {
 		socket.leave(gameCode);
+	});
+
+	socket.on("send-chat", async ({ gameCode, playerColor, message }) => {
+		if (!gameCode || !playerColor || !message) return;
+		if (!["white", "black"].includes(playerColor)) return;
+
+		// Sanitize: strip HTML tags, control chars, limit to 50 chars
+		const sanitized = String(message)
+			.replace(/<[^>]*>/g, "")
+			.replace(/[<>]/g, "")
+			.trim()
+			.slice(0, 50);
+		if (!sanitized) return;
+
+		const { data, error } = await supabase
+			.from("chat_messages")
+			.insert({ game_code: gameCode, player_color: playerColor, message: sanitized })
+			.select()
+			.single();
+
+		if (!error && data) {
+			io.to(gameCode).emit("chat-message", {
+				id: data.id,
+				playerColor: data.player_color,
+				message: data.message,
+				createdAt: data.created_at,
+			});
+		}
 	});
 });
 

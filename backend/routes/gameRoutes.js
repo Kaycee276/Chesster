@@ -11,5 +11,6 @@ router.get('/games/:gameCode/moves', gameController.getMoves);
 router.post('/games/:gameCode/resign', gameController.resignGame);
 router.post('/games/:gameCode/draw/offer', gameController.offerDraw);
 router.post('/games/:gameCode/draw/accept', gameController.acceptDraw);
+router.get('/games/:gameCode/chat', gameController.getChatMessages);
 
 module.exports = router;

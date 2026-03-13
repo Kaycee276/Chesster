@@ -82,3 +82,15 @@ ALTER TABLE games
 ALTER TABLE games
   DROP COLUMN IF EXISTS white_time_left,
   DROP COLUMN IF EXISTS black_time_left;
+
+-- Migration: add live chat messages
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  game_code VARCHAR(10) NOT NULL,
+  player_color VARCHAR(10) NOT NULL CHECK (player_color IN ('white', 'black')),
+  message TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_game_code ON chat_messages(game_code, created_at);
+ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations on chat_messages" ON chat_messages FOR ALL USING (true);

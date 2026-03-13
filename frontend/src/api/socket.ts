@@ -1,6 +1,13 @@
 import { io, Socket } from "socket.io-client";
 import type { GameState } from "../types/game";
 
+export interface ChatMessage {
+	id: string;
+	playerColor: "white" | "black";
+	message: string;
+	createdAt: string;
+}
+
 const BACKEND_URL =
 	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
 
@@ -43,6 +50,18 @@ class SocketService {
 
 	offTimerTick() {
 		this.socket?.off("timer-tick");
+	}
+
+	sendChatMessage(gameCode: string, playerColor: string, message: string) {
+		this.socket?.emit("send-chat", { gameCode, playerColor, message });
+	}
+
+	onChatMessage(callback: (data: ChatMessage) => void) {
+		this.socket?.on("chat-message", callback);
+	}
+
+	offChatMessage() {
+		this.socket?.off("chat-message");
 	}
 }
 
