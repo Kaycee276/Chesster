@@ -128,7 +128,8 @@ class GameModel {
 			data.wager_amount &&
 			data.escrow_status !== "settled" &&
 			data.escrow_status !== "failed" &&
-			data.escrow_status !== "refunded"
+			data.escrow_status !== "refunded" &&
+			data.escrow_status !== "resolving"
 		) {
 			this._settleEscrow(gameCode, data, data.winner).catch((err) => {
 				console.error(`[Escrow] retry _settleEscrow for ${gameCode}:`, err.message);
@@ -260,6 +261,10 @@ class GameModel {
 		}
 
 		// ── 5. Match is ACTIVE — resolve it ──────────────────────────────────
+		// Mark as resolving first to prevent concurrent _settleEscrow calls from
+		// submitting duplicate transactions during Sepolia block confirmation.
+		await supabase.from("games").update({ escrow_status: "resolving" }).eq("game_code", gameCode);
+
 		try {
 			let receipt;
 			if (winner === "draw") {
@@ -289,6 +294,16 @@ class GameModel {
 			console.log(`[Escrow] ${gameCode} settled — tx: ${receipt.hash}`);
 		} catch (resolveErr) {
 			console.error(`[Escrow] resolveMatch FAILED for ${gameCode}:`, resolveErr.message);
+			// Re-check on-chain: another concurrent _settleEscrow call may have already
+			// resolved the match (race condition during Sepolia block confirmation).
+			try {
+				const recheck = await escrowService.getMatch(gameCode);
+				if (recheck.status === ON_CHAIN_STATUS.RESOLVED) {
+					console.log(`[Escrow] ${gameCode} already RESOLVED on-chain (race condition) — marking settled`);
+					await supabase.from("games").update({ escrow_status: "settled" }).eq("game_code", gameCode);
+					return;
+				}
+			} catch (_) { /* ignore recheck failure */ }
 			await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
 		}
 	}

@@ -94,3 +94,5 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_game_code ON chat_messages(game_code, created_at);
 ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations on chat_messages" ON chat_messages FOR ALL USING (true);
+
+ALTER TABLE games ADD COLUMN IF NOT EXISTS game_started_at TIMESTAMP WITH TIME ZONE;

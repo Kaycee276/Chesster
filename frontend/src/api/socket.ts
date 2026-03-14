@@ -37,6 +37,7 @@ class SocketService {
 	}
 
 	onGameUpdate(callback: (data: GameState) => void) {
+		this.socket?.off("game-update");
 		this.socket?.on("game-update", callback);
 	}
 
@@ -57,6 +58,7 @@ class SocketService {
 	}
 
 	onChatMessage(callback: (data: ChatMessage) => void) {
+		this.socket?.off("chat-message");
 		this.socket?.on("chat-message", callback);
 	}
 
