@@ -498,7 +498,7 @@ function ChessBoardInner() {
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
 					<div className="relative w-full max-w-sm mx-4 bg-(--bg-secondary) border border-(--border) rounded-2xl p-6 flex flex-col gap-5 shadow-2xl">
 						{/* Close button — after payout confirmed or if escrow failed */}
-						{(escrowResolveTx || escrowStatus === "failed") && (
+						{(escrowResolveTx || escrowStatus === "settled" || escrowStatus === "failed") && (
 							<button
 								onClick={() => setShowPayoutModal(false)}
 								className="absolute top-4 right-4 text-(--text-tertiary) hover:text-(--text) transition-colors"
@@ -533,7 +533,7 @@ function ChessBoardInner() {
 						</div>
 
 						{/* Status */}
-						{escrowResolveTx ? (
+						{(escrowResolveTx || escrowStatus === "settled") ? (
 							<div className="flex flex-col gap-3">
 								<div className="flex items-center gap-2 text-green-400">
 									<CheckCircle2 size={20} className="shrink-0" />
@@ -543,15 +543,17 @@ function ChessBoardInner() {
 											: "Tokens sent to your wallet!"}
 									</span>
 								</div>
-								<a
-									href={`${EXPLORER_BASE}${escrowResolveTx}`}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-green-500/15 border border-green-500/30 text-green-400 hover:bg-green-500/25 transition-colors text-sm font-semibold"
-								>
-									<ExternalLink size={14} />
-									View transaction on Etherscan
-								</a>
+								{escrowResolveTx && (
+									<a
+										href={`${EXPLORER_BASE}${escrowResolveTx}`}
+										target="_blank"
+										rel="noopener noreferrer"
+										className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-green-500/15 border border-green-500/30 text-green-400 hover:bg-green-500/25 transition-colors text-sm font-semibold"
+									>
+										<ExternalLink size={14} />
+										View transaction on Etherscan
+									</a>
+								)}
 								<p className="text-xs text-(--text-tertiary) text-center">
 									Payout visible under the "Internal Txns" tab of the contract
 									address

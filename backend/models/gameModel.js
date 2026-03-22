@@ -97,13 +97,14 @@ class GameModel {
 	}
 
 	async getGame(gameCode) {
-		const { data, error } = await supabase
+		const { data: rawData, error } = await supabase
 			.from("games")
 			.select("*")
 			.eq("game_code", gameCode)
 			.single();
 
 		if (error) throw error;
+		let data = rawData;
 
 		// Auto-cancel waiting games that have been open for over 1 hour.
 		if (data && data.status === "waiting") {
@@ -120,8 +121,8 @@ class GameModel {
 		}
 
 		// Retry escrow settlement if the game is finished but settlement never
-		// completed (e.g. server restarted). The on-chain check inside
-		// _settleEscrow is idempotent — if already RESOLVED it just syncs the DB.
+		// completed (e.g. server restarted). Set resolving synchronously before
+		// spawning the async call to prevent concurrent duplicate transactions.
 		if (
 			data &&
 			data.status === "finished" &&
@@ -131,9 +132,22 @@ class GameModel {
 			data.escrow_status !== "refunded" &&
 			data.escrow_status !== "resolving"
 		) {
+			await supabase.from("games").update({ escrow_status: "resolving" }).eq("game_code", gameCode);
+			data = { ...data, escrow_status: "resolving" };
 			this._settleEscrow(gameCode, data, data.winner).catch((err) => {
 				console.error(`[Escrow] retry _settleEscrow for ${gameCode}:`, err.message);
 			});
+		}
+
+		// If still resolving, fetch fresh DB state so the client gets the latest
+		// escrow_status (settled/failed) if _settleEscrow just finished.
+		if (data && data.escrow_status === "resolving") {
+			const { data: fresh } = await supabase
+				.from("games")
+				.select("escrow_status, escrow_resolve_tx")
+				.eq("game_code", gameCode)
+				.single();
+			if (fresh) data = { ...data, ...fresh };
 		}
 
 		return data;
@@ -195,7 +209,10 @@ class GameModel {
 
 		const { data, error } = await supabase
 			.from("games")
-			.update({ status: "finished", winner, end_reason: "time" })
+			.update({
+				status: "finished", winner, end_reason: "time",
+				...(game.wager_amount ? { escrow_status: "resolving" } : {}),
+			})
 			.eq("game_code", gameCode)
 			.select()
 			.single();
@@ -261,9 +278,7 @@ class GameModel {
 		}
 
 		// ── 5. Match is ACTIVE — resolve it ──────────────────────────────────
-		// Mark as resolving first to prevent concurrent _settleEscrow calls from
-		// submitting duplicate transactions during Sepolia block confirmation.
-		await supabase.from("games").update({ escrow_status: "resolving" }).eq("game_code", gameCode);
+		// (resolving status already set by caller before spawning this function)
 
 		try {
 			let receipt;
@@ -300,7 +315,12 @@ class GameModel {
 				const recheck = await escrowService.getMatch(gameCode);
 				if (recheck.status === ON_CHAIN_STATUS.RESOLVED) {
 					console.log(`[Escrow] ${gameCode} already RESOLVED on-chain (race condition) — marking settled`);
-					await supabase.from("games").update({ escrow_status: "settled" }).eq("game_code", gameCode);
+					// Try to recover the resolve tx hash from the original error receipt
+					const raceTxHash = resolveErr?.receipt?.hash ?? resolveErr?.transaction?.hash ?? null;
+					await supabase.from("games").update({
+						escrow_status: "settled",
+						...(raceTxHash ? { escrow_resolve_tx: raceTxHash } : {}),
+					}).eq("game_code", gameCode);
 					return;
 				}
 			} catch (_) { /* ignore recheck failure */ }
@@ -409,6 +429,9 @@ class GameModel {
 				captured_black: newCapturedBlack,
 				turn_started_at: new Date().toISOString(),
 				draw_offer: null,
+				// Set resolving atomically so the socket event already carries it,
+				// preventing both clients from re-triggering _settleEscrow on poll.
+				...(newStatus === "finished" && game.wager_amount ? { escrow_status: "resolving" } : {}),
 			})
 			.eq("game_code", gameCode)
 			.select()
@@ -417,7 +440,7 @@ class GameModel {
 		if (updateError) throw updateError;
 
 		// If game finished, resolve on-chain escrow (non-blocking — don't fail the move)
-		if (newStatus === "finished") {
+		if (newStatus === "finished" && updatedGame.wager_amount) {
 			this._settleEscrow(gameCode, updatedGame, winner).catch((err) => {
 				console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 			});
@@ -448,9 +471,16 @@ class GameModel {
 
 	async resignGame(gameCode, playerColor) {
 		const winner = playerColor === "white" ? "black" : "white";
+		const { data: gameRow, error: fetchErr } = await supabase
+			.from("games").select("wager_amount").eq("game_code", gameCode).single();
+		if (fetchErr) throw fetchErr;
+
 		const { data, error } = await supabase
 			.from("games")
-			.update({ status: "finished", winner, end_reason: "resignation" })
+			.update({
+				status: "finished", winner, end_reason: "resignation",
+				...(gameRow.wager_amount ? { escrow_status: "resolving" } : {}),
+			})
 			.eq("game_code", gameCode)
 			.select()
 			.single();
@@ -484,7 +514,10 @@ class GameModel {
 
 		const { data, error } = await supabase
 			.from("games")
-			.update({ status: "finished", winner: "draw", draw_offer: null, end_reason: "draw_agreed" })
+			.update({
+				status: "finished", winner: "draw", draw_offer: null, end_reason: "draw_agreed",
+				...(existing.wager_amount ? { escrow_status: "resolving" } : {}),
+			})
 			.eq("game_code", gameCode)
 			.select()
 			.single();
