@@ -5,7 +5,7 @@ ALTER TABLE games ADD COLUMN IF NOT EXISTS player_white_address VARCHAR;
 ALTER TABLE games ADD COLUMN IF NOT EXISTS player_black_address VARCHAR;
 ALTER TABLE games ADD COLUMN IF NOT EXISTS wager_amount NUMERIC;
 ALTER TABLE games ADD COLUMN IF NOT EXISTS token_address VARCHAR;
-ALTER TABLE games ADD COLUMN IF NOT EXISTS escrow_status VARCHAR DEFAULT 'pending' CHECK (escrow_status IN ('pending', 'active', 'resolved', 'refunded'));
+ALTER TABLE games ADD COLUMN IF NOT EXISTS escrow_status VARCHAR DEFAULT 'pending' CHECK (escrow_status IN ('pending', 'active', 'resolving', 'settled', 'failed', 'refunded'));
 
 -- Example migration up (if using migration system)
 -- CREATE TABLE games_v2 AS
