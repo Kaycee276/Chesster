@@ -1,0 +1,50 @@
+name: ✨ Feature Request
+description: Propose a new feature, improvement, or idea for Chesster.
+title: "[FEAT]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature! Help us understand the motivation and scope.
+
+  - type: input
+    id: component
+    attributes:
+      label: Target Component
+      description: Which module does this feature belong to?
+      placeholder: e.g. Frontend UI, Backend API, Smart Contracts, Game Engine
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: Is your feature request related to a problem or a new opportunity?
+      placeholder: Describe the problem or motivation...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: A clear description of what you want to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative solutions or features you've considered.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: assignment
+    attributes:
+      label: Willingness to Contribute
+      options:
+        - label: I am willing to work on this feature and submit a PR!

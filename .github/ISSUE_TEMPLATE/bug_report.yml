@@ -1,0 +1,63 @@
+name: 🐛 Bug Report
+description: Create a report to help us fix a bug in Chesster.
+title: "[BUG]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug! Please fill out the form below as completely as possible.
+
+  - type: input
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which part of the project is affected?
+      placeholder: e.g. Frontend, Backend API, Soroban Smart Contract, Wallet Integration
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe what happens...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the behavior.
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment Info
+      description: Operating system, browser, wallet version, Node.js version, etc.
+      placeholder: e.g. Chrome 120, Linux, Freighter Wallet v5.0, Node v20
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: assignment
+    attributes:
+      label: Willingness to Contribute
+      options:
+        - label: I would like to work on this issue and submit a Pull Request!
