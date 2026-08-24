@@ -4,18 +4,34 @@ const timerService = require("../services/timerService");
 class GameController {
 	async createGame(req, res) {
 		try {
-			const { gameType, wagerAmount, playerWhiteAddress, timeControlSeconds, gameCode } = req.body;
+			const {
+				gameType,
+				wagerAmount,
+				playerWhiteAddress,
+				timeControlSeconds,
+				gameCode,
+				timeControlPreset,
+				timeIncrementSeconds,
+			} = req.body;
+
 			const game = await gameModel.createGame(
 				gameType,
 				wagerAmount,
 				playerWhiteAddress,
 				timeControlSeconds || 600,
 				gameCode || null,
+				timeControlPreset || null,
+				timeIncrementSeconds || 0,
 			);
 			res.status(201).json({ success: true, data: game });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });
 		}
+	}
+
+	/** GET /api/time-controls — expose the supported presets to clients. */
+	async getTimeControls(req, res) {
+		res.json({ success: true, data: timerService.getTimeControls() });
 	}
 
 	async joinGame(req, res) {
@@ -28,14 +44,20 @@ class GameController {
 				playerAddress,
 			);
 
-			const io = req.app.get("io");
-			io.to(gameCode).emit("game-update", game);
-
+			let clock = null;
 			if (game.status === "active") {
-				timerService.startTimer(gameCode, game.time_control_seconds || 600);
+				clock = timerService.startClock(gameCode, {
+					preset: game.time_control_preset,
+					baseSeconds: game.time_control_seconds || 600,
+					incrementSeconds: game.time_increment_seconds || 0,
+					turn: game.current_turn || "white",
+				});
 			}
 
-			res.json({ success: true, data: game });
+			const io = req.app.get("io");
+			io.to(gameCode).emit("game-update", { ...game, clock });
+
+			res.json({ success: true, data: { ...game, clock } });
 		} catch (error) {
 			res.status(400).json({ success: false, error: error.message });
 		}
@@ -45,7 +67,8 @@ class GameController {
 		try {
 			const { gameCode } = req.params;
 			const game = await gameModel.getGame(gameCode);
-			res.json({ success: true, data: game });
+			const clock = timerService.getClockState(gameCode);
+			res.json({ success: true, data: { ...game, clock } });
 		} catch (error) {
 			res.status(404).json({ success: false, error: error.message });
 		}
@@ -65,16 +88,21 @@ class GameController {
 			const { gameCode } = req.params;
 			const { from, to, promotion } = req.body;
 
+			const moverColor = (await gameModel.getGame(gameCode)).current_turn;
 			const game = await gameModel.makeMove(gameCode, from, to, promotion);
 
-			const io = req.app.get("io");
-			io.to(gameCode).emit("game-update", game);
-
-			if (game.status !== "active") {
+			let clock = null;
+			if (game.status === "active") {
+				clock = timerService.applyMove(gameCode, moverColor);
+			} else {
 				timerService.clearTimer(gameCode);
+				timerService.clearClock(gameCode);
 			}
 
-			res.json({ success: true, data: game });
+			const io = req.app.get("io");
+			io.to(gameCode).emit("game-update", { ...game, clock });
+
+			res.json({ success: true, data: { ...game, clock } });
 		} catch (error) {
 			res.status(400).json({ success: false, error: error.message });
 		}
@@ -97,6 +125,7 @@ class GameController {
 			const game = await gameModel.resignGame(gameCode, playerColor);
 
 			timerService.clearTimer(gameCode);
+			timerService.clearClock(gameCode);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
@@ -128,6 +157,7 @@ class GameController {
 			const game = await gameModel.acceptDraw(gameCode);
 
 			timerService.clearTimer(gameCode);
+			timerService.clearClock(gameCode);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);

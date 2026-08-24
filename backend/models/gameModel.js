@@ -15,6 +15,8 @@ class GameModel {
 		playerWhiteAddress = null,
 		timeControlSeconds = 600,
 		gameCode = null,
+		timeControlPreset = null,
+		timeIncrementSeconds = 0,
 	) {
 		if (!gameCode) gameCode = this.generateGameCode();
 		const initialBoard = chessEngine.initBoard();
@@ -31,6 +33,8 @@ class GameModel {
 				player_white_address: playerWhiteAddress,
 				escrow_status: wagerAmount ? "pending" : null,
 				time_control_seconds: timeControlSeconds,
+				time_control_preset: timeControlPreset,
+				time_increment_seconds: timeIncrementSeconds || 0,
 			})
 			.select()
 			.single();
@@ -224,6 +228,70 @@ class GameModel {
 		});
 
 		console.log(`[GameModel] ${gameCode} ended by time — white ${whiteScore} vs black ${blackScore} → ${winner}`);
+		return data;
+	}
+
+	/**
+	 * End a game because one player's clock ran out (flag fall).
+	 * Standard chess rule: the player whose flag fell loses outright.
+	 * @param {string} gameCode
+	 * @param {"white"|"black"} loserColor
+	 */
+	async endByFlag(gameCode, loserColor) {
+		const game = await this.getGame(gameCode);
+		if (!game || game.status !== "active") return game;
+
+		const winner = loserColor === "white" ? "black" : "white";
+
+		const { data, error } = await supabase
+			.from("games")
+			.update({
+				status: "finished", winner, end_reason: "time",
+				...(game.wager_amount ? { escrow_status: "resolving" } : {}),
+			})
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+
+		this._settleEscrow(gameCode, data, winner).catch((err) => {
+			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
+		});
+
+		console.log(`[GameModel] ${gameCode} ended by flag fall — ${loserColor} ran out of time, ${winner} wins`);
+		return data;
+	}
+
+	/**
+	 * Auto-forfeit a game because a player failed to reconnect within the
+	 * Socket.io reconnect grace period.
+	 * @param {string} gameCode
+	 * @param {"white"|"black"} disconnectedColor
+	 */
+	async forfeitByDisconnect(gameCode, disconnectedColor) {
+		const game = await this.getGame(gameCode);
+		if (!game || game.status !== "active") return game;
+
+		const winner = disconnectedColor === "white" ? "black" : "white";
+
+		const { data, error } = await supabase
+			.from("games")
+			.update({
+				status: "finished", winner, end_reason: "disconnect",
+				...(game.wager_amount ? { escrow_status: "resolving" } : {}),
+			})
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+
+		this._settleEscrow(gameCode, data, winner).catch((err) => {
+			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
+		});
+
+		console.log(`[GameModel] ${gameCode} auto-forfeited — ${disconnectedColor} failed to reconnect, ${winner} wins`);
 		return data;
 	}
 

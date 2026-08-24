@@ -96,3 +96,31 @@ ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations on chat_messages" ON chat_messages FOR ALL USING (true);
 
 ALTER TABLE games ADD COLUMN IF NOT EXISTS game_started_at TIMESTAMP WITH TIME ZONE;
+
+-- Migration: clock increment / time control support (feat #45)
+-- Per-player remaining time is tracked in-memory by timerService while a
+-- game is active (same non-persistent pattern the previous shared timer
+-- used); these columns record the configured time control so a game's
+-- clock can be reconstructed (preset + increment) after a join or restart.
+ALTER TABLE games ADD COLUMN IF NOT EXISTS time_control_preset VARCHAR(20);
+ALTER TABLE games ADD COLUMN IF NOT EXISTS time_increment_seconds INTEGER DEFAULT 0;
+
+-- Migration: reconnect / disconnect end reason (feat #43)
+-- end_reason already exists as free-form text (checkmate/stalemate/
+-- resignation/draw_agreed/time); "disconnect" is a new valid value written
+-- by gameModel.forfeitByDisconnect(), no schema change needed there.
+
+-- Migration: user profiles for JWT-authenticated profile customization (feat #56)
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  wallet_address VARCHAR(255) UNIQUE NOT NULL,
+  username VARCHAR(50),
+  avatar_url TEXT,
+  bio VARCHAR(280),
+  country VARCHAR(56),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_users_wallet_address ON users(wallet_address);
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all operations on users" ON users FOR ALL USING (true);
