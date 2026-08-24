@@ -26,6 +26,10 @@ pub enum EscrowError {
     SideBetNotFound = 15,
     SideBetClosed = 16,
     CancellationAlreadyRequested = 17,
+    TokenNotWhitelisted = 18,
+    TokenAlreadyWhitelisted = 19,
+    NotForfeitable = 20,
+    InvalidForfeitPlayer = 21,
 }
 
 #[contracttype]
@@ -91,6 +95,60 @@ pub struct Match {
     pub nonce: u64,
     pub cancel_requested_player1: bool,
     pub cancel_requested_player2: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Typed contract events (Issue #24)
+//
+// Emitted on every escrow state transition so off-chain indexers/frontends
+// can track match lifecycle without polling `get_match`. Each event uses a
+// short topic symbol identifying the transition, plus the game_code as a
+// second topic for cheap filtering; the typed struct carries the payload.
+// ---------------------------------------------------------------------------
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchCreatedEvent {
+    pub game_code: String,
+    pub player1: Address,
+    pub token: Address,
+    pub wager_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchFundedEvent {
+    pub game_code: String,
+    pub player2: Address,
+    pub total_staked: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchResolvedEvent {
+    pub game_code: String,
+    pub winner: Option<Address>,
+    pub admin_fee: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchForfeitedEvent {
+    pub game_code: String,
+    pub forfeiting_player: Address,
+    pub winner: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchCancelledEvent {
+    pub game_code: String,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchRefundedEvent {
+    pub game_code: String,
 }
 
 #[contract]
@@ -174,6 +232,69 @@ impl ChessterEscrow {
         token_client.balance(&env.current_contract_address())
     }
 
+    // -----------------------------------------------------------------
+    // Multi-token whitelist registry (Issue #40)
+    //
+    // Only the coordinator (acting as contract admin) may add or remove
+    // whitelisted wager assets. `create_match` refuses to open a match in
+    // any token that isn't whitelisted, keeping the escrow restricted to
+    // approved Stellar SAC token addresses.
+    // -----------------------------------------------------------------
+
+    fn whitelist_key(env: &Env) -> Symbol {
+        Symbol::new(env, "wl_toks")
+    }
+
+    /// Admin-gated: add a token to the wager-asset whitelist.
+    pub fn add_whitelisted_token(env: Env, token: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let key = Self::whitelist_key(&env);
+        let mut tokens: Vec<Address> = env.storage().instance().get(&key).unwrap_or_else(|| Vec::new(&env));
+
+        if tokens.contains(&token) {
+            panic_with_error!(&env, EscrowError::TokenAlreadyWhitelisted);
+        }
+
+        tokens.push_back(token);
+        env.storage().instance().set(&key, &tokens);
+    }
+
+    /// Admin-gated: remove a token from the wager-asset whitelist.
+    pub fn remove_whitelisted_token(env: Env, token: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let key = Self::whitelist_key(&env);
+        let tokens: Vec<Address> = env.storage().instance().get(&key).unwrap_or_else(|| Vec::new(&env));
+
+        if !tokens.contains(&token) {
+            panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
+        }
+
+        let mut filtered = Vec::new(&env);
+        for t in tokens.iter() {
+            if t != token {
+                filtered.push_back(t);
+            }
+        }
+        env.storage().instance().set(&key, &filtered);
+    }
+
+    /// Whether a token is currently whitelisted as a supported wager asset.
+    pub fn is_token_whitelisted(env: Env, token: Address) -> bool {
+        let key = Self::whitelist_key(&env);
+        let tokens: Vec<Address> = env.storage().instance().get(&key).unwrap_or_else(|| Vec::new(&env));
+        tokens.contains(&token)
+    }
+
+    /// List all whitelisted wager-asset token addresses.
+    pub fn get_whitelisted_tokens(env: Env) -> Vec<Address> {
+        let key = Self::whitelist_key(&env);
+        env.storage().instance().get(&key).unwrap_or_else(|| Vec::new(&env))
+    }
+
     fn filter_matches(env: &Env, matches: Vec<String>, remove_code: &String) -> Vec<String> {
         let mut filtered = Vec::new(env);
         for gc in matches.iter() {
@@ -199,6 +320,9 @@ impl ChessterEscrow {
         }
         if amount <= 0 {
             panic_with_error!(&env, EscrowError::InvalidWager);
+        }
+        if !Self::is_token_whitelisted(env.clone(), token.clone()) {
+            panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
         }
 
         let player1_key = (Symbol::new(&env, "act_m"), player1.clone());
@@ -243,6 +367,16 @@ impl ChessterEscrow {
         env.storage()
             .persistent()
             .set(&player1_key, &updated_matches);
+
+        env.events().publish(
+            (symbol_short!("created"), game_code.clone()),
+            MatchCreatedEvent {
+                game_code,
+                player1,
+                token: m.token,
+                wager_amount: amount,
+            },
+        );
     }
 
     /// Player 2 joins an existing match and deposits the wager
@@ -290,6 +424,15 @@ impl ChessterEscrow {
         env.storage()
             .persistent()
             .set(&player2_key, &updated_matches);
+
+        env.events().publish(
+            (symbol_short!("funded"), game_code.clone()),
+            MatchFundedEvent {
+                game_code,
+                player2,
+                total_staked: m.total_staked,
+            },
+        );
     }
 
     /// Spectators place side bets on match outcome (Issue #35)
@@ -431,6 +574,13 @@ impl ChessterEscrow {
                 let filtered2 = Self::filter_matches(&env, player2_matches, &game_code);
                 env.storage().persistent().set(&player2_key, &filtered2);
             }
+
+            env.events().publish(
+                (symbol_short!("cancelled"), game_code.clone()),
+                MatchCancelledEvent {
+                    game_code: game_code.clone(),
+                },
+            );
         }
 
         env.storage().persistent().set(&game_code, &m);
@@ -446,35 +596,29 @@ impl ChessterEscrow {
         (m.cancel_requested_player1, m.cancel_requested_player2)
     }
 
-    /// Coordinator resolves the match (Includes Fee Discount #36 and Side Pool Payout #35)
-    pub fn resolve_match(env: Env, game_code: String, winner: Option<Address>) {
-        let coordinator = Self::get_coordinator(env.clone());
-        coordinator.require_auth();
-
-        let mut m: Match = env
-            .storage()
-            .persistent()
-            .get(&game_code)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
-
-        if m.status != MatchStatus::Active {
-            panic_with_error!(&env, EscrowError::MatchNotActive);
-        }
-
-        let token_client = token::Client::new(&env, &m.token);
+    /// Shared payout engine used by both `resolve_match` and `forfeit_match`.
+    /// Transfers the wager pool (winner-take-all minus admin fee, or an even
+    /// split on a draw), settles the spectator side pool (#35), marks the
+    /// match Resolved, and clears it from both players' active-match lists.
+    /// Returns the admin fee actually collected (0 on a draw).
+    fn settle_match(
+        env: &Env,
+        coordinator: &Address,
+        game_code: &String,
+        m: &mut Match,
+        winner: Option<Address>,
+    ) -> i128 {
+        let token_client = token::Client::new(env, &m.token);
+        let mut admin_fee: i128 = 0;
 
         if let Some(w) = winner.clone() {
-            if w != m.player1 && Some(w.clone()) != m.player2 {
-                panic_with_error!(&env, EscrowError::InvalidWinner);
-            }
-
             // Fee calculation with governance token discount (#36)
             let admin_bps = Self::get_effective_fee_bps(env.clone(), w.clone());
-            let admin_fee = (m.total_staked * (admin_bps as i128)) / 10000;
+            admin_fee = (m.total_staked * (admin_bps as i128)) / 10000;
             let winner_pay = m.total_staked - admin_fee;
 
             token_client.transfer(&env.current_contract_address(), &w, &winner_pay);
-            token_client.transfer(&env.current_contract_address(), &coordinator, &admin_fee);
+            token_client.transfer(&env.current_contract_address(), coordinator, &admin_fee);
         } else {
             token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
             if let Some(p2) = m.player2.clone() {
@@ -483,7 +627,7 @@ impl ChessterEscrow {
         }
 
         // Process Side Pool Payout (#35)
-        let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
+        let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
         if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
             if let Some(w) = winner.clone() {
                 let winning_staked = if w == m.player1 {
@@ -529,27 +673,106 @@ impl ChessterEscrow {
 
         m.status = MatchStatus::Resolved;
         m.winner = winner;
-        env.storage().persistent().set(&game_code, &m);
+        env.storage().persistent().set(game_code, m);
 
-        let player1_key = (Symbol::new(&env, "act_m"), m.player1.clone());
+        let player1_key = (Symbol::new(env, "act_m"), m.player1.clone());
         let player1_matches: Vec<String> = env
             .storage()
             .persistent()
             .get(&player1_key)
-            .unwrap_or_else(|| Vec::new(&env));
-        let filtered1 = Self::filter_matches(&env, player1_matches, &game_code);
+            .unwrap_or_else(|| Vec::new(env));
+        let filtered1 = Self::filter_matches(env, player1_matches, game_code);
         env.storage().persistent().set(&player1_key, &filtered1);
 
         if let Some(p2) = m.player2.clone() {
-            let player2_key = (Symbol::new(&env, "act_m"), p2);
+            let player2_key = (Symbol::new(env, "act_m"), p2);
             let player2_matches: Vec<String> = env
                 .storage()
                 .persistent()
                 .get(&player2_key)
-                .unwrap_or_else(|| Vec::new(&env));
-            let filtered2 = Self::filter_matches(&env, player2_matches, &game_code);
+                .unwrap_or_else(|| Vec::new(env));
+            let filtered2 = Self::filter_matches(env, player2_matches, game_code);
             env.storage().persistent().set(&player2_key, &filtered2);
         }
+
+        admin_fee
+    }
+
+    /// Coordinator resolves the match (Includes Fee Discount #36 and Side Pool Payout #35)
+    pub fn resolve_match(env: Env, game_code: String, winner: Option<Address>) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&game_code)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
+
+        if m.status != MatchStatus::Active {
+            panic_with_error!(&env, EscrowError::MatchNotActive);
+        }
+
+        if let Some(w) = winner.clone() {
+            if w != m.player1 && Some(w.clone()) != m.player2 {
+                panic_with_error!(&env, EscrowError::InvalidWinner);
+            }
+        }
+
+        let admin_fee = Self::settle_match(&env, &coordinator, &game_code, &mut m, winner.clone());
+
+        env.events().publish(
+            (symbol_short!("resolved"), game_code.clone()),
+            MatchResolvedEvent {
+                game_code,
+                winner,
+                admin_fee,
+            },
+        );
+    }
+
+    /// Coordinator-submitted forfeit resolution for a player who disconnected
+    /// and failed to reconnect within the off-chain grace period (Issue #39).
+    /// Pays the full wager pool (minus the standard admin fee) to the
+    /// non-forfeiting player, exactly like a normal resolution, but is a
+    /// distinct, auditable entrypoint and emits a `forfeited` event instead
+    /// of `resolved` so indexers can tell the two apart.
+    pub fn forfeit_match(env: Env, game_code: String, forfeiting_player: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&game_code)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
+
+        if m.status != MatchStatus::Active {
+            panic_with_error!(&env, EscrowError::NotForfeitable);
+        }
+
+        let winner = if forfeiting_player == m.player1 {
+            m.player2.clone()
+        } else if Some(forfeiting_player.clone()) == m.player2 {
+            Some(m.player1.clone())
+        } else {
+            panic_with_error!(&env, EscrowError::InvalidForfeitPlayer);
+        };
+
+        let winner_addr = winner
+            .clone()
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidForfeitPlayer));
+
+        Self::settle_match(&env, &coordinator, &game_code, &mut m, winner);
+
+        env.events().publish(
+            (symbol_short!("forfeited"), game_code.clone()),
+            MatchForfeitedEvent {
+                game_code,
+                forfeiting_player,
+                winner: winner_addr,
+            },
+        );
     }
 
     /// Refund after timeout (1 hour)
@@ -605,6 +828,11 @@ impl ChessterEscrow {
             let filtered2 = Self::filter_matches(&env, player2_matches, &game_code);
             env.storage().persistent().set(&player2_key, &filtered2);
         }
+
+        env.events().publish(
+            (symbol_short!("refunded"), game_code.clone()),
+            MatchRefundedEvent { game_code },
+        );
     }
 
     /// Get match details

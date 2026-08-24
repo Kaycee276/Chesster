@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events, Ledger},
     vec, Address, Env, String,
 };
 
@@ -35,6 +35,7 @@ fn test_create_and_join_match() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500); // 5% fee
+    client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
 
@@ -76,6 +77,7 @@ fn test_match_nonce_increments() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     assert_eq!(client.get_match_nonce(), 0);
 
@@ -106,6 +108,7 @@ fn test_resolve_match_winner() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500); // 5% fee
+    client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
     client.create_match(&game_code, &player1, &token.address, &100);
@@ -143,6 +146,7 @@ fn test_governance_token_fee_discount() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500); // 5% fee base (500 bps)
+    client.add_whitelisted_token(&token.address);
     client.set_gov_token(&gov_token.address);
 
     assert_eq!(client.get_gov_token(), Some(gov_token.address.clone()));
@@ -181,6 +185,7 @@ fn test_spectator_side_pool_payout() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_BET");
     client.create_match(&game_code, &player1, &token.address, &100);
@@ -223,6 +228,7 @@ fn test_mutual_cancellation() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_CANCEL");
     client.create_match(&game_code, &player1, &token.address, &100);
@@ -263,6 +269,7 @@ fn test_resolve_match_draw() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
     client.create_match(&game_code, &player1, &token.address, &100);
@@ -297,6 +304,7 @@ fn test_refund_after_timeout() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
 
@@ -338,6 +346,7 @@ fn test_refund_before_timeout_fails() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
 
@@ -391,6 +400,7 @@ fn test_get_treasury() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
     client.create_match(&game_code, &player1, &token.address, &100);
@@ -416,6 +426,7 @@ fn test_max_active_matches() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     let g0 = String::from_str(&env, "GAME0");
     let g1 = String::from_str(&env, "GAME1");
@@ -497,4 +508,376 @@ fn test_tournament_complete() {
     assert_eq!(tournament.status, TournamentStatus::Completed);
     assert_eq!(token.balance(&player1), 1050);
     assert_eq!(token.balance(&player2), 950);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #40 — Multi-Token Whitelist Registry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_whitelist_add_remove_and_query() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, _admin_client) = create_token_contract(&env, &token_admin);
+    let (other_token, _admin_client2) = create_token_contract(&env, &token_admin);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    assert!(!client.is_token_whitelisted(&token.address));
+    assert_eq!(client.get_whitelisted_tokens().len(), 0);
+
+    client.add_whitelisted_token(&token.address);
+    assert!(client.is_token_whitelisted(&token.address));
+    assert!(!client.is_token_whitelisted(&other_token.address));
+    assert_eq!(client.get_whitelisted_tokens().len(), 1);
+
+    client.add_whitelisted_token(&other_token.address);
+    assert_eq!(client.get_whitelisted_tokens().len(), 2);
+
+    client.remove_whitelisted_token(&token.address);
+    assert!(!client.is_token_whitelisted(&token.address));
+    assert!(client.is_token_whitelisted(&other_token.address));
+    assert_eq!(client.get_whitelisted_tokens().len(), 1);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_create_match_rejects_non_whitelisted_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    // Note: token is never whitelisted.
+
+    let game_code = String::from_str(&env, "GAME_NOT_WL");
+    client.create_match(&game_code, &player1, &token.address, &100);
+}
+
+#[test]
+fn test_create_match_succeeds_after_whitelisting() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_WL_OK");
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Pending);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_create_match_rejects_after_delisting() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+    client.remove_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_DELISTED");
+    client.create_match(&game_code, &player1, &token.address, &100);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #39 — Match Forfeit Resolution Trigger for Disconnects
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_forfeit_match_pays_non_forfeiting_player() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500); // 5% fee
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_FORFEIT");
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    // Player 1 disconnects and never reconnects; coordinator forfeits them.
+    client.forfeit_match(&game_code, &player1);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Resolved);
+    assert_eq!(match_data.winner, Some(player2.clone()));
+
+    // Total staked = 200, 5% fee = 10, player2 gets 190.
+    assert_eq!(token.balance(&player2), 1090);
+    assert_eq!(token.balance(&coordinator), 10);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_forfeit_match_other_color() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_FORFEIT_2");
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    // Player 2 disconnects this time.
+    client.forfeit_match(&game_code, &player2);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.winner, Some(player1.clone()));
+    assert_eq!(token.balance(&player1), 1090);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_forfeit_match_rejects_non_participant() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_FORFEIT_BAD");
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    client.forfeit_match(&game_code, &outsider);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_forfeit_match_rejects_pending_match() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_FORFEIT_PENDING");
+    client.create_match(&game_code, &player1, &token.address, &100);
+    // Player 2 never joined — match is still Pending, not Active.
+
+    client.forfeit_match(&game_code, &player1);
+}
+
+#[test]
+fn test_forfeit_match_settles_side_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let spectator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+    token_admin_client.mint(&spectator, &500);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_FORFEIT_BET");
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    // Spectator bets on player2 (the eventual winner-by-forfeit).
+    client.place_side_bet(&game_code, &spectator, &player2, &100);
+
+    client.forfeit_match(&game_code, &player1);
+
+    // Sole bettor on the winning side gets their stake back (no other side stakes).
+    assert_eq!(token.balance(&spectator), 500);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #24 — Typed Soroban Contract Events on Escrow State Transitions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_events_emitted_on_lifecycle_transitions() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_EVENTS");
+
+    client.create_match(&game_code, &player1, &token.address, &100);
+    let events_after_create = env.events().all();
+    assert!(events_after_create
+        .iter()
+        .any(|(id, _, _)| id == &contract_id));
+
+    client.join_match(&game_code, &player2);
+    let events_after_join_len = env.events().all().len();
+    assert!(events_after_join_len > events_after_create.len());
+
+    client.resolve_match(&game_code, &Some(player1.clone()));
+    let events_after_resolve_len = env.events().all().len();
+    assert!(events_after_resolve_len > events_after_join_len);
+}
+
+#[test]
+fn test_event_emitted_on_forfeit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_EVENT_FORFEIT");
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    let events_before = env.events().all().len();
+    client.forfeit_match(&game_code, &player1);
+    let events_after = env.events().all().len();
+
+    assert!(events_after > events_before);
+}
+
+#[test]
+fn test_event_emitted_on_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_EVENT_REFUND");
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    let events_before = env.events().all().len();
+    client.refund_after_timeout(&game_code);
+    let events_after = env.events().all().len();
+
+    assert!(events_after > events_before);
 }

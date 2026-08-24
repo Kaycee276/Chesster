@@ -138,7 +138,7 @@ class GameModel {
 		) {
 			await supabase.from("games").update({ escrow_status: "resolving" }).eq("game_code", gameCode);
 			data = { ...data, escrow_status: "resolving" };
-			this._settleEscrow(gameCode, data, data.winner).catch((err) => {
+			this._settleEscrow(gameCode, data, data.winner, data.end_reason).catch((err) => {
 				console.error(`[Escrow] retry _settleEscrow for ${gameCode}:`, err.message);
 			});
 		}
@@ -287,7 +287,7 @@ class GameModel {
 
 		if (error) throw error;
 
-		this._settleEscrow(gameCode, data, winner).catch((err) => {
+		this._settleEscrow(gameCode, data, winner, "disconnect").catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
 
@@ -298,13 +298,18 @@ class GameModel {
 	/**
 	 * Resolve on-chain escrow for a finished game.
 	 * Players deposit XLM directly via the frontend, so we only need to call
-	 * resolveMatch (coordinator role). Checks on-chain state first.
+	 * resolveMatch (coordinator role) — or, for a disconnect auto-forfeit
+	 * (Issue #39), the dedicated forfeit_match entrypoint so the on-chain
+	 * event trail (Issue #24) distinguishes forfeits from normal
+	 * coordinator-adjudicated resolutions. Checks on-chain state first.
 	 *
-	 * @param {string} gameCode - human-readable game code
-	 * @param {object} dbGame   - full game row from DB (needs player addresses)
-	 * @param {string} winner   - "white" | "black" | "draw"
+	 * @param {string} gameCode  - human-readable game code
+	 * @param {object} dbGame    - full game row from DB (needs player addresses)
+	 * @param {string} winner    - "white" | "black" | "draw"
+	 * @param {string} [endReason] - dbGame.end_reason, e.g. "disconnect" routes
+	 *                               through forfeit_match instead of resolve_match
 	 */
-	async _settleEscrow(gameCode, dbGame, winner) {
+	async _settleEscrow(gameCode, dbGame, winner, endReason = null) {
 		if (!dbGame.wager_amount) return; // free game, no escrow
 
 		// ── 1. Fetch on-chain match state ────────────────────────────────────
@@ -352,6 +357,19 @@ class GameModel {
 			let receipt;
 			if (winner === "draw") {
 				receipt = await escrowService.resolveAsDraw(gameCode);
+			} else if (endReason === "disconnect") {
+				// Disconnect auto-forfeit (Issue #39): route through the contract's
+				// dedicated forfeit_match entrypoint instead of resolve_match, using
+				// the on-chain address of the *disconnected* player (the losing side).
+				const forfeitingAddress = winner === "white" ? onChain.player2 : onChain.player1;
+
+				if (!forfeitingAddress) {
+					console.error(`[Escrow] ${gameCode} — no on-chain address for forfeiting player (winner="${winner}")`);
+					await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+					return;
+				}
+
+				receipt = await escrowService.forfeitMatch(gameCode, forfeitingAddress);
 			} else {
 				// Use the on-chain player addresses (from getMatch above) rather than
 				// the DB addresses. The contract's resolveMatch checks
