@@ -1,0 +1,14 @@
+{
+  "name": "chesster",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Chesster - Decentralized Chess Game on Stellar",
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.4.3"
+  }
+}
