@@ -89,22 +89,44 @@ We follow the **Conventional Commits** specification for clear git history:
 - `fix/short-description` (e.g., `fix/board-flip-bug`)
 - `docs/short-description` (e.g., `docs/update-setup-instructions`)
 
-### Commit Messages
-- `feat(frontend): add dark mode toggle`
-- `fix(backend): correct chess move validation for castling`
-- `docs(readme): add troubleshooting section`
-- `refactor(contracts): optimize escrow storage keys`
+### Commit Messages & Pull Request Titles
+
+We enforce the **Conventional Commits** specification for all commit messages and Pull Request titles. Incoming PR titles are automatically validated via GitHub Actions (`.github/workflows/pr-lint.yml`).
+
+#### Format
+```text
+<type>(<optional scope>): <subject>
+```
+
+#### Allowed Types
+| Type | Description | Example |
+| --- | --- | --- |
+| `feat` | New feature or capability | `feat(frontend): add dark mode toggle` |
+| `fix` | Bug fix | `fix(backend): correct chess move validation for castling` |
+| `docs` | Documentation changes | `docs(readme): add troubleshooting section` |
+| `style` | Formatting, whitespace, or non-functional styles | `style(frontend): format chess board styles` |
+| `refactor` | Code refactoring without bug fixes or new features | `refactor(contracts): optimize escrow storage keys` |
+| `perf` | Performance improvements | `perf(backend): cache active game states` |
+| `test` | Adding or updating tests | `test(backend): add escrow timeout unit tests` |
+| `build` | Changes to build system or dependencies | `build(frontend): update vite to v7` |
+| `ci` | CI/CD configurations and scripts | `ci(actions): add PR title linter workflow` |
+| `chore` | General maintenance tasks | `chore: update license and metadata` |
+| `revert` | Reverting previous commits | `revert: revert PR #42` |
+
+> ⚠️ **Note**: The `<subject>` must start with a lowercase letter (e.g. `feat(api): add endpoint`, not `feat(api): Add endpoint`).
 
 ---
 
 ## 📥 Submitting a Pull Request
 
 1. **Keep PRs Focused**: Address one issue per Pull Request.
-2. **Run Tests**: Ensure tests pass locally before opening a PR:
+2. **Follow PR Title Conventions**: Use a valid Conventional Commit title format as described above so the automated PR linter passes.
+3. **Run Tests**: Ensure all checks pass locally before opening a PR:
    - Backend: `cd backend && npm test`
+   - Frontend: `cd frontend && npm run lint && npm test && npm run build`
    - Contracts: `cd contracts/soroban && cargo test`
-3. **Reference the Issue**: Include `Fixes #<issue-number>` or `Closes #<issue-number>` in your PR description.
-4. **Request Review**: Tag a maintainer for review once your PR is ready.
+4. **Reference the Issue**: Include `Fixes #<issue-number>` or `Closes #<issue-number>` in your PR description.
+5. **Request Review**: Tag a maintainer for review once your PR is ready.
 
 ---
 

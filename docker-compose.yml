@@ -1,0 +1,60 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chesster-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: chesster_db
+      POSTGRES_USER: chesster_user
+      POSTGRES_PASSWORD: chesster_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chesster_user -d chesster_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    container_name: chesster-backend
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      NODE_ENV: development
+      CORS_ORIGIN: "http://localhost:3090"
+      DATABASE_URL: "postgresql://chesster_user:chesster_password@postgres:5432/chesster_db"
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    container_name: chesster-frontend
+    restart: unless-stopped
+    environment:
+      VITE_BACKEND_URL: "http://localhost:3001"
+    ports:
+      - "3090:3090"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+    driver: local

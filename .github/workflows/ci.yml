@@ -7,8 +7,43 @@ on:
     branches: [ "master", "main", "dev" ]
 
 jobs:
+  changes:
+    name: Detect File Changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      contracts: ${{ steps.filter.outputs.contracts }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check for Workspace Changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - '.github/workflows/ci.yml'
+            contracts:
+              - 'contracts/soroban/**'
+              - '.github/workflows/ci.yml'
+
   backend-ci:
     name: Backend CI & Coverage
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -41,6 +76,8 @@ jobs:
 
   frontend-ci:
     name: Frontend CI & Coverage
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -82,6 +119,8 @@ jobs:
 
   contracts-ci:
     name: Soroban Contracts CI & Coverage
+    needs: changes
+    if: ${{ needs.changes.outputs.contracts == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     defaults:
       run:
