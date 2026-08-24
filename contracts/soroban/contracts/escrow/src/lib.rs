@@ -1,8 +1,17 @@
 #![no_std]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    Address, Env, String, Symbol, Vec,
+    Address, Env, IntoVal, String, Symbol, Val, Vec,
 };
+
+/// Remaining TTL (in ledgers) below which escrow storage entries are auto-extended (~6 days).
+pub const STORAGE_TTL_THRESHOLD: u32 = 103_680;
+/// TTL (in ledgers) applied when escrow storage entries are auto-extended (~30 days).
+pub const STORAGE_TTL_EXTENDED: u32 = 518_400;
+/// Duration (in seconds) disputed funds stay locked before arbitration (48 hours).
+pub const DISPUTE_TIMELOCK_SECS: u64 = 172_800;
+/// Maximum number of matches resolvable in a single atomic batch transaction.
+pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -26,6 +35,11 @@ pub enum EscrowError {
     SideBetNotFound = 15,
     SideBetClosed = 16,
     CancellationAlreadyRequested = 17,
+    InsufficientAllowance = 18,
+    AlreadyDisputed = 19,
+    DisputeNotFound = 20,
+    DisputeTimeLockActive = 21,
+    InvalidBatchSize = 22,
 }
 
 #[contracttype]
@@ -74,6 +88,30 @@ pub struct TournamentPrizePool {
     pub status: TournamentStatus,
     pub created_at: u64,
     pub token: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeStatus {
+    Locked = 0,
+    Settled = 1,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Dispute {
+    pub game_code: String,
+    pub raised_by: Address,
+    pub created_at: u64,
+    pub release_at: u64,
+    pub status: DisputeStatus,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchResolution {
+    pub game_code: String,
+    pub winner: Option<Address>,
 }
 
 #[contracttype]
@@ -184,6 +222,85 @@ impl ChessterEscrow {
         filtered
     }
 
+    /// Auto-extend the contract instance TTL so escrow state never gets evicted (Issue #28).
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(STORAGE_TTL_THRESHOLD, STORAGE_TTL_EXTENDED);
+    }
+
+    /// Auto-extend the TTL of a persistent storage entry on access (Issue #28).
+    fn bump_entry_ttl<K>(env: &Env, key: &K)
+    where
+        K: IntoVal<Env, Val>,
+    {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, STORAGE_TTL_THRESHOLD, STORAGE_TTL_EXTENDED);
+    }
+
+    /// Load a match and auto-extend its storage TTL to prevent ledger eviction (Issue #28).
+    fn load_match(env: &Env, game_code: &String) -> Match {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(game_code)
+            .unwrap_or_else(|| panic_with_error!(env, EscrowError::MatchNotFound));
+        Self::bump_entry_ttl(env, game_code);
+        Self::bump_instance_ttl(env);
+        m
+    }
+
+    /// Remove a settled/refunded match from both players' active match lists.
+    fn remove_from_active_lists(env: &Env, game_code: &String, m: &Match) {
+        let player1_key = (Symbol::new(env, "act_m"), m.player1.clone());
+        let player1_matches: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&player1_key)
+            .unwrap_or_else(|| Vec::new(env));
+        let filtered1 = Self::filter_matches(env, player1_matches, game_code);
+        env.storage().persistent().set(&player1_key, &filtered1);
+        Self::bump_entry_ttl(env, &player1_key);
+
+        if let Some(p2) = m.player2.clone() {
+            let player2_key = (Symbol::new(env, "act_m"), p2);
+            let player2_matches: Vec<String> = env
+                .storage()
+                .persistent()
+                .get(&player2_key)
+                .unwrap_or_else(|| Vec::new(env));
+            let filtered2 = Self::filter_matches(env, player2_matches, game_code);
+            env.storage().persistent().set(&player2_key, &filtered2);
+            Self::bump_entry_ttl(env, &player2_key);
+        }
+    }
+
+    fn dispute_key(env: &Env, game_code: &String) -> (Symbol, String) {
+        (Symbol::new(env, "dispute"), game_code.clone())
+    }
+
+    /// Reject settlement attempts while a dispute time-lock is still in force.
+    fn ensure_dispute_not_locked(env: &Env, game_code: &String) {
+        let key = Self::dispute_key(env, game_code);
+        if let Some(d) = env.storage().persistent().get::<_, Dispute>(&key) {
+            if d.status == DisputeStatus::Locked {
+                panic_with_error!(env, EscrowError::DisputeTimeLockActive);
+            }
+        }
+    }
+
+    /// Validate a player's token balance and allowance before pulling funds (Issue #26).
+    fn validate_player_funds(env: &Env, token: &Address, owner: &Address, amount: i128) {
+        let token_client = token::Client::new(env, token);
+        if token_client.balance(owner) < amount {
+            panic_with_error!(env, EscrowError::InsufficientFunds);
+        }
+        if token_client.allowance(owner, &env.current_contract_address()) < amount {
+            panic_with_error!(env, EscrowError::InsufficientAllowance);
+        }
+    }
+
     /// Player 1 creates a match and deposits the wager (Issue #34: Increments Nonce)
     pub fn create_match(
         env: Env,
@@ -219,6 +336,7 @@ impl ChessterEscrow {
             .set(&Symbol::new(&env, "nonce"), &next_nonce);
 
         let token_client = token::Client::new(&env, &token);
+        Self::validate_player_funds(&env, &token, &player1, amount);
         token_client.transfer(&player1, &env.current_contract_address(), &amount);
 
         let m = Match {
@@ -237,23 +355,22 @@ impl ChessterEscrow {
         };
 
         env.storage().persistent().set(&game_code, &m);
+        Self::bump_entry_ttl(&env, &game_code);
 
         let mut updated_matches = active_matches.clone();
         updated_matches.push_back(game_code.clone());
         env.storage()
             .persistent()
             .set(&player1_key, &updated_matches);
+        Self::bump_entry_ttl(&env, &player1_key);
+        Self::bump_instance_ttl(&env);
     }
 
     /// Player 2 joins an existing match and deposits the wager
     pub fn join_match(env: Env, game_code: String, player2: Address) {
         player2.require_auth();
 
-        let mut m: Match = env
-            .storage()
-            .persistent()
-            .get(&game_code)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
+        let mut m = Self::load_match(&env, &game_code);
 
         if m.status != MatchStatus::Pending {
             panic_with_error!(&env, EscrowError::MatchNotPending);
@@ -277,6 +394,7 @@ impl ChessterEscrow {
         }
 
         let token_client = token::Client::new(&env, &m.token);
+        Self::validate_player_funds(&env, &m.token, &player2, m.wager_amount);
         token_client.transfer(&player2, &env.current_contract_address(), &m.wager_amount);
 
         m.player2 = Some(player2.clone());
@@ -284,12 +402,14 @@ impl ChessterEscrow {
         m.total_staked += m.wager_amount;
 
         env.storage().persistent().set(&game_code, &m);
+        Self::bump_entry_ttl(&env, &game_code);
 
         let mut updated_matches = active_matches.clone();
         updated_matches.push_back(game_code.clone());
         env.storage()
             .persistent()
             .set(&player2_key, &updated_matches);
+        Self::bump_entry_ttl(&env, &player2_key);
     }
 
     /// Spectators place side bets on match outcome (Issue #35)
@@ -305,11 +425,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::InvalidWager);
         }
 
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&game_code)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
+        let m = Self::load_match(&env, &game_code);
 
         if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
             panic_with_error!(&env, EscrowError::SideBetClosed);
@@ -320,6 +436,7 @@ impl ChessterEscrow {
         }
 
         let token_client = token::Client::new(&env, &m.token);
+        Self::validate_player_funds(&env, &m.token, &spectator, amount);
         token_client.transfer(&spectator, &env.current_contract_address(), &amount);
 
         let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
@@ -347,11 +464,15 @@ impl ChessterEscrow {
         });
 
         env.storage().persistent().set(&pool_key, &pool);
+        Self::bump_entry_ttl(&env, &pool_key);
     }
 
     /// Get side pool for a match (Issue #35)
     pub fn get_side_pool(env: Env, game_code: String) -> SidePool {
         let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
+        if env.storage().persistent().has(&pool_key) {
+            Self::bump_entry_ttl(&env, &pool_key);
+        }
         env.storage()
             .persistent()
             .get(&pool_key)
@@ -367,11 +488,7 @@ impl ChessterEscrow {
     pub fn request_cancellation(env: Env, game_code: String, player: Address) {
         player.require_auth();
 
-        let mut m: Match = env
-            .storage()
-            .persistent()
-            .get(&game_code)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
+        let mut m = Self::load_match(&env, &game_code);
 
         if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
             panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
@@ -408,42 +525,15 @@ impl ChessterEscrow {
                         &bet.amount,
                     );
                 }
+                Self::bump_entry_ttl(&env, &pool_key);
             }
 
             m.status = MatchStatus::Refunded;
-
-            let player1_key = (Symbol::new(&env, "act_m"), m.player1.clone());
-            let player1_matches: Vec<String> = env
-                .storage()
-                .persistent()
-                .get(&player1_key)
-                .unwrap_or_else(|| Vec::new(&env));
-            let filtered1 = Self::filter_matches(&env, player1_matches, &game_code);
-            env.storage().persistent().set(&player1_key, &filtered1);
-
-            if let Some(p2) = m.player2.clone() {
-                let player2_key = (Symbol::new(&env, "act_m"), p2);
-                let player2_matches: Vec<String> = env
-                    .storage()
-                    .persistent()
-                    .get(&player2_key)
-                    .unwrap_or_else(|| Vec::new(&env));
-                let filtered2 = Self::filter_matches(&env, player2_matches, &game_code);
-                env.storage().persistent().set(&player2_key, &filtered2);
-            }
+            Self::remove_from_active_lists(&env, &game_code, &m);
         }
 
         env.storage().persistent().set(&game_code, &m);
-    }
-
-    /// Get cancellation status for match (Issue #37)
-    pub fn get_cancellation_status(env: Env, game_code: String) -> (bool, bool) {
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&game_code)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
-        (m.cancel_requested_player1, m.cancel_requested_player2)
+        Self::bump_entry_ttl(&env, &game_code);
     }
 
     /// Coordinator resolves the match (Includes Fee Discount #36 and Side Pool Payout #35)
@@ -451,21 +541,29 @@ impl ChessterEscrow {
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
 
-        let mut m: Match = env
-            .storage()
-            .persistent()
-            .get(&game_code)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
+        Self::ensure_dispute_not_locked(&env, &game_code);
+        Self::settle_match(&env, &coordinator, &game_code, &winner);
+    }
+
+    /// Settle an active match: pay out winnings or refunds, process side pool payouts,
+    /// mark the match resolved and clear it from players' active lists.
+    fn settle_match(
+        env: &Env,
+        coordinator: &Address,
+        game_code: &String,
+        winner: &Option<Address>,
+    ) {
+        let mut m = Self::load_match(env, game_code);
 
         if m.status != MatchStatus::Active {
-            panic_with_error!(&env, EscrowError::MatchNotActive);
+            panic_with_error!(env, EscrowError::MatchNotActive);
         }
 
-        let token_client = token::Client::new(&env, &m.token);
+        let token_client = token::Client::new(env, &m.token);
 
         if let Some(w) = winner.clone() {
             if w != m.player1 && Some(w.clone()) != m.player2 {
-                panic_with_error!(&env, EscrowError::InvalidWinner);
+                panic_with_error!(env, EscrowError::InvalidWinner);
             }
 
             // Fee calculation with governance token discount (#36)
@@ -474,7 +572,7 @@ impl ChessterEscrow {
             let winner_pay = m.total_staked - admin_fee;
 
             token_client.transfer(&env.current_contract_address(), &w, &winner_pay);
-            token_client.transfer(&env.current_contract_address(), &coordinator, &admin_fee);
+            token_client.transfer(&env.current_contract_address(), coordinator, &admin_fee);
         } else {
             token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
             if let Some(p2) = m.player2.clone() {
@@ -483,7 +581,7 @@ impl ChessterEscrow {
         }
 
         // Process Side Pool Payout (#35)
-        let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
+        let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
         if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
             if let Some(w) = winner.clone() {
                 let winning_staked = if w == m.player1 {
@@ -525,44 +623,26 @@ impl ChessterEscrow {
                     );
                 }
             }
+            Self::bump_entry_ttl(env, &pool_key);
         }
 
         m.status = MatchStatus::Resolved;
-        m.winner = winner;
-        env.storage().persistent().set(&game_code, &m);
+        m.winner = winner.clone();
+        env.storage().persistent().set(game_code, &m);
+        Self::bump_entry_ttl(env, game_code);
 
-        let player1_key = (Symbol::new(&env, "act_m"), m.player1.clone());
-        let player1_matches: Vec<String> = env
-            .storage()
-            .persistent()
-            .get(&player1_key)
-            .unwrap_or_else(|| Vec::new(&env));
-        let filtered1 = Self::filter_matches(&env, player1_matches, &game_code);
-        env.storage().persistent().set(&player1_key, &filtered1);
-
-        if let Some(p2) = m.player2.clone() {
-            let player2_key = (Symbol::new(&env, "act_m"), p2);
-            let player2_matches: Vec<String> = env
-                .storage()
-                .persistent()
-                .get(&player2_key)
-                .unwrap_or_else(|| Vec::new(&env));
-            let filtered2 = Self::filter_matches(&env, player2_matches, &game_code);
-            env.storage().persistent().set(&player2_key, &filtered2);
-        }
+        Self::remove_from_active_lists(env, game_code, &m);
     }
 
     /// Refund after timeout (1 hour)
     pub fn refund_after_timeout(env: Env, game_code: String) {
-        let mut m: Match = env
-            .storage()
-            .persistent()
-            .get(&game_code)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound));
+        let mut m = Self::load_match(&env, &game_code);
 
         if m.status == MatchStatus::Resolved || m.status == MatchStatus::Refunded {
             panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
         }
+
+        Self::ensure_dispute_not_locked(&env, &game_code);
 
         if env.ledger().timestamp() < m.created_at + 3600 {
             panic_with_error!(&env, EscrowError::TimeoutNotReached);
@@ -581,38 +661,116 @@ impl ChessterEscrow {
             for bet in pool.bets.iter() {
                 token_client.transfer(&env.current_contract_address(), &bet.spectator, &bet.amount);
             }
+            Self::bump_entry_ttl(&env, &pool_key);
         }
 
         m.status = MatchStatus::Refunded;
         env.storage().persistent().set(&game_code, &m);
+        Self::bump_entry_ttl(&env, &game_code);
 
-        let player1_key = (Symbol::new(&env, "act_m"), m.player1.clone());
-        let player1_matches: Vec<String> = env
-            .storage()
-            .persistent()
-            .get(&player1_key)
-            .unwrap_or_else(|| Vec::new(&env));
-        let filtered1 = Self::filter_matches(&env, player1_matches, &game_code);
-        env.storage().persistent().set(&player1_key, &filtered1);
-
-        if let Some(p2) = m.player2.clone() {
-            let player2_key = (Symbol::new(&env, "act_m"), p2);
-            let player2_matches: Vec<String> = env
-                .storage()
-                .persistent()
-                .get(&player2_key)
-                .unwrap_or_else(|| Vec::new(&env));
-            let filtered2 = Self::filter_matches(&env, player2_matches, &game_code);
-            env.storage().persistent().set(&player2_key, &filtered2);
-        }
+        Self::remove_from_active_lists(&env, &game_code, &m);
     }
 
     /// Get match details
     pub fn get_match(env: Env, game_code: String) -> Match {
+        Self::load_match(&env, &game_code)
+    }
+
+    /// Get cancellation status for match (Issue #37)
+    pub fn get_cancellation_status(env: Env, game_code: String) -> (bool, bool) {
+        let m = Self::load_match(&env, &game_code);
+        (m.cancel_requested_player1, m.cancel_requested_player2)
+    }
+
+    /// Raise a dispute on an active match, placing staked funds into a
+    /// 48-hour time-lock queue pending manual arbitration (Issue #27).
+    pub fn raise_dispute(env: Env, game_code: String, player: Address) {
+        player.require_auth();
+
+        let m = Self::load_match(&env, &game_code);
+
+        if m.status != MatchStatus::Active {
+            panic_with_error!(&env, EscrowError::MatchNotActive);
+        }
+        if player != m.player1 && Some(player.clone()) != m.player2 {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+
+        let key = Self::dispute_key(&env, &game_code);
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, EscrowError::AlreadyDisputed);
+        }
+
+        let created_at = env.ledger().timestamp();
+        let dispute = Dispute {
+            game_code: game_code.clone(),
+            raised_by: player,
+            created_at,
+            release_at: created_at + DISPUTE_TIMELOCK_SECS,
+            status: DisputeStatus::Locked,
+        };
+
+        env.storage().persistent().set(&key, &dispute);
+        Self::bump_entry_ttl(&env, &key);
+    }
+
+    /// Get dispute details for a match.
+    pub fn get_dispute(env: Env, game_code: String) -> Dispute {
+        let key = Self::dispute_key(&env, &game_code);
         env.storage()
             .persistent()
-            .get(&game_code)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::MatchNotFound))
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::DisputeNotFound))
+    }
+
+    /// Coordinator arbitrates a disputed match once its 48-hour time-lock has
+    /// expired, releasing queued funds like a regular resolution (Issue #27).
+    pub fn resolve_dispute(env: Env, game_code: String, winner: Option<Address>) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let key = Self::dispute_key(&env, &game_code);
+        let mut dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::DisputeNotFound));
+
+        if dispute.status != DisputeStatus::Locked {
+            panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
+        }
+        if env.ledger().timestamp() < dispute.release_at {
+            panic_with_error!(&env, EscrowError::DisputeTimeLockActive);
+        }
+
+        Self::settle_match(&env, &coordinator, &game_code, &winner);
+
+        dispute.status = DisputeStatus::Settled;
+        env.storage().persistent().set(&key, &dispute);
+        Self::bump_entry_ttl(&env, &key);
+    }
+
+    /// Coordinator resolves up to `MAX_BATCH_RESOLUTIONS` matches in a single
+    /// atomic transaction for tournament escrows (Issue #23). Any failure
+    /// reverts the whole batch.
+    pub fn batch_resolve_matches(env: Env, resolutions: Vec<BatchResolution>) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let len = resolutions.len();
+        if resolutions.is_empty() || len > MAX_BATCH_RESOLUTIONS {
+            panic_with_error!(&env, EscrowError::InvalidBatchSize);
+        }
+
+        for resolution in resolutions.iter() {
+            Self::ensure_dispute_not_locked(&env, &resolution.game_code);
+            Self::settle_match(
+                &env,
+                &coordinator,
+                &resolution.game_code,
+                &resolution.winner,
+            );
+        }
     }
 
     /// Create a tournament prize pool
@@ -643,6 +801,7 @@ impl ChessterEscrow {
         };
 
         env.storage().persistent().set(&tournament_id, &tournament);
+        Self::bump_entry_ttl(&env, &tournament_id);
     }
 
     /// Join a tournament
@@ -654,6 +813,7 @@ impl ChessterEscrow {
             .persistent()
             .get(&tournament_id)
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidTournament));
+        Self::bump_entry_ttl(&env, &tournament_id);
 
         if tournament.status != TournamentStatus::Open {
             panic_with_error!(&env, EscrowError::InvalidTournament);
@@ -664,6 +824,7 @@ impl ChessterEscrow {
         }
 
         let token_client = token::Client::new(&env, &tournament.token);
+        Self::validate_player_funds(&env, &tournament.token, &player, tournament.buy_in_amount);
         token_client.transfer(
             &player,
             &env.current_contract_address(),
@@ -674,6 +835,7 @@ impl ChessterEscrow {
         tournament.total_pool += tournament.buy_in_amount;
 
         env.storage().persistent().set(&tournament_id, &tournament);
+        Self::bump_entry_ttl(&env, &tournament_id);
     }
 
     /// Complete tournament with final rankings and distribute prizes
@@ -686,6 +848,7 @@ impl ChessterEscrow {
             .persistent()
             .get(&tournament_id)
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidTournament));
+        Self::bump_entry_ttl(&env, &tournament_id);
 
         if tournament.status != TournamentStatus::Open {
             panic_with_error!(&env, EscrowError::InvalidTournament);
@@ -710,14 +873,18 @@ impl ChessterEscrow {
         tournament.final_rankings = final_rankings;
 
         env.storage().persistent().set(&tournament_id, &tournament);
+        Self::bump_entry_ttl(&env, &tournament_id);
     }
 
     /// Get tournament details
     pub fn get_tournament(env: Env, tournament_id: String) -> TournamentPrizePool {
-        env.storage()
+        let tournament: TournamentPrizePool = env
+            .storage()
             .persistent()
             .get(&tournament_id)
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidTournament))
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidTournament));
+        Self::bump_entry_ttl(&env, &tournament_id);
+        tournament
     }
 }
 
