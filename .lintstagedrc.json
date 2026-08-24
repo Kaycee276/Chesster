@@ -1,0 +1,4 @@
+{
+  "frontend/**/*.{js,jsx,ts,tsx}": "eslint --fix --config frontend/eslint.config.js",
+  "backend/**/*.{js,ts}": "npm test --prefix backend -- --passWithNoTests"
+}
