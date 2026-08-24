@@ -231,8 +231,8 @@ fn test_mutual_cancellation() {
     // Player 1 requests cancellation
     client.request_cancellation(&game_code, &player1);
     let (c1, c2) = client.get_cancellation_status(&game_code);
-    assert_eq!(c1, true);
-    assert_eq!(c2, false);
+    assert!(c1);
+    assert!(!c2);
     assert_eq!(client.get_match(&game_code).status, MatchStatus::Active);
 
     // Player 2 requests cancellation -> triggers full refund
