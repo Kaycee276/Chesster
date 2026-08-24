@@ -8,6 +8,7 @@ const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
 const botRoutes = require("./routes/botRoutes");
 const timerService = require("./services/timerService");
+const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
 
 const app = express();
@@ -156,6 +157,7 @@ io.on("connection", (socket) => {
 
 app.set("io", io);
 timerService.init(io);
+cronService.start();
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Chesster backend running on port ${PORT}`);

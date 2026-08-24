@@ -1,6 +1,8 @@
 class ChessEngine {
   constructor() {
     this.initBoard();
+    this.moveCache = new Map();
+    this.maxCacheSize = 10000;
   }
 
   initBoard() {
@@ -16,22 +18,59 @@ class ChessEngine {
     ];
   }
 
+  boardToFen(board) {
+    return JSON.stringify(board);
+  }
+
+  getCachedMoveResult(board, from, to, turn, lastMove) {
+    const cacheKey = `${this.boardToFen(board)}:${from[0]},${from[1]}:${to[0]},${to[1]}:${turn}`;
+    return this.moveCache.get(cacheKey);
+  }
+
+  setCachedMoveResult(board, from, to, turn, lastMove, result) {
+    if (this.moveCache.size >= this.maxCacheSize) {
+      const firstKey = this.moveCache.keys().next().value;
+      this.moveCache.delete(firstKey);
+    }
+    const cacheKey = `${this.boardToFen(board)}:${from[0]},${from[1]}:${to[0]},${to[1]}:${turn}`;
+    this.moveCache.set(cacheKey, result);
+  }
+
+  clearCache() {
+    this.moveCache.clear();
+  }
+
+  getCacheStats() {
+    return { size: this.moveCache.size, maxSize: this.maxCacheSize };
+  }
+
   isValidMove(board, from, to, turn, lastMove = null) {
+    const cachedResult = this.getCachedMoveResult(board, from, to, turn, lastMove);
+    if (cachedResult) return cachedResult;
+
     const [fromRow, fromCol] = from;
     const [toRow, toCol] = to;
     const piece = board[fromRow][fromCol];
-    
-    if (piece === '.') return { valid: false, reason: 'No piece at source' };
-    if ((turn === 'white' && piece === piece.toLowerCase()) || 
+
+    if (piece === '.') {
+      const result = { valid: false, reason: 'No piece at source' };
+      this.setCachedMoveResult(board, from, to, turn, lastMove, result);
+      return result;
+    }
+    if ((turn === 'white' && piece === piece.toLowerCase()) ||
         (turn === 'black' && piece === piece.toUpperCase())) {
-      return { valid: false, reason: 'Not your piece' };
+      const result = { valid: false, reason: 'Not your piece' };
+      this.setCachedMoveResult(board, from, to, turn, lastMove, result);
+      return result;
     }
 
     const target = board[toRow][toCol];
-    if (target !== '.' && 
+    if (target !== '.' &&
         ((turn === 'white' && target === target.toUpperCase()) ||
          (turn === 'black' && target === target.toLowerCase()))) {
-      return { valid: false, reason: 'Cannot capture own piece' };
+      const result = { valid: false, reason: 'Cannot capture own piece' };
+      this.setCachedMoveResult(board, from, to, turn, lastMove, result);
+      return result;
     }
 
     const pieceLower = piece.toLowerCase();
@@ -39,7 +78,7 @@ class ChessEngine {
     let isEnPassant = false;
 
     switch (pieceLower) {
-      case 'p': 
+      case 'p':
         const pawnResult = this.isValidPawnMove(board, from, to, turn, lastMove);
         isValid = pawnResult.valid;
         isEnPassant = pawnResult.enPassant;
@@ -49,17 +88,29 @@ class ChessEngine {
       case 'b': isValid = this.isValidBishopMove(board, from, to); break;
       case 'q': isValid = this.isValidQueenMove(board, from, to); break;
       case 'k': isValid = this.isValidKingMove(from, to); break;
-      default: return { valid: false, reason: 'Unknown piece' };
+      default: {
+        const result = { valid: false, reason: 'Unknown piece' };
+        this.setCachedMoveResult(board, from, to, turn, lastMove, result);
+        return result;
+      }
     }
 
-    if (!isValid) return { valid: false, reason: 'Illegal move for piece' };
+    if (!isValid) {
+      const result = { valid: false, reason: 'Illegal move for piece' };
+      this.setCachedMoveResult(board, from, to, turn, lastMove, result);
+      return result;
+    }
 
     const testBoard = this.makeMove(board, from, to, null, isEnPassant);
     if (this.isKingInCheck(testBoard, turn)) {
-      return { valid: false, reason: 'Move leaves king in check' };
+      const result = { valid: false, reason: 'Move leaves king in check' };
+      this.setCachedMoveResult(board, from, to, turn, lastMove, result);
+      return result;
     }
 
-    return { valid: true, enPassant: isEnPassant };
+    const result = { valid: true, enPassant: isEnPassant };
+    this.setCachedMoveResult(board, from, to, turn, lastMove, result);
+    return result;
   }
 
   isValidPawnMove(board, from, to, turn, lastMove) {

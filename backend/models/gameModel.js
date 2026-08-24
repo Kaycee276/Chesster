@@ -644,6 +644,149 @@ class GameModel {
 		return data || [];
 	}
 
+	async getGameHistory(filters = {}) {
+		const {
+			playerAddress = null,
+			status = null,
+			dateFrom = null,
+			dateTo = null,
+			page = 1,
+			pageSize = 20,
+			sortBy = "created_at",
+			sortOrder = "desc",
+		} = filters;
+
+		const pageNum = Math.max(1, parseInt(page) || 1);
+		const size = Math.max(1, Math.min(100, parseInt(pageSize) || 20));
+		const offset = (pageNum - 1) * size;
+
+		let query = supabase
+			.from("games")
+			.select(
+				"id, game_code, game_type, status, player_white_address, player_black_address, wager_amount, winner, created_at, updated_at, move_count, end_reason",
+				{ count: "exact" }
+			);
+
+		if (playerAddress) {
+			query = query.or(`player_white_address.eq.${playerAddress},player_black_address.eq.${playerAddress}`);
+		}
+
+		if (status) {
+			query = query.eq("status", status);
+		}
+
+		if (dateFrom) {
+			query = query.gte("created_at", dateFrom);
+		}
+
+		if (dateTo) {
+			query = query.lte("created_at", dateTo);
+		}
+
+		const sortDirection = sortOrder === "asc" ? true : false;
+		query = query.order(sortBy, { ascending: sortDirection });
+		query = query.range(offset, offset + size - 1);
+
+		const { data, error, count } = await query;
+
+		if (error) throw error;
+
+		const totalPages = Math.ceil(count / size);
+
+		return {
+			data: data || [],
+			pagination: {
+				page: pageNum,
+				pageSize: size,
+				total: count,
+				totalPages,
+				hasNextPage: pageNum < totalPages,
+				hasPreviousPage: pageNum > 1,
+			},
+		};
+	}
+
+	async requestUndoMove(gameCode, playerColor) {
+		const game = await this.getGame(gameCode);
+
+		if (!game) throw new Error("Game not found");
+		if (game.status !== "active") throw new Error("Cannot request undo on inactive game");
+		if (game.wager_amount) throw new Error("Cannot request undo on wagered matches");
+		if (!game.last_move) throw new Error("No moves to undo");
+
+		const { data, error } = await supabase
+			.from("games")
+			.update({ undo_request: playerColor, undo_request_at: new Date().toISOString() })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+		return data;
+	}
+
+	async acceptUndoMove(gameCode, playerColor) {
+		const game = await this.getGame(gameCode);
+
+		if (!game) throw new Error("Game not found");
+		if (game.status !== "active") throw new Error("Cannot accept undo on inactive game");
+		if (game.wager_amount) throw new Error("Cannot accept undo on wagered matches");
+		if (!game.undo_request) throw new Error("No undo request pending");
+		if (game.undo_request === playerColor) throw new Error("Cannot accept your own undo request");
+		if (!game.last_move) throw new Error("No moves to undo");
+
+		const { data: moves, error: movesError } = await supabase
+			.from("moves")
+			.select("*")
+			.eq("game_id", game.id)
+			.order("move_number", { ascending: false })
+			.limit(2);
+
+		if (movesError) throw movesError;
+		if (!moves || moves.length === 0) throw new Error("No moves found to undo");
+
+		const moveToUndo = moves[0];
+		const previousState = moves.length > 1 ? moves[1].board_state_after : chessEngine.initBoard();
+		const previousTurn = moveToUndo.player === "white" ? "black" : "white";
+
+		const { data: updatedGame, error: updateError } = await supabase
+			.from("games")
+			.update({
+				board_state: previousState,
+				current_turn: previousTurn,
+				move_count: game.move_count - 1,
+				last_move: moves.length > 1 ? {
+					from: moves[1].from_position,
+					to: moves[1].to_position,
+					piece: moves[1].piece,
+				} : null,
+				in_check: false,
+				undo_request: null,
+				undo_request_at: null,
+			})
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (updateError) throw updateError;
+
+		await supabase.from("moves").delete().eq("id", moveToUndo.id);
+
+		return updatedGame;
+	}
+
+	async rejectUndoMove(gameCode) {
+		const { data, error } = await supabase
+			.from("games")
+			.update({ undo_request: null, undo_request_at: null })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+		return data;
+	}
+
 	generateGameCode() {
 		return Math.random().toString(36).substring(2, 8).toUpperCase();
 	}
