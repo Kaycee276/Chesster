@@ -1,0 +1,30 @@
+# Dependency caches
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist
+build
+target
+coverage
+*.wasm
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Git and tooling
+.git
+.gitignore
+.husky
+.agents
+.github
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode
+.idea

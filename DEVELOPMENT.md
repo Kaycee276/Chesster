@@ -57,6 +57,51 @@ Before opening a Pull Request, make sure all local checks pass:
 
 ---
 
+## 🐳 Containerized Development with Docker Compose
+
+For a complete containerized full-stack development environment without manually managing local dependencies (Node.js, PostgreSQL, etc.), use the root `docker-compose.yml`:
+
+### 1. Start All Services
+Launch the PostgreSQL database, Express backend, and Vite frontend with volume hot-reloading:
+
+```bash
+docker compose up --build
+```
+
+To run in detached mode in the background:
+```bash
+docker compose up -d
+```
+
+### 2. Service Endpoints
+| Service | Local URL | Description |
+| --- | --- | --- |
+| **Frontend UI** | `http://localhost:3090` | Vite React development server with hot-module reloading |
+| **Backend API** | `http://localhost:3001` | Express REST & WebSocket game server |
+| **PostgreSQL** | `localhost:5432` | Postgres 16 database (`chesster_db`) |
+
+### 3. View Logs & Container Status
+- View combined live logs:
+  ```bash
+  docker compose logs -f
+  ```
+- View logs for a specific service:
+  ```bash
+  docker compose logs -f backend
+  ```
+
+### 4. Stop & Teardown
+- Stop running containers:
+  ```bash
+  docker compose down
+  ```
+- Stop containers and purge persistent database volumes:
+  ```bash
+  docker compose down -v
+  ```
+
+---
+
 ## ⚓ Pre-Commit Git Hooks (Husky & Lint-Staged)
 
 To ensure code quality and prevent broken code or unformatted commits from entering the repository, **Husky** and **lint-staged** are configured at the repository root.
