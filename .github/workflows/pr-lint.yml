@@ -11,6 +11,8 @@ on:
 
 permissions:
   pull-requests: read
+  contents: read
+  statuses: read
 
 jobs:
   validate-title:
