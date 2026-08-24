@@ -42,3 +42,5 @@ Thumbs.db
 # AI assistants
 .claude
 .gemini
+.agents/
+
