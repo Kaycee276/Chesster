@@ -108,4 +108,29 @@ We follow the **Conventional Commits** specification for clear git history:
 
 ---
 
+## 📦 Automated Release & Versioning
+
+Chesster uses [semantic-release](https://github.com/semantic-release/semantic-release) to automate versioning, changelog updates, and GitHub Release creation whenever changes are merged into the default branch (`main` / `master`).
+
+### Semantic Versioning Rules
+
+Release notes and version bumps are determined automatically from commit messages following the **Conventional Commits** specification:
+
+| Commit Type | Release Impact | Example Commit Message |
+| --- | --- | --- |
+| `fix:` | Patch Release (`v1.0.1`) | `fix(backend): resolve escrow timeout handling` |
+| `feat:` | Minor Release (`v1.1.0`) | `feat(frontend): add move history exporter` |
+| `feat:` / `fix:` with `BREAKING CHANGE:` | Major Release (`v2.0.0`) | `feat(contracts)!: migrate escrow contract API` |
+| `chore:`, `docs:`, `style:`, `refactor:`, `test:` | No Release | `docs: update setup documentation` |
+
+### Automated Release Artifacts
+
+Upon a successful release workflow execution:
+1. `semantic-release` calculates the new semver version based on commit history since the last tag.
+2. Updates `CHANGELOG.md` with release notes and commits the updated changelog.
+3. Compiles the optimized Soroban smart contract WASM (`escrow.wasm`) and attaches it directly to the GitHub Release.
+
+---
+
 Thank you for contributing to Chesster! 🚀
+
