@@ -102,8 +102,10 @@ jobs:
         with:
           workspaces: ./contracts/soroban
 
-      - name: Install cargo-tarpaulin
-        uses: taiki-e/install-action@cargo-tarpaulin
+      - name: Install Tools (cargo-tarpaulin & stellar-cli)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin, stellar-cli
 
       - name: Check Formatting
         run: cargo fmt --all -- --check
@@ -113,6 +115,12 @@ jobs:
 
       - name: Run Contract Tests
         run: cargo test
+
+      - name: Build & Optimize Contract
+        run: make optimize
+
+      - name: Verify WASM Size Budget & Output Metrics
+        run: ./scripts/check-wasm-size.sh target/wasm32-unknown-unknown/release/escrow.wasm
 
       - name: Generate Coverage Report
         run: cargo tarpaulin --out Lcov --output-dir coverage || true
