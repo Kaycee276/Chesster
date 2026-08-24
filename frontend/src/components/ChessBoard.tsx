@@ -215,6 +215,18 @@ export default function ChessBoard() {
 	return <ChessBoardInner />;
 }
 
+const PlayerAvatar = ({ color }: { color: "white" | "black" }) => (
+	<div
+		className={`w-7 h-7 rounded-full flex items-center justify-center text-base border-2 shrink-0 ${
+			color === "white"
+				? "bg-white border-gray-300 text-gray-900"
+				: "bg-gray-900 border-gray-600 text-white"
+		}`}
+	>
+		{color === "white" ? "♔" : "♚"}
+	</div>
+);
+
 function ChessBoardInner() {
 	const {
 		board,
@@ -307,7 +319,8 @@ function ChessBoardInner() {
 	// Auto-open payout modal when the game ends and this player is due a payout
 	useEffect(() => {
 		if (status === "finished" && willReceiveTokens) {
-			setShowPayoutModal(true);
+			const timer = setTimeout(() => setShowPayoutModal(true), 0);
+			return () => clearTimeout(timer);
 		}
 	}, [status, willReceiveTokens]);
 
@@ -460,18 +473,6 @@ function ChessBoardInner() {
 
 	const opponentColor = playerColor === "white" ? "black" : "white";
 	const isMyTurn = currentTurn === playerColor;
-
-	const PlayerAvatar = ({ color }: { color: "white" | "black" }) => (
-		<div
-			className={`w-7 h-7 rounded-full flex items-center justify-center text-base border-2 shrink-0 ${
-				color === "white"
-					? "bg-white border-gray-300 text-gray-900"
-					: "bg-gray-900 border-gray-600 text-white"
-			}`}
-		>
-			{color === "white" ? "♔" : "♚"}
-		</div>
-	);
 
 	return (
 		<div className="h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg) select-none p-1 gap-1">

@@ -40,7 +40,7 @@ export const useWalletStore = create<WalletState>((set) => {
   startWatching: () => {
     if (!watcher) {
       watcher = new WatchWalletChanges();
-      watcher.watch((params: any) => {
+      watcher.watch((params: { address?: string }) => {
         if (params.address) {
           set({ address: params.address, isConnected: true });
         }

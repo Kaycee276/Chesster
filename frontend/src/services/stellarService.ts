@@ -1,4 +1,4 @@
-import { rpc, TransactionBuilder, Networks, Contract, nativeToScVal } from "@stellar/stellar-sdk";
+import { rpc, TransactionBuilder, Networks, Contract, nativeToScVal, Transaction } from "@stellar/stellar-sdk";
 import { signTransaction } from "@stellar/freighter-api";
 
 const RPC_URL = import.meta.env.VITE_STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
@@ -45,7 +45,7 @@ export async function depositXLM(fnName: "create_match" | "join_match", gameCode
     }
 
     const sendResponse = await server.sendTransaction(
-        TransactionBuilder.fromXDR(signedResponse.signedTxXdr, NETWORK_PASSPHRASE) as any
+        TransactionBuilder.fromXDR(signedResponse.signedTxXdr, NETWORK_PASSPHRASE) as unknown as Transaction
     );
 
     if (sendResponse.status === "PENDING") {

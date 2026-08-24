@@ -42,9 +42,13 @@ Before opening a Pull Request, make sure all local checks pass:
   ```bash
   cd frontend && npm run lint
   ```
-- **Backend Unit Tests**:
+- **Backend Unit Tests & Coverage**:
   ```bash
-  cd backend && npm test
+  cd backend && npm run test:coverage
+  ```
+- **Frontend Unit Tests & Coverage**:
+  ```bash
+  cd frontend && npm run test:coverage
   ```
 - **Smart Contract Tests**:
   ```bash

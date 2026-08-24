@@ -11,6 +11,7 @@ dist/
 dist-ssr/
 build/
 target/
+coverage/
 
 # Rust/Soroban
 contracts/soroban/target/
