@@ -1,3 +1,10 @@
+# 1.0.0 (2026-08-24)
+
+
+### Bug Fixes
+
+* fix payout model ([b553e28](https://github.com/Kaycee276/Chesster/commit/b553e28575e8b6c44d542525b25faa7b8365fa57))
+
 # Changelog
 
 All notable changes to **Chesster** will be automatically documented in this file.
