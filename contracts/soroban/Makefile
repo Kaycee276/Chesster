@@ -1,25 +1,19 @@
 default: build
 
-all: test
-
-test: build
+test:
 	cargo test
 
 build:
 	cargo build --target wasm32-unknown-unknown --release
-	@ls -l ../../target/wasm32-unknown-unknown/release/*.wasm 2>/dev/null || true
 
 optimize: build
 	@if command -v soroban >/dev/null 2>&1; then \
-		soroban contract optimize --wasm ../../target/wasm32-unknown-unknown/release/escrow.wasm; \
+		soroban contract optimize --wasm target/wasm32-unknown-unknown/release/escrow.wasm; \
 	elif command -v stellar >/dev/null 2>&1; then \
-		stellar contract optimize --wasm ../../target/wasm32-unknown-unknown/release/escrow.wasm; \
+		stellar contract optimize --wasm target/wasm32-unknown-unknown/release/escrow.wasm; \
 	else \
 		echo "Neither soroban nor stellar CLI found for optimization"; exit 1; \
 	fi
-
-fmt:
-	cargo fmt --all
 
 clean:
 	cargo clean
