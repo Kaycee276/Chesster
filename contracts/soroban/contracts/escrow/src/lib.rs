@@ -40,6 +40,7 @@ pub enum EscrowError {
     DisputeNotFound = 20,
     DisputeTimeLockActive = 21,
     InvalidBatchSize = 22,
+    UnsupportedToken = 23,
 }
 
 #[contracttype]
@@ -159,6 +160,28 @@ impl ChessterEscrow {
     /// Get governance token address
     pub fn get_gov_token(env: Env) -> Option<Address> {
         env.storage().instance().get(&Symbol::new(&env, "gov_tok"))
+    }
+
+    /// Add a supported token for wagers (Coordinator only)
+    pub fn add_supported_token(env: Env, token: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        let key = (Symbol::new(&env, "sup_tok"), token);
+        env.storage().instance().set(&key, &true);
+    }
+
+    /// Remove a supported token (Coordinator only)
+    pub fn remove_supported_token(env: Env, token: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        let key = (Symbol::new(&env, "sup_tok"), token);
+        env.storage().instance().remove(&key);
+    }
+
+    /// Check if a token is supported
+    pub fn is_token_supported(env: Env, token: Address) -> bool {
+        let key = (Symbol::new(&env, "sup_tok"), token);
+        env.storage().instance().get(&key).unwrap_or(false)
     }
 
     /// Get effective fee basis points for a user considering governance token holdings (Issue #36)
@@ -310,6 +333,10 @@ impl ChessterEscrow {
         amount: i128,
     ) {
         player1.require_auth();
+
+        if !Self::is_token_supported(env.clone(), token.clone()) {
+            panic_with_error!(&env, EscrowError::UnsupportedToken);
+        }
 
         if env.storage().persistent().has(&game_code) {
             panic_with_error!(&env, EscrowError::MatchAlreadyExists);
@@ -781,6 +808,9 @@ impl ChessterEscrow {
         prize_distribution: Vec<i128>,
         token: Address,
     ) {
+        if !Self::is_token_supported(env.clone(), token.clone()) {
+            panic_with_error!(&env, EscrowError::UnsupportedToken);
+        }
         if env.storage().persistent().has(&tournament_id) {
             panic_with_error!(&env, EscrowError::InvalidTournament);
         }
