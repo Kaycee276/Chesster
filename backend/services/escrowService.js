@@ -132,6 +132,259 @@ async function resolveAsDraw(gameCode) {
 	return resolveMatch(gameCode, DRAW_ADDRESS);
 }
 
+/**
+ * Stellar Horizon Transaction Indexer for Real-Time Deposit Verification
+ * Queries Horizon API to verify on-chain escrow deposit transactions
+ */
+
+const axios = require("axios");
+const logger = require("../utils/logger");
+
+const HORIZON_URL = process.env.STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org";
+const PAYMENT_OPERATION_TYPE = "payment";
+
+/**
+ * Query Horizon for transactions related to a specific account
+ * @param {string} accountAddress - Stellar account address
+ * @returns {Array} Array of transactions
+ */
+async function getHorizonTransactions(accountAddress) {
+	try {
+		const response = await axios.get(`${HORIZON_URL}/accounts/${accountAddress}/transactions`, {
+			params: {
+				limit: 10,
+				order: "desc"
+			}
+		});
+		return response.data.records || [];
+	} catch (error) {
+		logger.error("Failed to fetch Horizon transactions", {
+			account: accountAddress,
+			error: error.message
+		});
+		return [];
+	}
+}
+
+/**
+ * Verify a deposit transaction hash via Horizon
+ * @param {string} transactionHash - Transaction hash to verify
+ * @param {string} expectedAsset - Expected asset code (or null for XLM)
+ * @param {number} expectedAmount - Expected amount
+ * @returns {object} Verification result
+ */
+async function verifyDepositTransaction(transactionHash, expectedAsset = null, expectedAmount = null) {
+	try {
+		logger.info("Verifying deposit transaction", {
+			hash: transactionHash,
+			asset: expectedAsset
+		});
+
+		const response = await axios.get(`${HORIZON_URL}/transactions/${transactionHash}`);
+		const transaction = response.data;
+
+		if (!transaction || !transaction.successful) {
+			return {
+				verified: false,
+				reason: "Transaction not found or not successful",
+				hash: transactionHash
+			};
+		}
+
+		// Fetch transaction details including operations
+		const operationsUrl = transaction._links.operations.href;
+		const operationsResponse = await axios.get(operationsUrl);
+		const operations = operationsResponse.data.records || [];
+
+		// Find payment operations
+		const paymentOps = operations.filter(op => op.type === PAYMENT_OPERATION_TYPE);
+
+		if (paymentOps.length === 0) {
+			return {
+				verified: false,
+				reason: "No payment operations found",
+				hash: transactionHash
+			};
+		}
+
+		// Verify against expected parameters
+		for (const operation of paymentOps) {
+			const asset = operation.asset_type === "native" ? "XLM" : operation.asset_code;
+			const amount = parseFloat(operation.amount);
+
+			const matches = {
+				asset: !expectedAsset || asset === expectedAsset,
+				amount: !expectedAmount || amount === expectedAmount
+			};
+
+			if (matches.asset && matches.amount) {
+				logger.info("Deposit transaction verified", {
+					hash: transactionHash,
+					asset,
+					amount,
+					source: operation.from
+				});
+
+				return {
+					verified: true,
+					hash: transactionHash,
+					asset,
+					amount,
+					source: operation.from,
+					destination: operation.to,
+					timestamp: transaction.created_at,
+					ledger: transaction.ledger_attr
+				};
+			}
+		}
+
+		return {
+			verified: false,
+			reason: "Transaction details don't match expected parameters",
+			hash: transactionHash
+		};
+	} catch (error) {
+		logger.error("Error verifying deposit transaction", {
+			hash: transactionHash,
+			error: error.message
+		});
+		return {
+			verified: false,
+			reason: error.message,
+			hash: transactionHash
+		};
+	}
+}
+
+/**
+ * Index transactions for a player account with real-time updates
+ * @param {string} playerAddress - Player's Stellar address
+ * @param {function} onNewTransaction - Callback for new transactions
+ * @returns {object} Indexer instance with start/stop methods
+ */
+function createTransactionIndexer(playerAddress, onNewTransaction) {
+	let isRunning = false;
+	let lastLedger = 0;
+	let indexInterval = null;
+
+	const indexer = {
+		/**
+		 * Start indexing transactions for the player
+		 */
+		async start() {
+			if (isRunning) return;
+			isRunning = true;
+			logger.info("Starting transaction indexer", { playerAddress });
+
+			indexInterval = setInterval(async () => {
+				try {
+					const transactions = await getHorizonTransactions(playerAddress);
+
+					for (const tx of transactions) {
+						const txLedger = tx.ledger_attr;
+						if (txLedger > lastLedger) {
+							lastLedger = txLedger;
+							
+							if (onNewTransaction && typeof onNewTransaction === "function") {
+								const verified = await verifyDepositTransaction(tx.hash);
+								if (verified.verified) {
+									onNewTransaction(verified);
+								}
+							}
+						}
+					}
+				} catch (error) {
+					logger.error("Error during transaction indexing", { error: error.message });
+				}
+			}, 15000); // Check every 15 seconds
+		},
+
+		/**
+		 * Stop indexing transactions
+		 */
+		stop() {
+			if (indexInterval) {
+				clearInterval(indexInterval);
+				indexInterval = null;
+				isRunning = false;
+				logger.info("Stopped transaction indexer", { playerAddress });
+			}
+		},
+
+		/**
+		 * Check if indexer is running
+		 */
+		isRunning: () => isRunning,
+
+		/**
+		 * Manually sync transactions once
+		 */
+		async sync() {
+			return await getHorizonTransactions(playerAddress);
+		}
+	};
+
+	return indexer;
+}
+
+/**
+ * Validate transaction against escrow contract deposit requirements
+ * @param {object} txData - Transaction data from verifyDepositTransaction
+ * @param {string} gameCode - Game code for context
+ * @returns {object} Validation result
+ */
+async function validateEscrowDeposit(txData, gameCode) {
+	try {
+		if (!txData.verified) {
+			return {
+				valid: false,
+				reason: "Transaction not verified",
+				gameCode
+			};
+		}
+
+		// Verify transaction is recent (within 1 hour)
+		const txTime = new Date(txData.timestamp).getTime();
+		const now = Date.now();
+		const isRecent = (now - txTime) < (60 * 60 * 1000);
+
+		if (!isRecent) {
+			return {
+				valid: false,
+				reason: "Transaction is too old",
+				gameCode,
+				age: Math.round((now - txTime) / 1000)
+			};
+		}
+
+		logger.info("Escrow deposit validated", {
+			gameCode,
+			source: txData.source,
+			amount: txData.amount,
+			asset: txData.asset
+		});
+
+		return {
+			valid: true,
+			gameCode,
+			source: txData.source,
+			amount: txData.amount,
+			asset: txData.asset,
+			timestamp: txData.timestamp
+		};
+	} catch (error) {
+		logger.error("Error validating escrow deposit", {
+			gameCode,
+			error: error.message
+		});
+		return {
+			valid: false,
+			reason: error.message,
+			gameCode
+		};
+	}
+}
+
 module.exports = {
 	init,
 	resolveMatch,
@@ -139,4 +392,8 @@ module.exports = {
 	resolveAsDraw,
 	getMatch,
 	DRAW_ADDRESS,
+	getHorizonTransactions,
+	verifyDepositTransaction,
+	createTransactionIndexer,
+	validateEscrowDeposit,
 };

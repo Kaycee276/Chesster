@@ -19,6 +19,7 @@
 	"dependencies": {
 		"@stellar/stellar-sdk": "^16.2.0",
 		"@supabase/supabase-js": "^2.95.3",
+		"axios": "^1.6.0",
 		"cors": "^2.8.5",
 		"dotenv": "^16.4.5",
 		"express": "^5.2.1",
