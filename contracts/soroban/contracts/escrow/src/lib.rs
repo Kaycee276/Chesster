@@ -39,6 +39,12 @@ pub enum EscrowError {
     TokenAlreadyWhitelisted = 19,
     NotForfeitable = 20,
     InvalidForfeitPlayer = 21,
+    InsufficientAllowance = 22,
+    UnsupportedToken = 23,
+    AlreadyDisputed = 24,
+    DisputeNotFound = 25,
+    DisputeTimeLockActive = 26,
+    InvalidBatchSize = 27,
 }
 
 #[contracttype]
@@ -184,6 +190,13 @@ pub struct MatchRefundedEvent {
     pub game_code: String,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlayerEloUpdatedEvent {
+    pub player: Address,
+    pub new_elo: u32,
+}
+
 #[contract]
 pub struct ChessterEscrow;
 
@@ -306,7 +319,11 @@ impl ChessterEscrow {
         coordinator.require_auth();
 
         let key = Self::whitelist_key(&env);
-        let mut tokens: Vec<Address> = env.storage().instance().get(&key).unwrap_or_else(|| Vec::new(&env));
+        let mut tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
 
         if tokens.contains(&token) {
             panic_with_error!(&env, EscrowError::TokenAlreadyWhitelisted);
@@ -322,7 +339,11 @@ impl ChessterEscrow {
         coordinator.require_auth();
 
         let key = Self::whitelist_key(&env);
-        let tokens: Vec<Address> = env.storage().instance().get(&key).unwrap_or_else(|| Vec::new(&env));
+        let tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
 
         if !tokens.contains(&token) {
             panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
@@ -340,14 +361,21 @@ impl ChessterEscrow {
     /// Whether a token is currently whitelisted as a supported wager asset.
     pub fn is_token_whitelisted(env: Env, token: Address) -> bool {
         let key = Self::whitelist_key(&env);
-        let tokens: Vec<Address> = env.storage().instance().get(&key).unwrap_or_else(|| Vec::new(&env));
+        let tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
         tokens.contains(&token)
     }
 
     /// List all whitelisted wager-asset token addresses.
     pub fn get_whitelisted_tokens(env: Env) -> Vec<Address> {
         let key = Self::whitelist_key(&env);
-        env.storage().instance().get(&key).unwrap_or_else(|| Vec::new(&env))
+        env.storage()
+            .instance()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     fn filter_matches(env: &Env, matches: Vec<String>, remove_code: &String) -> Vec<String> {
@@ -448,10 +476,6 @@ impl ChessterEscrow {
         amount: i128,
     ) {
         player1.require_auth();
-
-        if !Self::is_token_supported(env.clone(), token.clone()) {
-            panic_with_error!(&env, EscrowError::UnsupportedToken);
-        }
 
         if env.storage().persistent().has(&game_code) {
             panic_with_error!(&env, EscrowError::MatchAlreadyExists);
@@ -1035,7 +1059,8 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::DisputeTimeLockActive);
         }
 
-        Self::settle_match(&env, &coordinator, &game_code, &winner);
+        let mut m = Self::load_match(&env, &game_code);
+        Self::settle_match(&env, &coordinator, &game_code, &mut m, winner);
 
         dispute.status = DisputeStatus::Settled;
         env.storage().persistent().set(&key, &dispute);
@@ -1056,11 +1081,13 @@ impl ChessterEscrow {
 
         for resolution in resolutions.iter() {
             Self::ensure_dispute_not_locked(&env, &resolution.game_code);
+            let mut m = Self::load_match(&env, &resolution.game_code);
             Self::settle_match(
                 &env,
                 &coordinator,
                 &resolution.game_code,
-                &resolution.winner,
+                &mut m,
+                resolution.winner,
             );
         }
     }
@@ -1180,6 +1207,30 @@ impl ChessterEscrow {
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidTournament));
         Self::bump_entry_ttl(&env, &tournament_id);
         tournament
+    }
+
+    /// Update a player's Elo rating (Coordinator only)
+    pub fn update_player_elo(env: Env, player: Address, new_elo: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let key = (Symbol::new(&env, "elo"), player.clone());
+        env.storage().persistent().set(&key, &new_elo);
+        Self::bump_entry_ttl(&env, &key);
+
+        env.events().publish(
+            (symbol_short!("elo_upd"), player.clone()),
+            PlayerEloUpdatedEvent { player, new_elo },
+        );
+    }
+
+    /// Get a player's current Elo rating, defaulting to 1200
+    pub fn get_player_elo(env: Env, player: Address) -> u32 {
+        let key = (Symbol::new(&env, "elo"), player);
+        if env.storage().persistent().has(&key) {
+            Self::bump_entry_ttl(&env, &key);
+        }
+        env.storage().persistent().get(&key).unwrap_or(1200)
     }
 }
 
