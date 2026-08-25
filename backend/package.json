@@ -12,6 +12,9 @@
 	"keywords": [],
 	"author": "",
 	"license": "ISC",
+	"engines": {
+		"node": ">=20.0.0"
+	},
 	"type": "commonjs",
 	"dependencies": {
 		"@stellar/stellar-sdk": "^16.2.0",
