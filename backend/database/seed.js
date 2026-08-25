@@ -205,7 +205,6 @@ async function upsertGame(game, players) {
     payload.player_white = true;
     payload.player_black = true;
     payload.move_count = 5;
-    payload.end_reason = "checkmate";
     payload.escrow_status = game.wager != null ? { state: "resolved" } : null;
   } else {
     payload.player_white_address = whitePlayer.wallet_address;
