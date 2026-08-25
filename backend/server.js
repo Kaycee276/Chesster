@@ -7,8 +7,11 @@ const gameRoutes = require("./routes/gameRoutes");
 const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
 const botRoutes = require("./routes/botRoutes");
+const healthRoutes = require("./routes/healthRoutes");
 const timerService = require("./services/timerService");
+const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
+const logger = require("./utils/logger");
 
 const app = express();
 const server = http.createServer(app);
@@ -24,6 +27,9 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3001;
 
+// Apply structured logging middleware
+app.use(logger.requestMiddleware());
+
 app.use(
   cors({
     origin: CORS_ORIGIN,
@@ -32,12 +38,16 @@ app.use(
 );
 app.use(express.json());
 
+// Mount routes
 app.use("/api", gameRoutes);
 app.use("/api/escrow", escrowRoutes);
 app.use("/api", authRoutes);
 app.use("/api", botRoutes);
+app.use("/api", healthRoutes);
 
+// Legacy health endpoint
 app.get("/health", (req, res) => {
+  logger.info("Legacy health endpoint called");
   res.json({ status: "ok", message: "Chesster backend running" });
 });
 
@@ -156,6 +166,7 @@ io.on("connection", (socket) => {
 
 app.set("io", io);
 timerService.init(io);
+cronService.start();
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Chesster backend running on port ${PORT}`);

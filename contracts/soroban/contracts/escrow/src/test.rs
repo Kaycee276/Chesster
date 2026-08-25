@@ -16,6 +16,11 @@ fn create_token_contract<'a>(e: &Env, admin: &Address) -> (TokenClient<'a>, Toke
     )
 }
 
+/// Grant a player a token allowance for the escrow contract (Issue #26).
+fn approve(e: &Env, token: &TokenClient, owner: &Address, spender: &Address, amount: i128) {
+    token.approve(owner, spender, &amount, &(e.ledger().sequence() + 1_000));
+}
+
 #[test]
 fn test_create_and_join_match() {
     let env = Env::default();
@@ -40,6 +45,8 @@ fn test_create_and_join_match() {
     let game_code = String::from_str(&env, "GAME123");
 
     // Player 1 creates match
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
 
     assert_eq!(token.balance(&player1), 900);
@@ -81,6 +88,8 @@ fn test_match_nonce_increments() {
 
     assert_eq!(client.get_match_nonce(), 0);
 
+    approve(&env, &token, &player1, &contract_id, 10000);
+
     let game_1 = String::from_str(&env, "GAME_NONCE_1");
     client.create_match(&game_1, &player1, &token.address, &100);
     assert_eq!(client.get_match_nonce(), 1);
@@ -111,6 +120,8 @@ fn test_resolve_match_winner() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -153,6 +164,8 @@ fn test_governance_token_fee_discount() {
     assert_eq!(client.get_effective_fee_bps(&player1), 250); // 50% discount -> 250 bps (2.5%)
 
     let game_code = String::from_str(&env, "GAME_DISCOUNT");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -188,6 +201,10 @@ fn test_spectator_side_pool_payout() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_BET");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    approve(&env, &token, &spectator1, &contract_id, 500);
+    approve(&env, &token, &spectator2, &contract_id, 500);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -231,6 +248,8 @@ fn test_mutual_cancellation() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_CANCEL");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -272,6 +291,8 @@ fn test_resolve_match_draw() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -312,6 +333,8 @@ fn test_refund_after_timeout() {
         li.timestamp = 1000;
     });
 
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -354,6 +377,7 @@ fn test_refund_before_timeout_fails() {
         li.timestamp = 1000;
     });
 
+    approve(&env, &token, &player1, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
 
     env.ledger().with_mut(|li| {
@@ -371,12 +395,13 @@ fn test_get_coordinator_and_fee_bps() {
     let coordinator = Address::generate(&env);
     let token_admin = Address::generate(&env);
 
-    let (_token, _token_admin_client) = create_token_contract(&env, &token_admin);
+    let (token, _token_admin_client) = create_token_contract(&env, &token_admin);
 
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_supported_token(&token.address);
 
     assert_eq!(client.get_coordinator(), coordinator);
     assert_eq!(client.get_fee_bps(), 500);
@@ -403,6 +428,8 @@ fn test_get_treasury() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME123");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -429,6 +456,7 @@ fn test_max_active_matches() {
     client.add_whitelisted_token(&token.address);
 
     let g0 = String::from_str(&env, "GAME0");
+    approve(&env, &token, &player1, &contract_id, 10000);
     let g1 = String::from_str(&env, "GAME1");
     let g2 = String::from_str(&env, "GAME2");
     let g3 = String::from_str(&env, "GAME3");
@@ -461,10 +489,13 @@ fn test_tournament_create_and_join() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_supported_token(&token.address);
 
     let tournament_id = String::from_str(&env, "TOURNAMENT1");
     let prize_dist = vec![&env, 150, 50];
 
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_tournament(&tournament_id, &100, &prize_dist, &token.address);
 
     client.join_tournament(&tournament_id, &player1);
@@ -493,10 +524,13 @@ fn test_tournament_complete() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_supported_token(&token.address);
 
     let tournament_id = String::from_str(&env, "TOURNAMENT1");
     let prize_dist = vec![&env, 150, 50];
 
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_tournament(&tournament_id, &100, &prize_dist, &token.address);
     client.join_tournament(&tournament_id, &player1);
     client.join_tournament(&tournament_id, &player2);

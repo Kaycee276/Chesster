@@ -1,12 +1,14 @@
 {
   "name": "chesster",
-  "version": "1.2.0",
+  "version": "1.5.0",
   "private": true,
   "description": "Chesster - Decentralized Chess Game on Stellar",
   "scripts": {
-    "prepare": "husky"
+    "prepare": "husky",
+    "verify:branch-protection": "node scripts/verify-branch-protection.js"
   },
   "devDependencies": {
+    "@octokit/rest": "^22.0.1",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^10.0.1",

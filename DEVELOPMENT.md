@@ -6,7 +6,23 @@ This document outlines the local development setup, CI verification checks, and 
 
 ## 🛠️ Local Setup & CI Checks
 
-### 1. Root Installation
+### 1. Node.js Version
+
+This project requires **Node.js 20.18.0** or higher. The `.nvmrc` file at the repository root specifies the exact version used in CI.
+
+If you use [nvm](https://github.com/nvm-sh/nvm), run the following command to switch to the correct version:
+
+```bash
+nvm use
+```
+
+To install the required version if you don't have it:
+
+```bash
+nvm install
+```
+
+### 2. Root Installation
 
 Run `npm install` at the repository root. This will install workspace tooling (such as **Husky** and **lint-staged**) and automatically register Git hooks via the `prepare` script in `package.json`.
 
@@ -14,7 +30,7 @@ Run `npm install` at the repository root. This will install workspace tooling (s
 npm install
 ```
 
-### 2. Service Dependencies & Development Servers
+### 3. Service Dependencies & Development Servers
 
 - **Frontend**:
   ```bash
@@ -34,7 +50,7 @@ npm install
   cargo build
   ```
 
-### 3. Running Local CI Checks
+### 4. Running Local CI Checks
 
 Before opening a Pull Request, make sure all local checks pass:
 
@@ -144,3 +160,91 @@ git commit -m "WIP: temporary local test" --no-verify
 ```
 
 > **Note:** Bypassing pre-commit hooks is strongly discouraged for Pull Requests, as failing checks will be caught by remote CI pipelines.
+
+---
+
+## 🔒 Branch Protection Verification
+
+Maintaining branch governance requires ensuring that only pull requests passing all CI checks can merge into protected branches. This script audits GitHub branch protection rules to verify required status checks and review requirements.
+
+### Prerequisites
+
+- **GitHub Token**: A personal access token (classic) with the `repo` scope
+  - Must have **push or admin access** to the target repository — the GitHub API returns 404 for branch protection endpoints without it
+- **Node.js**: Installed and available in PATH
+- **Git Remote**: Script auto-detects repository from `origin` remote
+
+### Setting Up Authentication
+
+```bash
+export GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+```
+
+You can generate a token at [GitHub Settings → Developer settings → Personal access tokens](https://github.com/settings/tokens).
+
+### Usage
+
+```bash
+# Check default branches (master, dev)
+npm run verify:branch-protection
+
+# Check specific branches
+npm run verify:branch-protection -- --branch master,main,dev
+
+# Override repository (if not auto-detected from git remote)
+npm run verify:branch-protection -- --repo owner/repo
+
+# Combine flags
+npm run verify:branch-protection -- --branch master,dev --repo owner/repo
+```
+
+### What It Checks
+
+| Check | Description |
+| --- | --- |
+| **PR reviews required** | Verifies at least 1 approving review is required |
+| **Status checks required** | Verifies CI status checks are configured |
+| **Branch up-to-date** | Verifies branch must be up to date before merging |
+| **Admin enforcement** | Reports whether admin bypass is disabled (informational) |
+
+### Example Output
+
+```
+Branch Protection Report
+==================================================
+  Repository: ChessterOrg/Chesster
+  Branches:  master, dev
+
+✓ master — All checks passed
+  ✓ PR reviews required — min 1 approval(s)
+  ✓ Status checks required — 4 check(s): backend-ci, frontend-ci, contracts-ci, lint-pr
+  ✓ Branch must be up date before merging — enabled
+  ✓ Enforce for admins — enabled
+
+✓ dev — All checks passed
+  ✓ PR reviews required — min 1 approval(s)
+  ✓ Status checks required — 4 check(s): backend-ci, frontend-ci, contracts-ci, lint-pr
+  ✓ Branch must be up date before merging — enabled
+  ✓ Enforce for admins — enabled
+
+==================================================
+Result: 2/2 branch(es) compliant ✓
+```
+
+### Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | All branches are compliant |
+| `1` | One or more branches have violations or errors |
+
+### CI Integration
+
+This script can be run in CI pipelines to periodically audit branch protection:
+
+```yaml
+- name: Verify Branch Protection
+  run: npm run verify:branch-protection
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```

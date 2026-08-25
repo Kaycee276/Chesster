@@ -177,6 +177,84 @@ class GameController {
 			res.status(404).json({ success: false, error: error.message });
 		}
 	}
+
+	async getGameHistory(req, res) {
+		try {
+			const {
+				playerAddress,
+				status,
+				dateFrom,
+				dateTo,
+				page = 1,
+				pageSize = 20,
+				sortBy = "created_at",
+				sortOrder = "desc",
+			} = req.query;
+
+			const filters = {
+				playerAddress: playerAddress || null,
+				status: status || null,
+				dateFrom: dateFrom || null,
+				dateTo: dateTo || null,
+				page: page || 1,
+				pageSize: pageSize || 20,
+				sortBy: sortBy || "created_at",
+				sortOrder: sortOrder || "desc",
+			};
+
+			const result = await gameModel.getGameHistory(filters);
+			res.json({ success: true, ...result });
+		} catch (error) {
+			res.status(500).json({ success: false, error: error.message });
+		}
+	}
+
+	async requestUndoMove(req, res) {
+		try {
+			const { gameCode } = req.params;
+			const { playerColor } = req.body;
+
+			const game = await gameModel.requestUndoMove(gameCode, playerColor);
+
+			const io = req.app.get("io");
+			io.to(gameCode).emit("game-update", game);
+
+			res.json({ success: true, data: game });
+		} catch (error) {
+			res.status(400).json({ success: false, error: error.message });
+		}
+	}
+
+	async acceptUndoMove(req, res) {
+		try {
+			const { gameCode } = req.params;
+			const { playerColor } = req.body;
+
+			const game = await gameModel.acceptUndoMove(gameCode, playerColor);
+
+			const io = req.app.get("io");
+			io.to(gameCode).emit("game-update", game);
+
+			res.json({ success: true, data: game });
+		} catch (error) {
+			res.status(400).json({ success: false, error: error.message });
+		}
+	}
+
+	async rejectUndoMove(req, res) {
+		try {
+			const { gameCode } = req.params;
+
+			const game = await gameModel.rejectUndoMove(gameCode);
+
+			const io = req.app.get("io");
+			io.to(gameCode).emit("game-update", game);
+
+			res.json({ success: true, data: game });
+		} catch (error) {
+			res.status(400).json({ success: false, error: error.message });
+		}
+	}
 }
 
 module.exports = new GameController();
