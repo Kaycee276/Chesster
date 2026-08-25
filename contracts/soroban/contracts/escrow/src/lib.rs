@@ -12,131 +12,218 @@ pub const STORAGE_TTL_EXTENDED: u32 = 518_400;
 pub const DISPUTE_TIMELOCK_SECS: u64 = 172_800;
 /// Maximum number of matches resolvable in a single atomic batch transaction.
 pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
+/// Duration (in seconds) after which settled or refunded matches become eligible for garbage collection (30 days).
+pub const STALE_MATCH_THRESHOLD_SECS: u64 = 2_592_000;
 
+/// Errors returned by the Chesster Escrow smart contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum EscrowError {
+    /// Contract has not been initialized yet.
     NotInitialized = 0,
+    /// Specified match game code was not found.
     MatchNotFound = 1,
+    /// Match with specified game code already exists.
     MatchAlreadyExists = 2,
+    /// Wager amount must be positive.
     InvalidWager = 3,
+    /// Action requires match to be in Pending status.
     MatchNotPending = 4,
+    /// Player or spectator has already joined/placed bet.
     AlreadyJoined = 5,
+    /// Player cannot join their own created match.
     CannotJoinOwnMatch = 6,
+    /// Action requires match to be in Active status.
     MatchNotActive = 7,
+    /// Specified winner address is invalid for match.
     InvalidWinner = 8,
+    /// Match is already resolved or refunded.
     AlreadyResolvedOrRefunded = 9,
+    /// Refund timeout period (1 hour) has not elapsed.
     TimeoutNotReached = 10,
+    /// Caller is unauthorized to perform action.
     Unauthorized = 11,
+    /// Player token balance is insufficient for wager.
     InsufficientFunds = 12,
+    /// Player has reached maximum active matches limit (5).
     MaxActiveMatchesReached = 13,
+    /// Tournament status or parameter is invalid.
     InvalidTournament = 14,
+    /// Side bet entry was not found.
     SideBetNotFound = 15,
+    /// Match side pool is closed for new bets.
     SideBetClosed = 16,
+    /// Cancellation request already recorded.
     CancellationAlreadyRequested = 17,
+    /// Token allowance granted to contract is insufficient.
     InsufficientAllowance = 18,
+    /// Dispute has already been raised for this match.
     AlreadyDisputed = 19,
+    /// Dispute record not found.
     DisputeNotFound = 20,
+    /// Dispute timelock (48 hours) is currently active.
     DisputeTimeLockActive = 21,
+    /// Batch resolution size is empty or exceeds limit.
     InvalidBatchSize = 22,
+    /// Match is not stale (must be resolved/refunded and >30 days old).
+    MatchNotStale = 23,
 }
 
+/// Lifecycle status of a chess match escrow.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MatchStatus {
+    /// Match created by Player 1, awaiting Player 2 join.
     Pending = 0,
+    /// Player 2 joined, wagers locked, match in progress.
     Active = 1,
+    /// Match resolved, payouts distributed to winner or refunded on draw.
     Resolved = 2,
+    /// Match canceled or timed out, wagers refunded to players.
     Refunded = 3,
 }
 
+/// Lifecycle status of a tournament prize pool.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TournamentStatus {
+    /// Tournament open for player registrations.
     Open = 0,
+    /// Tournament registration closed and matches in progress.
     Active = 1,
+    /// Tournament completed and prize distribution finished.
     Completed = 2,
 }
 
+/// Spectator side bet entry on match winner.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SideBet {
+    /// Address of spectator who placed the side bet.
     pub spectator: Address,
+    /// Address of player predicted to win.
     pub predicted_winner: Address,
+    /// Amount staked on prediction.
     pub amount: i128,
 }
 
+/// Spectator side bet pool for a match.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SidePool {
+    /// Associated match game code.
     pub game_code: String,
+    /// Total amount staked on Player 1.
     pub total_player1_side_staked: i128,
+    /// Total amount staked on Player 2.
     pub total_player2_side_staked: i128,
+    /// List of individual spectator side bets.
     pub bets: Vec<SideBet>,
 }
 
+/// Tournament prize pool storage representation.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TournamentPrizePool {
+    /// Unique tournament identifier.
     pub tournament_id: String,
+    /// Vector of registered player addresses.
     pub players: Vec<Address>,
+    /// Required buy-in amount per player.
     pub buy_in_amount: i128,
+    /// Accumulated total prize pool.
     pub total_pool: i128,
+    /// Prize payout distribution per rank index.
     pub prize_distribution: Vec<i128>,
+    /// Final player placement rankings after tournament completion.
     pub final_rankings: Vec<Address>,
+    /// Current tournament lifecycle status.
     pub status: TournamentStatus,
+    /// Creation timestamp (ledger timestamp).
     pub created_at: u64,
+    /// Token address used for buy-ins and prizes.
     pub token: Address,
 }
 
+/// Status of a match dispute.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisputeStatus {
+    /// Dispute locked during 48-hour timelock queue.
     Locked = 0,
+    /// Dispute arbitrated and settled by coordinator.
     Settled = 1,
 }
 
+/// Dispute record for a match.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Dispute {
+    /// Disputed match game code.
     pub game_code: String,
+    /// Player address who initiated dispute.
     pub raised_by: Address,
+    /// Dispute creation timestamp.
     pub created_at: u64,
+    /// Timestamp when dispute timelock expires (created_at + 48h).
     pub release_at: u64,
+    /// Current dispute resolution status.
     pub status: DisputeStatus,
 }
 
+/// Match resolution entry for batch resolution transactions.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BatchResolution {
+    /// Game code of match to resolve.
     pub game_code: String,
+    /// Winner address, or None for a draw.
     pub winner: Option<Address>,
 }
 
+/// Full details and state representation of an escrow match.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Match {
+    /// Unique match game code identifier.
     pub game_code: String,
+    /// Address of match creator (Player 1).
     pub player1: Address,
+    /// Address of joined opponent (Player 2), if joined.
     pub player2: Option<Address>,
+    /// Individual wager requirement per player.
     pub wager_amount: i128,
+    /// Total pooled wager amount currently locked in escrow.
     pub total_staked: i128,
+    /// Creation timestamp of match.
     pub created_at: u64,
+    /// Current lifecycle status of match.
     pub status: MatchStatus,
+    /// Winner address if match resolved with a winner.
     pub winner: Option<Address>,
+    /// Token contract address used for wagering.
     pub token: Address,
+    /// Match creation sequence nonce.
     pub nonce: u64,
+    /// Mutual cancellation request indicator for Player 1.
     pub cancel_requested_player1: bool,
+    /// Mutual cancellation request indicator for Player 2.
     pub cancel_requested_player2: bool,
 }
 
+/// Chesster Escrow Smart Contract instance.
 #[contract]
 pub struct ChessterEscrow;
 
 #[contractimpl]
 impl ChessterEscrow {
-    /// Initialize the contract with the coordinator address and admin fee (in basis points)
+    /// Initializes the contract with coordinator address and admin fee basis points.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `coordinator` - Coordinator wallet address.
+    /// * `admin_bps` - Admin fee in basis points (500 = 5%).
     pub fn init(env: Env, coordinator: Address, admin_bps: u32) {
         coordinator.require_auth();
         env.storage()
@@ -147,7 +234,11 @@ impl ChessterEscrow {
             .set(&symbol_short!("fee"), &admin_bps);
     }
 
-    /// Set governance token address for fee discounts (Issue #36)
+    /// Sets governance token address for calculating fee discounts (Issue #36).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `gov_token` - Governance token contract address.
     pub fn set_gov_token(env: Env, gov_token: Address) {
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
@@ -156,12 +247,25 @@ impl ChessterEscrow {
             .set(&Symbol::new(&env, "gov_tok"), &gov_token);
     }
 
-    /// Get governance token address
+    /// Retrieves governance token address if configured.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `Option<Address>` - Governance token address if set.
     pub fn get_gov_token(env: Env) -> Option<Address> {
         env.storage().instance().get(&Symbol::new(&env, "gov_tok"))
     }
 
-    /// Get effective fee basis points for a user considering governance token holdings (Issue #36)
+    /// Calculates effective fee basis points for a player based on governance token balance (Issue #36).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `player` - Player address to query.
+    ///
+    /// # Returns
+    /// * `u32` - Fee in basis points after applied holdings tier discount.
     pub fn get_effective_fee_bps(env: Env, player: Address) -> u32 {
         let base_fee = Self::get_fee_bps(env.clone());
         if let Some(gov_token) = Self::get_gov_token(env.clone()) {
@@ -182,7 +286,13 @@ impl ChessterEscrow {
         }
     }
 
-    /// Get current match creation nonce counter (Issue #34)
+    /// Retrieves current match creation nonce counter (Issue #34).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `u64` - Nonce value.
     pub fn get_match_nonce(env: Env) -> u64 {
         env.storage()
             .instance()
@@ -190,7 +300,13 @@ impl ChessterEscrow {
             .unwrap_or(0)
     }
 
-    /// Get coordinator address
+    /// Retrieves registered coordinator address.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `Address` - Coordinator address.
     pub fn get_coordinator(env: Env) -> Address {
         env.storage()
             .instance()
@@ -198,7 +314,13 @@ impl ChessterEscrow {
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::NotInitialized))
     }
 
-    /// Get admin fee in basis points
+    /// Retrieves base admin fee in basis points.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `u32` - Base fee in basis points.
     pub fn get_fee_bps(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -206,10 +328,64 @@ impl ChessterEscrow {
             .unwrap_or(500)
     }
 
-    /// Get treasury balance (total contract balance)
+    /// Retrieves current contract treasury balance for specified token.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `token` - Token address.
+    ///
+    /// # Returns
+    /// * `i128` - Treasury token balance.
     pub fn get_treasury(env: Env, token: Address) -> i128 {
         let token_client = token::Client::new(&env, &token);
         token_client.balance(&env.current_contract_address())
+    }
+
+    /// Configures native XLM SAC token address in contract storage (Issue #38).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `native_token` - Address of native XLM SAC token.
+    pub fn set_native_xlm_address(env: Env, native_token: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "xlm_tok"), &native_token);
+    }
+
+    /// Retrieves configured native XLM SAC token address (Issue #38).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `Option<Address>` - Address of native XLM token if set.
+    pub fn get_native_xlm_address(env: Env) -> Option<Address> {
+        env.storage().instance().get(&Symbol::new(&env, "xlm_tok"))
+    }
+
+    /// Creates a match using the configured native XLM SAC token (Issue #38).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player1` - Creator player address.
+    /// * `amount` - Wager amount.
+    pub fn create_native_match(env: Env, game_code: String, player1: Address, amount: i128) {
+        let native_token = Self::get_native_xlm_address(env.clone())
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::NotInitialized));
+        Self::create_match(env, game_code, player1, native_token, amount);
+    }
+
+    /// Joins a native XLM match (Issue #38).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player2` - Joining player address.
+    pub fn join_native_match(env: Env, game_code: String, player2: Address) {
+        Self::join_match(env, game_code, player2);
     }
 
     fn filter_matches(env: &Env, matches: Vec<String>, remove_code: &String) -> Vec<String> {
@@ -222,14 +398,12 @@ impl ChessterEscrow {
         filtered
     }
 
-    /// Auto-extend the contract instance TTL so escrow state never gets evicted (Issue #28).
     fn bump_instance_ttl(env: &Env) {
         env.storage()
             .instance()
             .extend_ttl(STORAGE_TTL_THRESHOLD, STORAGE_TTL_EXTENDED);
     }
 
-    /// Auto-extend the TTL of a persistent storage entry on access (Issue #28).
     fn bump_entry_ttl<K>(env: &Env, key: &K)
     where
         K: IntoVal<Env, Val>,
@@ -239,7 +413,6 @@ impl ChessterEscrow {
             .extend_ttl(key, STORAGE_TTL_THRESHOLD, STORAGE_TTL_EXTENDED);
     }
 
-    /// Load a match and auto-extend its storage TTL to prevent ledger eviction (Issue #28).
     fn load_match(env: &Env, game_code: &String) -> Match {
         let m: Match = env
             .storage()
@@ -251,7 +424,6 @@ impl ChessterEscrow {
         m
     }
 
-    /// Remove a settled/refunded match from both players' active match lists.
     fn remove_from_active_lists(env: &Env, game_code: &String, m: &Match) {
         let player1_key = (Symbol::new(env, "act_m"), m.player1.clone());
         let player1_matches: Vec<String> = env
@@ -280,7 +452,6 @@ impl ChessterEscrow {
         (Symbol::new(env, "dispute"), game_code.clone())
     }
 
-    /// Reject settlement attempts while a dispute time-lock is still in force.
     fn ensure_dispute_not_locked(env: &Env, game_code: &String) {
         let key = Self::dispute_key(env, game_code);
         if let Some(d) = env.storage().persistent().get::<_, Dispute>(&key) {
@@ -290,7 +461,6 @@ impl ChessterEscrow {
         }
     }
 
-    /// Validate a player's token balance and allowance before pulling funds (Issue #26).
     fn validate_player_funds(env: &Env, token: &Address, owner: &Address, amount: i128) {
         let token_client = token::Client::new(env, token);
         if token_client.balance(owner) < amount {
@@ -301,7 +471,14 @@ impl ChessterEscrow {
         }
     }
 
-    /// Player 1 creates a match and deposits the wager (Issue #34: Increments Nonce)
+    /// Creates a match and deposits Player 1's wager (Issue #34).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player1` - Creator player address.
+    /// * `token` - Token contract address.
+    /// * `amount` - Wager amount.
     pub fn create_match(
         env: Env,
         game_code: String,
@@ -366,7 +543,12 @@ impl ChessterEscrow {
         Self::bump_instance_ttl(&env);
     }
 
-    /// Player 2 joins an existing match and deposits the wager
+    /// Joins an existing pending match and deposits Player 2's wager.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player2` - Joining player address.
     pub fn join_match(env: Env, game_code: String, player2: Address) {
         player2.require_auth();
 
@@ -412,7 +594,14 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &player2_key);
     }
 
-    /// Spectators place side bets on match outcome (Issue #35)
+    /// Places a spectator side bet on predicted match winner (Issue #35).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `spectator` - Spectator address placing bet.
+    /// * `predicted_winner` - Address of predicted winner.
+    /// * `amount` - Staked bet amount.
     pub fn place_side_bet(
         env: Env,
         game_code: String,
@@ -467,7 +656,14 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &pool_key);
     }
 
-    /// Get side pool for a match (Issue #35)
+    /// Retrieves side bet pool details for a match (Issue #35).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `SidePool` - Side pool details.
     pub fn get_side_pool(env: Env, game_code: String) -> SidePool {
         let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
         if env.storage().persistent().has(&pool_key) {
@@ -484,7 +680,12 @@ impl ChessterEscrow {
             })
     }
 
-    /// Request mutual cancellation of match (Issue #37)
+    /// Requests mutual cancellation of match (Issue #37).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player` - Address of requesting player.
     pub fn request_cancellation(env: Env, game_code: String, player: Address) {
         player.require_auth();
 
@@ -515,7 +716,6 @@ impl ChessterEscrow {
                 token_client.transfer(&env.current_contract_address(), &p2, &m.wager_amount);
             }
 
-            // Refund any side pool bets
             let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
             if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
                 for bet in pool.bets.iter() {
@@ -536,7 +736,12 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &game_code);
     }
 
-    /// Coordinator resolves the match (Includes Fee Discount #36 and Side Pool Payout #35)
+    /// Coordinator resolves active match, distributing payouts and fee discounts (Issues #35 & #36).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `winner` - Optional winner address, or None for a draw.
     pub fn resolve_match(env: Env, game_code: String, winner: Option<Address>) {
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
@@ -545,8 +750,6 @@ impl ChessterEscrow {
         Self::settle_match(&env, &coordinator, &game_code, &winner);
     }
 
-    /// Settle an active match: pay out winnings or refunds, process side pool payouts,
-    /// mark the match resolved and clear it from players' active lists.
     fn settle_match(
         env: &Env,
         coordinator: &Address,
@@ -566,7 +769,6 @@ impl ChessterEscrow {
                 panic_with_error!(env, EscrowError::InvalidWinner);
             }
 
-            // Fee calculation with governance token discount (#36)
             let admin_bps = Self::get_effective_fee_bps(env.clone(), w.clone());
             let admin_fee = (m.total_staked * (admin_bps as i128)) / 10000;
             let winner_pay = m.total_staked - admin_fee;
@@ -580,7 +782,6 @@ impl ChessterEscrow {
             }
         }
 
-        // Process Side Pool Payout (#35)
         let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
         if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
             if let Some(w) = winner.clone() {
@@ -604,7 +805,6 @@ impl ChessterEscrow {
                         }
                     }
                 } else {
-                    // No spectator bet on actual winner: refund all bets
                     for bet in pool.bets.iter() {
                         token_client.transfer(
                             &env.current_contract_address(),
@@ -614,7 +814,6 @@ impl ChessterEscrow {
                     }
                 }
             } else {
-                // Draw: refund all bets
                 for bet in pool.bets.iter() {
                     token_client.transfer(
                         &env.current_contract_address(),
@@ -634,7 +833,11 @@ impl ChessterEscrow {
         Self::remove_from_active_lists(env, game_code, &m);
     }
 
-    /// Refund after timeout (1 hour)
+    /// Refunds match wagers after 1-hour timeout period.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
     pub fn refund_after_timeout(env: Env, game_code: String) {
         let mut m = Self::load_match(&env, &game_code);
 
@@ -655,7 +858,6 @@ impl ChessterEscrow {
             token_client.transfer(&env.current_contract_address(), &p2, &m.wager_amount);
         }
 
-        // Refund any side pool bets
         let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
         if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
             for bet in pool.bets.iter() {
@@ -671,19 +873,37 @@ impl ChessterEscrow {
         Self::remove_from_active_lists(&env, &game_code, &m);
     }
 
-    /// Get match details
+    /// Retrieves details for a specific match.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `Match` - Match struct details.
     pub fn get_match(env: Env, game_code: String) -> Match {
         Self::load_match(&env, &game_code)
     }
 
-    /// Get cancellation status for match (Issue #37)
+    /// Retrieves cancellation request status for both players (Issue #37).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `(bool, bool)` - Tuple of `(cancel_requested_player1, cancel_requested_player2)`.
     pub fn get_cancellation_status(env: Env, game_code: String) -> (bool, bool) {
         let m = Self::load_match(&env, &game_code);
         (m.cancel_requested_player1, m.cancel_requested_player2)
     }
 
-    /// Raise a dispute on an active match, placing staked funds into a
-    /// 48-hour time-lock queue pending manual arbitration (Issue #27).
+    /// Raises a dispute on active match, locking funds into 48-hour timelock queue (Issue #27).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player` - Address of player raising dispute.
     pub fn raise_dispute(env: Env, game_code: String, player: Address) {
         player.require_auth();
 
@@ -714,7 +934,14 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &key);
     }
 
-    /// Get dispute details for a match.
+    /// Retrieves dispute details for a match.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `Dispute` - Dispute struct details.
     pub fn get_dispute(env: Env, game_code: String) -> Dispute {
         let key = Self::dispute_key(&env, &game_code);
         env.storage()
@@ -723,8 +950,12 @@ impl ChessterEscrow {
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::DisputeNotFound))
     }
 
-    /// Coordinator arbitrates a disputed match once its 48-hour time-lock has
-    /// expired, releasing queued funds like a regular resolution (Issue #27).
+    /// Coordinator arbitrates disputed match after 48-hour timelock expiration (Issue #27).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `winner` - Optional winner address, or None for draw.
     pub fn resolve_dispute(env: Env, game_code: String, winner: Option<Address>) {
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
@@ -750,9 +981,11 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &key);
     }
 
-    /// Coordinator resolves up to `MAX_BATCH_RESOLUTIONS` matches in a single
-    /// atomic transaction for tournament escrows (Issue #23). Any failure
-    /// reverts the whole batch.
+    /// Coordinator resolves up to `MAX_BATCH_RESOLUTIONS` matches in a single atomic transaction (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `resolutions` - Vector of match resolutions.
     pub fn batch_resolve_matches(env: Env, resolutions: Vec<BatchResolution>) {
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
@@ -773,7 +1006,70 @@ impl ChessterEscrow {
         }
     }
 
-    /// Create a tournament prize pool
+    /// Cleans up settled or refunded matches older than 30 days (`STALE_MATCH_THRESHOLD_SECS`) from storage (Issue #41).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_codes` - Vector of game codes to evaluate for garbage collection.
+    ///
+    /// # Returns
+    /// * `u32` - Number of stale match storage entries removed.
+    pub fn gc_stale_matches(env: Env, game_codes: Vec<String>) -> u32 {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let mut cleaned: u32 = 0;
+        let now = env.ledger().timestamp();
+
+        for game_code in game_codes.iter() {
+            if Self::gc_stale_match_internal(&env, &game_code, now) {
+                cleaned += 1;
+            }
+        }
+        cleaned
+    }
+
+    /// Single match garbage collection helper that removes a settled or refunded match older than 30 days (Issue #41).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Game code string.
+    ///
+    /// # Returns
+    /// * `bool` - True if storage entry was removed, false otherwise.
+    pub fn gc_stale_match(env: Env, game_code: String) -> bool {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let now = env.ledger().timestamp();
+        Self::gc_stale_match_internal(&env, &game_code, now)
+    }
+
+    fn gc_stale_match_internal(env: &Env, game_code: &String, now: u64) -> bool {
+        if let Some(m) = env.storage().persistent().get::<_, Match>(game_code) {
+            if (m.status == MatchStatus::Resolved || m.status == MatchStatus::Refunded)
+                && now >= m.created_at + STALE_MATCH_THRESHOLD_SECS
+            {
+                env.storage().persistent().remove(game_code);
+
+                let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
+                if env.storage().persistent().has(&pool_key) {
+                    env.storage().persistent().remove(&pool_key);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Creates a tournament prize pool.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `tournament_id` - Unique tournament identifier.
+    /// * `buy_in_amount` - Required buy-in amount per player.
+    /// * `prize_distribution` - Vector of prize amounts.
+    /// * `token` - Token address used for tournament pool.
     pub fn create_tournament(
         env: Env,
         tournament_id: String,
@@ -804,7 +1100,12 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &tournament_id);
     }
 
-    /// Join a tournament
+    /// Joins an open tournament.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `tournament_id` - Unique tournament identifier.
+    /// * `player` - Joining player address.
     pub fn join_tournament(env: Env, tournament_id: String, player: Address) {
         player.require_auth();
 
@@ -838,7 +1139,12 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &tournament_id);
     }
 
-    /// Complete tournament with final rankings and distribute prizes
+    /// Completes tournament with final rankings and distributes prize payouts.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `tournament_id` - Unique tournament identifier.
+    /// * `final_rankings` - Vector of ranked player addresses.
     pub fn complete_tournament(env: Env, tournament_id: String, final_rankings: Vec<Address>) {
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
@@ -876,7 +1182,14 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &tournament_id);
     }
 
-    /// Get tournament details
+    /// Retrieves tournament details.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `tournament_id` - Unique tournament identifier.
+    ///
+    /// # Returns
+    /// * `TournamentPrizePool` - Tournament details struct.
     pub fn get_tournament(env: Env, tournament_id: String) -> TournamentPrizePool {
         let tournament: TournamentPrizePool = env
             .storage()

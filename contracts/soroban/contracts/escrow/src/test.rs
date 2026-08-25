@@ -1208,3 +1208,132 @@ fn test_batch_blocked_by_dispute() {
     ];
     client.batch_resolve_matches(&resolutions);
 }
+
+#[test]
+fn test_gc_stale_matches() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000_000;
+    });
+
+    let game_code = String::from_str(&env, "GC_MATCH_1");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+    client.resolve_match(&game_code, &Some(player1.clone()));
+
+    // At 10 days later (<30 days), match is not stale yet.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000_000 + (10 * 86400);
+    });
+
+    let game_codes = vec![&env, game_code.clone()];
+    let cleaned = client.gc_stale_matches(&game_codes);
+    assert_eq!(cleaned, 0);
+
+    // At 31 days later (>=30 days), match becomes stale and is cleaned up.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000_000 + (31 * 86400);
+    });
+
+    let cleaned = client.gc_stale_matches(&game_codes);
+    assert_eq!(cleaned, 1);
+
+    // Match should now be removed from persistent storage.
+    let result = client.try_get_match(&game_code);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_gc_stale_single_match() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2_000_000;
+    });
+
+    let game_code = String::from_str(&env, "GC_SINGLE_1");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.request_cancellation(&game_code, &player1);
+
+    // Rejects GC while under 30 days old.
+    assert!(!client.gc_stale_match(&game_code));
+
+    // After 30 days, single match GC succeeds.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2_000_000 + (30 * 86400);
+    });
+
+    assert!(client.gc_stale_match(&game_code));
+    assert!(client.try_get_match(&game_code).is_err());
+}
+
+#[test]
+fn test_native_xlm_payment_wrapping() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (native_token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    // Set native XLM token address
+    client.set_native_xlm_address(&native_token.address);
+    assert_eq!(
+        client.get_native_xlm_address(),
+        Some(native_token.address.clone())
+    );
+
+    let game_code = String::from_str(&env, "NATIVE_XLM_GAME");
+    approve(&env, &native_token, &player1, &contract_id, 1000);
+    approve(&env, &native_token, &player2, &contract_id, 1000);
+
+    client.create_native_match(&game_code, &player1, &100);
+    client.join_native_match(&game_code, &player2);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Active);
+    assert_eq!(match_data.token, native_token.address);
+    assert_eq!(match_data.total_staked, 200);
+}
