@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from "react";
-import { MessageCircle, X, Send } from "lucide-react";
+import { MessageCircle, X, Send, Smile } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 
 const MAX_CHARS = 50;
+const QUICK_REACTIONS = ["Good luck!", "Nice move", "Well played", "Good game"];
+const EMOJI_REACTIONS = ["😀", "🔥", "👏", "🤝", "♟️", "🏆"];
 
 export default function ChatPanel() {
 	const playerColor = useGameStore((s) => s.playerColor);
@@ -14,6 +16,7 @@ export default function ChatPanel() {
 	const status = useGameStore((s) => s.status);
 
 	const [input, setInput] = useState("");
+	const [emojiOpen, setEmojiOpen] = useState(false);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
 
@@ -31,11 +34,21 @@ export default function ChatPanel() {
 		}
 	}, [chatOpen]);
 
-	const handleSend = () => {
-		const trimmed = input.trim().slice(0, MAX_CHARS);
+	const sendMessage = (message: string) => {
+		const trimmed = message.trim().slice(0, MAX_CHARS);
 		if (!trimmed) return;
 		sendChatMessage(trimmed);
 		setInput("");
+		setEmojiOpen(false);
+	};
+
+	const handleSend = () => {
+		sendMessage(input);
+	};
+
+	const appendEmoji = (emoji: string) => {
+		setInput((current) => `${current}${emoji}`.slice(0, MAX_CHARS));
+		inputRef.current?.focus();
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -109,8 +122,44 @@ export default function ChatPanel() {
 						<div ref={messagesEndRef} />
 					</div>
 
+					{/* Quick reactions */}
+					<div className="shrink-0 flex flex-wrap gap-1.5 px-2 py-2 border-t border-(--border) bg-(--bg)/50">
+						{QUICK_REACTIONS.map((reaction) => (
+							<button
+								key={reaction}
+								type="button"
+								onClick={() => sendMessage(reaction)}
+								className="rounded-full border border-(--border) px-2 py-1 text-[10px] text-(--text-secondary) hover:border-(--accent-primary)/60 hover:text-(--text) transition-colors"
+							>
+								{reaction}
+							</button>
+						))}
+					</div>
+
 					{/* Input */}
-					<div className="shrink-0 flex items-center gap-1.5 px-2 py-2 border-t border-(--border)">
+					<div className="relative shrink-0 flex items-center gap-1.5 px-2 py-2 border-t border-(--border)">
+						{emojiOpen && (
+							<div className="absolute bottom-full left-2 mb-2 grid grid-cols-6 gap-1 rounded-xl border border-(--border) bg-(--bg-secondary) p-2 shadow-xl">
+								{EMOJI_REACTIONS.map((emoji) => (
+									<button
+										key={emoji}
+										type="button"
+										onClick={() => appendEmoji(emoji)}
+										className="flex h-7 w-7 items-center justify-center rounded-lg text-sm hover:bg-(--bg-tertiary) transition-colors"
+									>
+										{emoji}
+									</button>
+								))}
+							</div>
+						)}
+						<button
+							type="button"
+							onClick={() => setEmojiOpen((open) => !open)}
+							className="p-1.5 rounded-lg border border-(--border) text-(--text-tertiary) hover:text-(--text) hover:border-(--accent-primary)/60 transition-colors shrink-0"
+							title="Add emoji"
+						>
+							<Smile size={12} />
+						</button>
 						<input
 							ref={inputRef}
 							type="text"

@@ -138,7 +138,7 @@ class GameModel {
 		) {
 			await supabase.from("games").update({ escrow_status: "resolving" }).eq("game_code", gameCode);
 			data = { ...data, escrow_status: "resolving" };
-			this._settleEscrow(gameCode, data, data.winner).catch((err) => {
+			this._settleEscrow(gameCode, data, data.winner, data.end_reason).catch((err) => {
 				console.error(`[Escrow] retry _settleEscrow for ${gameCode}:`, err.message);
 			});
 		}
@@ -287,7 +287,7 @@ class GameModel {
 
 		if (error) throw error;
 
-		this._settleEscrow(gameCode, data, winner).catch((err) => {
+		this._settleEscrow(gameCode, data, winner, "disconnect").catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
 
@@ -298,13 +298,18 @@ class GameModel {
 	/**
 	 * Resolve on-chain escrow for a finished game.
 	 * Players deposit XLM directly via the frontend, so we only need to call
-	 * resolveMatch (coordinator role). Checks on-chain state first.
+	 * resolveMatch (coordinator role) — or, for a disconnect auto-forfeit
+	 * (Issue #39), the dedicated forfeit_match entrypoint so the on-chain
+	 * event trail (Issue #24) distinguishes forfeits from normal
+	 * coordinator-adjudicated resolutions. Checks on-chain state first.
 	 *
-	 * @param {string} gameCode - human-readable game code
-	 * @param {object} dbGame   - full game row from DB (needs player addresses)
-	 * @param {string} winner   - "white" | "black" | "draw"
+	 * @param {string} gameCode  - human-readable game code
+	 * @param {object} dbGame    - full game row from DB (needs player addresses)
+	 * @param {string} winner    - "white" | "black" | "draw"
+	 * @param {string} [endReason] - dbGame.end_reason, e.g. "disconnect" routes
+	 *                               through forfeit_match instead of resolve_match
 	 */
-	async _settleEscrow(gameCode, dbGame, winner) {
+	async _settleEscrow(gameCode, dbGame, winner, endReason = null) {
 		if (!dbGame.wager_amount) return; // free game, no escrow
 
 		// ── 1. Fetch on-chain match state ────────────────────────────────────
@@ -352,6 +357,19 @@ class GameModel {
 			let receipt;
 			if (winner === "draw") {
 				receipt = await escrowService.resolveAsDraw(gameCode);
+			} else if (endReason === "disconnect") {
+				// Disconnect auto-forfeit (Issue #39): route through the contract's
+				// dedicated forfeit_match entrypoint instead of resolve_match, using
+				// the on-chain address of the *disconnected* player (the losing side).
+				const forfeitingAddress = winner === "white" ? onChain.player2 : onChain.player1;
+
+				if (!forfeitingAddress) {
+					console.error(`[Escrow] ${gameCode} — no on-chain address for forfeiting player (winner="${winner}")`);
+					await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+					return;
+				}
+
+				receipt = await escrowService.forfeitMatch(gameCode, forfeitingAddress);
 			} else {
 				// Use the on-chain player addresses (from getMatch above) rather than
 				// the DB addresses. The contract's resolveMatch checks
@@ -642,6 +660,149 @@ class GameModel {
 
 		if (error) throw new Error(error.message);
 		return data || [];
+	}
+
+	async getGameHistory(filters = {}) {
+		const {
+			playerAddress = null,
+			status = null,
+			dateFrom = null,
+			dateTo = null,
+			page = 1,
+			pageSize = 20,
+			sortBy = "created_at",
+			sortOrder = "desc",
+		} = filters;
+
+		const pageNum = Math.max(1, parseInt(page) || 1);
+		const size = Math.max(1, Math.min(100, parseInt(pageSize) || 20));
+		const offset = (pageNum - 1) * size;
+
+		let query = supabase
+			.from("games")
+			.select(
+				"id, game_code, game_type, status, player_white_address, player_black_address, wager_amount, winner, created_at, updated_at, move_count, end_reason",
+				{ count: "exact" }
+			);
+
+		if (playerAddress) {
+			query = query.or(`player_white_address.eq.${playerAddress},player_black_address.eq.${playerAddress}`);
+		}
+
+		if (status) {
+			query = query.eq("status", status);
+		}
+
+		if (dateFrom) {
+			query = query.gte("created_at", dateFrom);
+		}
+
+		if (dateTo) {
+			query = query.lte("created_at", dateTo);
+		}
+
+		const sortDirection = sortOrder === "asc" ? true : false;
+		query = query.order(sortBy, { ascending: sortDirection });
+		query = query.range(offset, offset + size - 1);
+
+		const { data, error, count } = await query;
+
+		if (error) throw error;
+
+		const totalPages = Math.ceil(count / size);
+
+		return {
+			data: data || [],
+			pagination: {
+				page: pageNum,
+				pageSize: size,
+				total: count,
+				totalPages,
+				hasNextPage: pageNum < totalPages,
+				hasPreviousPage: pageNum > 1,
+			},
+		};
+	}
+
+	async requestUndoMove(gameCode, playerColor) {
+		const game = await this.getGame(gameCode);
+
+		if (!game) throw new Error("Game not found");
+		if (game.status !== "active") throw new Error("Cannot request undo on inactive game");
+		if (game.wager_amount) throw new Error("Cannot request undo on wagered matches");
+		if (!game.last_move) throw new Error("No moves to undo");
+
+		const { data, error } = await supabase
+			.from("games")
+			.update({ undo_request: playerColor, undo_request_at: new Date().toISOString() })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+		return data;
+	}
+
+	async acceptUndoMove(gameCode, playerColor) {
+		const game = await this.getGame(gameCode);
+
+		if (!game) throw new Error("Game not found");
+		if (game.status !== "active") throw new Error("Cannot accept undo on inactive game");
+		if (game.wager_amount) throw new Error("Cannot accept undo on wagered matches");
+		if (!game.undo_request) throw new Error("No undo request pending");
+		if (game.undo_request === playerColor) throw new Error("Cannot accept your own undo request");
+		if (!game.last_move) throw new Error("No moves to undo");
+
+		const { data: moves, error: movesError } = await supabase
+			.from("moves")
+			.select("*")
+			.eq("game_id", game.id)
+			.order("move_number", { ascending: false })
+			.limit(2);
+
+		if (movesError) throw movesError;
+		if (!moves || moves.length === 0) throw new Error("No moves found to undo");
+
+		const moveToUndo = moves[0];
+		const previousState = moves.length > 1 ? moves[1].board_state_after : chessEngine.initBoard();
+		const previousTurn = moveToUndo.player === "white" ? "black" : "white";
+
+		const { data: updatedGame, error: updateError } = await supabase
+			.from("games")
+			.update({
+				board_state: previousState,
+				current_turn: previousTurn,
+				move_count: game.move_count - 1,
+				last_move: moves.length > 1 ? {
+					from: moves[1].from_position,
+					to: moves[1].to_position,
+					piece: moves[1].piece,
+				} : null,
+				in_check: false,
+				undo_request: null,
+				undo_request_at: null,
+			})
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (updateError) throw updateError;
+
+		await supabase.from("moves").delete().eq("id", moveToUndo.id);
+
+		return updatedGame;
+	}
+
+	async rejectUndoMove(gameCode) {
+		const { data, error } = await supabase
+			.from("games")
+			.update({ undo_request: null, undo_request_at: null })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+		return data;
 	}
 
 	generateGameCode() {

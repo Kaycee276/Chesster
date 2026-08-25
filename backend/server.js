@@ -7,8 +7,12 @@ const gameRoutes = require("./routes/gameRoutes");
 const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
 const botRoutes = require("./routes/botRoutes");
+const healthRoutes = require("./routes/healthRoutes");
 const timerService = require("./services/timerService");
+const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
+const logger = require("./utils/logger");
+const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
 
 const app = express();
 const server = http.createServer(app);
@@ -24,6 +28,9 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3001;
 
+// Apply structured logging middleware
+app.use(logger.requestMiddleware());
+
 app.use(
   cors({
     origin: CORS_ORIGIN,
@@ -32,14 +39,24 @@ app.use(
 );
 app.use(express.json());
 
+// Mount routes
 app.use("/api", gameRoutes);
 app.use("/api/escrow", escrowRoutes);
 app.use("/api", authRoutes);
 app.use("/api", botRoutes);
+app.use("/api", healthRoutes);
 
+// Legacy health endpoint
 app.get("/health", (req, res) => {
+  logger.info("Legacy health endpoint called");
   res.json({ status: "ok", message: "Chesster backend running" });
 });
+
+// Global error handler (must be registered after all routes)
+app.use(errorHandler);
+
+// Install global process handlers for unhandled rejections / uncaught exceptions
+installGlobalHandlers();
 
 // Tracks which color (if any) each connected socket represents, so we know
 // what to do on disconnect: gameCode -> { white: { socketId, status }, black: { socketId, status } }
@@ -156,6 +173,7 @@ io.on("connection", (socket) => {
 
 app.set("io", io);
 timerService.init(io);
+cronService.start();
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Chesster backend running on port ${PORT}`);

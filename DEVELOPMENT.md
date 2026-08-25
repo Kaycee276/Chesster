@@ -6,7 +6,23 @@ This document outlines the local development setup, CI verification checks, and 
 
 ## 🛠️ Local Setup & CI Checks
 
-### 1. Root Installation
+### 1. Node.js Version
+
+This project requires **Node.js 20.18.0** or higher. The `.nvmrc` file at the repository root specifies the exact version used in CI.
+
+If you use [nvm](https://github.com/nvm-sh/nvm), run the following command to switch to the correct version:
+
+```bash
+nvm use
+```
+
+To install the required version if you don't have it:
+
+```bash
+nvm install
+```
+
+### 2. Root Installation
 
 Run `npm install` at the repository root. This will install workspace tooling (such as **Husky** and **lint-staged**) and automatically register Git hooks via the `prepare` script in `package.json`.
 
@@ -14,7 +30,7 @@ Run `npm install` at the repository root. This will install workspace tooling (s
 npm install
 ```
 
-### 2. Service Dependencies & Development Servers
+### 3. Service Dependencies & Development Servers
 
 - **Frontend**:
   ```bash
@@ -34,7 +50,7 @@ npm install
   cargo build
   ```
 
-### 3. Running Local CI Checks
+### 4. Running Local CI Checks
 
 Before opening a Pull Request, make sure all local checks pass:
 

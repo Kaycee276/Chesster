@@ -124,3 +124,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_wallet_address ON users(wallet_address);
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all operations on users" ON users FOR ALL USING (true);
+
+-- Migration: undo/takeback request support (feat #54)
+ALTER TABLE games ADD COLUMN IF NOT EXISTS undo_request VARCHAR(10);
+ALTER TABLE games ADD COLUMN IF NOT EXISTS undo_request_at TIMESTAMP WITH TIME ZONE;
