@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use proptest::prelude::*;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
@@ -845,6 +846,8 @@ fn test_events_emitted_on_lifecycle_transitions() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_EVENTS");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
 
     approve(&env, &token, &player1, &contract_id, 1000);
     approve(&env, &token, &player2, &contract_id, 1000);
@@ -915,6 +918,7 @@ fn test_event_emitted_on_refund() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_EVENT_REFUND");
+    approve(&env, &token, &player1, &contract_id, 1000);
 
     env.ledger().with_mut(|li| {
         li.timestamp = 1000;

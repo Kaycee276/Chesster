@@ -505,8 +505,9 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::TokenAlreadyWhitelisted);
         }
 
-        tokens.push_back(token);
+        tokens.push_back(token.clone());
         env.storage().instance().set(&key, &tokens);
+        env.storage().instance().set(&(Symbol::new(&env, "sup_tok"), token), &true);
     }
 
     /// Admin-gated: remove a token from the wager-asset whitelist (Issue #40).
@@ -532,6 +533,7 @@ impl ChessterEscrow {
             }
         }
         env.storage().instance().set(&key, &filtered);
+        env.storage().instance().remove(&(Symbol::new(&env, "sup_tok"), token));
     }
 
     /// Whether a token is currently whitelisted as a supported wager asset (Issue #40).
