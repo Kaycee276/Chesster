@@ -1,0 +1,39 @@
+config:
+  target: "http://localhost:3000"
+  phases:
+    - duration: 30
+      arrivalRate: 5
+      rampTo: 25
+      name: "Warm-up load"
+    - duration: 60
+      arrivalRate: 25
+      rampTo: 60
+      name: "Stress load"
+  defaults:
+    headers:
+      Content-Type: application/json
+
+scenarios:
+  - name: "socket room traffic"
+    weight: 100
+    engine: "ws"
+    flow:
+      - connect: "ws://localhost:3000/socket.io/?EIO=4&transport=websocket"
+      - think: 1
+      - emit:
+          event: "join_game"
+          data:
+            room: "room-{{ $randomString() }}"
+            player: "player-{{ $randomString() }}"
+      - think: 2
+      - emit:
+          event: "move"
+          data:
+            from: [6, 4]
+            to: [4, 4]
+      - think: 3
+      - emit:
+          event: "leave_game"
+          data:
+            room: "room-{{ $randomString() }}"
+            player: "player-{{ $randomString() }}"

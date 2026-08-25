@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use proptest::prelude::*;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
@@ -616,8 +617,8 @@ fn test_create_match_succeeds_after_whitelisting() {
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
 
-    approve(&env, &token, &player1, &contract_id, 1000);
     let game_code = String::from_str(&env, "GAME_WL_OK");
+    approve(&env, &token, &player1, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
 
     let match_data = client.get_match(&game_code);
@@ -643,6 +644,7 @@ fn test_create_match_rejects_after_delisting() {
     client.remove_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_DELISTED");
+    approve(&env, &token, &player1, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
 }
 
@@ -670,9 +672,9 @@ fn test_forfeit_match_pays_non_forfeiting_player() {
     client.init(&coordinator, &500); // 5% fee
     client.add_whitelisted_token(&token.address);
 
+    let game_code = String::from_str(&env, "GAME_FORFEIT");
     approve(&env, &token, &player1, &contract_id, 1000);
     approve(&env, &token, &player2, &contract_id, 1000);
-    let game_code = String::from_str(&env, "GAME_FORFEIT");
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -709,9 +711,9 @@ fn test_forfeit_match_other_color() {
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
 
+    let game_code = String::from_str(&env, "GAME_FORFEIT_2");
     approve(&env, &token, &player1, &contract_id, 1000);
     approve(&env, &token, &player2, &contract_id, 1000);
-    let game_code = String::from_str(&env, "GAME_FORFEIT_2");
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -746,6 +748,8 @@ fn test_forfeit_match_rejects_non_participant() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_FORFEIT_BAD");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -772,6 +776,7 @@ fn test_forfeit_match_rejects_pending_match() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_FORFEIT_PENDING");
+    approve(&env, &token, &player1, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     // Player 2 never joined — match is still Pending, not Active.
 
@@ -800,10 +805,10 @@ fn test_forfeit_match_settles_side_pool() {
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
 
+    let game_code = String::from_str(&env, "GAME_FORFEIT_BET");
     approve(&env, &token, &player1, &contract_id, 1000);
     approve(&env, &token, &player2, &contract_id, 1000);
-    approve(&env, &token, &spectator, &contract_id, 1000);
-    let game_code = String::from_str(&env, "GAME_FORFEIT_BET");
+    approve(&env, &token, &spectator, &contract_id, 500);
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
@@ -840,9 +845,12 @@ fn test_events_emitted_on_lifecycle_transitions() {
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
 
+    let game_code = String::from_str(&env, "GAME_EVENTS");
     approve(&env, &token, &player1, &contract_id, 1000);
     approve(&env, &token, &player2, &contract_id, 1000);
-    let game_code = String::from_str(&env, "GAME_EVENTS");
+
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
     client.create_match(&game_code, &player1, &token.address, &100);
     let events_after_create = env.events().all();
     assert!(events_after_create
@@ -850,12 +858,14 @@ fn test_events_emitted_on_lifecycle_transitions() {
         .any(|(id, _, _)| id == contract_id));
 
     client.join_match(&game_code, &player2);
-    let events_after_join_len = env.events().all().len();
-    assert!(events_after_join_len >= events_after_create.len());
+    let events_after_join = env.events().all();
+    assert!(events_after_join.iter().any(|(id, _, _)| id == contract_id));
 
     client.resolve_match(&game_code, &Some(player1.clone()));
-    let events_after_resolve_len = env.events().all().len();
-    assert!(events_after_resolve_len >= events_after_join_len);
+    let events_after_resolve = env.events().all();
+    assert!(events_after_resolve
+        .iter()
+        .any(|(id, _, _)| id == contract_id));
 }
 
 #[test]
@@ -878,17 +888,15 @@ fn test_event_emitted_on_forfeit() {
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
 
+    let game_code = String::from_str(&env, "GAME_EVENT_FORFEIT");
     approve(&env, &token, &player1, &contract_id, 1000);
     approve(&env, &token, &player2, &contract_id, 1000);
-    let game_code = String::from_str(&env, "GAME_EVENT_FORFEIT");
     client.create_match(&game_code, &player1, &token.address, &100);
     client.join_match(&game_code, &player2);
 
-    let events_before = env.events().all().len();
     client.forfeit_match(&game_code, &player1);
-    let events_after = env.events().all().len();
-
-    assert!(events_after > events_before);
+    let events_after = env.events().all();
+    assert!(events_after.iter().any(|(id, _, _)| id == contract_id));
 }
 
 #[test]
@@ -910,6 +918,7 @@ fn test_event_emitted_on_refund() {
     client.add_whitelisted_token(&token.address);
 
     let game_code = String::from_str(&env, "GAME_EVENT_REFUND");
+    approve(&env, &token, &player1, &contract_id, 1000);
 
     env.ledger().with_mut(|li| {
         li.timestamp = 1000;
@@ -921,11 +930,138 @@ fn test_event_emitted_on_refund() {
         li.timestamp = 4601;
     });
 
-    let events_before = env.events().all().len();
     client.refund_after_timeout(&game_code);
-    let events_after = env.events().all().len();
+    let events_after = env.events().all();
+    assert!(events_after.iter().any(|(id, _, _)| id == contract_id));
+}
 
-    assert!(events_after >= events_before);
+#[test]
+fn test_gc_stale_matches() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000_000;
+    });
+
+    let game_code = String::from_str(&env, "GC_MATCH_1");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+    client.resolve_match(&game_code, &Some(player1.clone()));
+
+    // At 10 days later (<30 days), match is not stale yet.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000_000 + (10 * 86400);
+    });
+
+    let game_codes = vec![&env, game_code.clone()];
+    let cleaned = client.gc_stale_matches(&game_codes);
+    assert_eq!(cleaned, 0);
+
+    // At 31 days later (>=30 days), match becomes stale and is cleaned up.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000_000 + (31 * 86400);
+    });
+
+    let cleaned = client.gc_stale_matches(&game_codes);
+    assert_eq!(cleaned, 1);
+
+    // Match should now be removed from persistent storage.
+    let result = client.try_get_match(&game_code);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_gc_stale_single_match() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2_000_000;
+    });
+
+    let game_code = String::from_str(&env, "GC_SINGLE_1");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.request_cancellation(&game_code, &player1);
+
+    // Rejects GC while under 30 days old.
+    assert!(!client.gc_stale_match(&game_code));
+
+    // After 30 days, single match GC succeeds.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2_000_000 + (30 * 86400);
+    });
+
+    assert!(client.gc_stale_match(&game_code));
+    assert!(client.try_get_match(&game_code).is_err());
+}
+
+#[test]
+fn test_native_xlm_payment_wrapping() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (native_token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    // Set native XLM token address
+    client.set_native_xlm_address(&native_token.address);
+    assert_eq!(
+        client.get_native_xlm_address(),
+        Some(native_token.address.clone())
+    );
+
+    let game_code = String::from_str(&env, "NATIVE_XLM_GAME");
+    approve(&env, &native_token, &player1, &contract_id, 1000);
+    approve(&env, &native_token, &player2, &contract_id, 1000);
+
+    client.create_native_match(&game_code, &player1, &100);
+    client.join_native_match(&game_code, &player2);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Active);
+    assert_eq!(match_data.token, native_token.address);
+    assert_eq!(match_data.total_staked, 200);
 }
 
 // ---------------------------------------------------------------------------
