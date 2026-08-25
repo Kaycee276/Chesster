@@ -45,6 +45,50 @@ describe("Chess Engine", () => {
       const result = chessEngine.isValidMove(board, [7, 1], [5, 2], "white", null);
       expect(result.valid).toBe(true);
     });
+
+    it("should allow a legal en passant capture", () => {
+      const customBoard = chessEngine.initBoard().map(row => [...row]);
+      customBoard[3][5] = "P";
+      customBoard[3][4] = "p";
+      customBoard[2][5] = ".";
+      customBoard[2][4] = ".";
+
+      const lastMove = { from: [1, 4], to: [3, 4], piece: "p" };
+      const result = chessEngine.isValidMove(customBoard, [3, 5], [2, 4], "white", lastMove);
+
+      expect(result.valid).toBe(true);
+      expect(result.enPassant).toBe(true);
+    });
+
+    it("should reject castling when the king is currently in check", () => {
+      const customBoard = [
+        [".", ".", ".", ".", ".", ".", ".", "."],
+        [".", ".", ".", ".", ".", ".", ".", "."],
+        [".", ".", ".", ".", ".", ".", ".", "."],
+        [".", ".", ".", ".", ".", ".", ".", "."],
+        [".", ".", ".", ".", ".", ".", ".", "."],
+        [".", ".", ".", ".", ".", ".", ".", "."],
+        [".", ".", ".", ".", ".", ".", ".", "."],
+        [".", ".", ".", ".", "K", ".", ".", "R"]
+      ];
+      customBoard[0][4] = "r";
+
+      const result = chessEngine.isValidMove(customBoard, [7, 4], [7, 6], "white", null);
+      expect(result.valid).toBe(false);
+    });
+
+    it("should promote a pawn to a queen on the last rank", () => {
+      const customBoard = chessEngine.initBoard().map(row => [...row]);
+      customBoard[1][0] = ".";
+      customBoard[1][0] = "P";
+      customBoard[0][0] = ".";
+
+      const result = chessEngine.isValidMove(customBoard, [1, 0], [0, 0], "white", null);
+      expect(result.valid).toBe(true);
+
+      const movedBoard = chessEngine.makeMove(customBoard, [1, 0], [0, 0], null, false);
+      expect(movedBoard[0][0]).toBe("Q");
+    });
   });
 
   describe("makeMove", () => {

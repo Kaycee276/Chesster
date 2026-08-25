@@ -39,6 +39,12 @@ pub enum EscrowError {
     TokenAlreadyWhitelisted = 19,
     NotForfeitable = 20,
     InvalidForfeitPlayer = 21,
+    DisputeTimeLockActive = 22,
+    InsufficientAllowance = 23,
+    UnsupportedToken = 24,
+    AlreadyDisputed = 25,
+    DisputeNotFound = 26,
+    InvalidBatchSize = 27,
 }
 
 #[contracttype]
@@ -312,8 +318,9 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::TokenAlreadyWhitelisted);
         }
 
-        tokens.push_back(token);
+        tokens.push_back(token.clone());
         env.storage().instance().set(&key, &tokens);
+        env.storage().instance().set(&(Symbol::new(&env, "sup_tok"), token), &true);
     }
 
     /// Admin-gated: remove a token from the wager-asset whitelist.
@@ -335,6 +342,7 @@ impl ChessterEscrow {
             }
         }
         env.storage().instance().set(&key, &filtered);
+        env.storage().instance().remove(&(Symbol::new(&env, "sup_tok"), token));
     }
 
     /// Whether a token is currently whitelisted as a supported wager asset.
@@ -1035,7 +1043,8 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::DisputeTimeLockActive);
         }
 
-        Self::settle_match(&env, &coordinator, &game_code, &winner);
+        let mut m = Self::load_match(&env, &game_code);
+        Self::settle_match(&env, &coordinator, &game_code, &mut m, winner.clone());
 
         dispute.status = DisputeStatus::Settled;
         env.storage().persistent().set(&key, &dispute);
@@ -1056,11 +1065,13 @@ impl ChessterEscrow {
 
         for resolution in resolutions.iter() {
             Self::ensure_dispute_not_locked(&env, &resolution.game_code);
+            let mut m = Self::load_match(&env, &resolution.game_code);
             Self::settle_match(
                 &env,
                 &coordinator,
                 &resolution.game_code,
-                &resolution.winner,
+                &mut m,
+                resolution.winner.clone(),
             );
         }
     }
