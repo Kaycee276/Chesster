@@ -61,7 +61,10 @@ function init() {
 }
 
 function sleep(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+	return new Promise((resolve) => {
+		const t = setTimeout(resolve, ms);
+		if (typeof t.unref === "function") t.unref(); // don't hold the process open on a pending retry
+	});
 }
 
 /**
