@@ -13,6 +13,7 @@ const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
+const { geoBlock } = require("./middleware/geoBlock");
 
 const app = express();
 const server = http.createServer(app);
@@ -38,6 +39,7 @@ app.use(
   }),
 );
 app.use(express.json());
+app.use(geoBlock);
 
 // Mount routes
 app.use("/api", gameRoutes);
