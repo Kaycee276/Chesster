@@ -14,6 +14,8 @@ pub const DISPUTE_TIMELOCK_SECS: u64 = 172_800;
 pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
 /// Duration (in seconds) after which settled or refunded matches become eligible for garbage collection (30 days).
 pub const STALE_MATCH_THRESHOLD_SECS: u64 = 2_592_000;
+/// Default duration (in seconds) after which a pending or active match expires (1 hour).
+pub const MATCH_EXPIRATION_SECS: u64 = 3_600;
 
 /// Errors returned by the Chesster Escrow smart contract.
 #[contracterror]
@@ -76,6 +78,8 @@ pub enum EscrowError {
     InvalidBatchSize = 26,
     /// Match is not stale (must be resolved/refunded and >30 days old).
     MatchNotStale = 27,
+    /// Match has expired based on ledger timestamp timeout.
+    MatchExpired = 28,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -266,6 +270,12 @@ pub struct MatchCancelledEvent {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MatchRefundedEvent {
+    pub game_code: String,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchExpiredEvent {
     pub game_code: String,
 }
 
@@ -507,7 +517,9 @@ impl ChessterEscrow {
 
         tokens.push_back(token.clone());
         env.storage().instance().set(&key, &tokens);
-        env.storage().instance().set(&(Symbol::new(&env, "sup_tok"), token), &true);
+        env.storage()
+            .instance()
+            .set(&(Symbol::new(&env, "sup_tok"), token), &true);
     }
 
     /// Admin-gated: remove a token from the wager-asset whitelist (Issue #40).
@@ -533,7 +545,9 @@ impl ChessterEscrow {
             }
         }
         env.storage().instance().set(&key, &filtered);
-        env.storage().instance().remove(&(Symbol::new(&env, "sup_tok"), token));
+        env.storage()
+            .instance()
+            .remove(&(Symbol::new(&env, "sup_tok"), token));
     }
 
     /// Whether a token is currently whitelisted as a supported wager asset (Issue #40).
@@ -747,6 +761,12 @@ impl ChessterEscrow {
         if m.status != MatchStatus::Pending {
             panic_with_error!(&env, EscrowError::MatchNotPending);
         }
+
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() >= m.created_at + timeout {
+            panic_with_error!(&env, EscrowError::MatchExpired);
+        }
+
         if m.player2.is_some() {
             panic_with_error!(&env, EscrowError::AlreadyJoined);
         }
@@ -817,6 +837,11 @@ impl ChessterEscrow {
 
         if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
             panic_with_error!(&env, EscrowError::SideBetClosed);
+        }
+
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() >= m.created_at + timeout {
+            panic_with_error!(&env, EscrowError::MatchExpired);
         }
 
         if predicted_winner != m.player1 && Some(predicted_winner.clone()) != m.player2 {
@@ -1088,7 +1113,166 @@ impl ChessterEscrow {
         admin_fee
     }
 
-    /// Refunds match wagers after 1-hour timeout period.
+    /// Configures the match expiration timeout period in seconds (Coordinator only).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `timeout_secs` - Timeout duration in seconds (must be > 0).
+    pub fn set_match_timeout(env: Env, timeout_secs: u64) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        if timeout_secs == 0 {
+            panic_with_error!(&env, EscrowError::InvalidWager);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "timeout"), &timeout_secs);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Retrieves current match expiration timeout period in seconds.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `u64` - Match timeout duration in seconds (defaults to `MATCH_EXPIRATION_SECS`).
+    pub fn get_match_timeout(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "timeout"))
+            .unwrap_or(MATCH_EXPIRATION_SECS)
+    }
+
+    /// Checks whether a match has expired based on current ledger timestamp.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `bool` - True if match is in Pending or Active status and ledger timestamp >= created_at + timeout.
+    pub fn is_match_expired(env: Env, game_code: String) -> bool {
+        let m = Self::load_match(&env, &game_code);
+        if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
+            return false;
+        }
+        let timeout = Self::get_match_timeout(env.clone());
+        env.ledger().timestamp() >= m.created_at + timeout
+    }
+
+    /// Retrieves ledger expiration timestamp for a match.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `u64` - Expiration timestamp (`created_at + timeout`).
+    pub fn get_match_expiration(env: Env, game_code: String) -> u64 {
+        let m = Self::load_match(&env, &game_code);
+        let timeout = Self::get_match_timeout(env.clone());
+        m.created_at + timeout
+    }
+
+    /// Allows a match player (player1 or player2) to claim refund after expiration timeout (Issue #21).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player` - Address of player claiming refund (must be participant).
+    pub fn claim_refund(env: Env, game_code: String, player: Address) {
+        player.require_auth();
+
+        let mut m = Self::load_match(&env, &game_code);
+
+        if player != m.player1 && Some(player.clone()) != m.player2 {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+
+        if m.status == MatchStatus::Resolved || m.status == MatchStatus::Refunded {
+            panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
+        }
+
+        Self::ensure_dispute_not_locked(&env, &game_code);
+
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() < m.created_at + timeout {
+            panic_with_error!(&env, EscrowError::TimeoutNotReached);
+        }
+
+        Self::execute_refund(&env, &game_code, &mut m);
+    }
+
+    /// Auto-claims refund on an expired match by coordinator or participant (Issue #21).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `caller` - Caller address (must be coordinator or match participant).
+    pub fn auto_claim_refund(env: Env, game_code: String, caller: Address) {
+        caller.require_auth();
+
+        let mut m = Self::load_match(&env, &game_code);
+        let coordinator = Self::get_coordinator(env.clone());
+
+        if caller != coordinator && caller != m.player1 && Some(caller.clone()) != m.player2 {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+
+        if m.status == MatchStatus::Resolved || m.status == MatchStatus::Refunded {
+            panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
+        }
+
+        Self::ensure_dispute_not_locked(&env, &game_code);
+
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() < m.created_at + timeout {
+            panic_with_error!(&env, EscrowError::TimeoutNotReached);
+        }
+
+        Self::execute_refund(&env, &game_code, &mut m);
+    }
+
+    /// Coordinator batch auto-claims refunds for multiple expired matches (Issue #21).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_codes` - Vector of match game codes to evaluate and refund if expired.
+    ///
+    /// # Returns
+    /// * `u32` - Number of expired matches successfully refunded.
+    pub fn auto_claim_expired_matches(env: Env, game_codes: Vec<String>) -> u32 {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let mut count: u32 = 0;
+        let now = env.ledger().timestamp();
+        let timeout = Self::get_match_timeout(env.clone());
+
+        for game_code in game_codes.iter() {
+            if let Some(mut m) = env.storage().persistent().get::<_, Match>(&game_code) {
+                if (m.status == MatchStatus::Pending || m.status == MatchStatus::Active)
+                    && now >= m.created_at + timeout
+                {
+                    let dispute_key = Self::dispute_key(&env, &game_code);
+                    if let Some(d) = env.storage().persistent().get::<_, Dispute>(&dispute_key) {
+                        if d.status == DisputeStatus::Locked {
+                            continue;
+                        }
+                    }
+
+                    Self::execute_refund(&env, &game_code, &mut m);
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Refunds match wagers after match expiration timeout period.
     ///
     /// # Arguments
     /// * `env` - Environment reference.
@@ -1102,34 +1286,45 @@ impl ChessterEscrow {
 
         Self::ensure_dispute_not_locked(&env, &game_code);
 
-        if env.ledger().timestamp() < m.created_at + 3600 {
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() < m.created_at + timeout {
             panic_with_error!(&env, EscrowError::TimeoutNotReached);
         }
 
-        let token_client = token::Client::new(&env, &m.token);
+        Self::execute_refund(&env, &game_code, &mut m);
+    }
+
+    fn execute_refund(env: &Env, game_code: &String, m: &mut Match) {
+        let token_client = token::Client::new(env, &m.token);
 
         token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
         if let Some(p2) = m.player2.clone() {
             token_client.transfer(&env.current_contract_address(), &p2, &m.wager_amount);
         }
 
-        let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
+        let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
         if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
             for bet in pool.bets.iter() {
                 token_client.transfer(&env.current_contract_address(), &bet.spectator, &bet.amount);
             }
-            Self::bump_entry_ttl(&env, &pool_key);
+            Self::bump_entry_ttl(env, &pool_key);
         }
 
         m.status = MatchStatus::Refunded;
-        env.storage().persistent().set(&game_code, &m);
-        Self::bump_entry_ttl(&env, &game_code);
+        env.storage().persistent().set(game_code, m);
+        Self::bump_entry_ttl(env, game_code);
 
-        Self::remove_from_active_lists(&env, &game_code, &m);
+        Self::remove_from_active_lists(env, game_code, m);
 
         env.events().publish(
             (symbol_short!("refunded"), game_code.clone()),
             MatchRefundedEvent {
+                game_code: game_code.clone(),
+            },
+        );
+        env.events().publish(
+            (symbol_short!("expired"), game_code.clone()),
+            MatchExpiredEvent {
                 game_code: game_code.clone(),
             },
         );
