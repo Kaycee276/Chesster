@@ -1063,3 +1063,90 @@ fn test_native_xlm_payment_wrapping() {
     assert_eq!(match_data.token, native_token.address);
     assert_eq!(match_data.total_staked, 200);
 }
+
+#[test]
+fn test_cancel_pending_match_unjoined() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "UNJOINED_CANCEL_GAME");
+    approve(&env, &token, &player1, &contract_id, 1000);
+
+    client.create_match(&game_code, &player1, &token.address, &200);
+
+    assert_eq!(token.balance(&player1), 800);
+    assert_eq!(token.balance(&contract_id), 200);
+
+    // Player 1 instantly cancels pending match before Player 2 joins
+    client.cancel_pending_match(&game_code, &player1);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Refunded);
+
+    // Player 1 deposit refunded in full
+    assert_eq!(token.balance(&player1), 1000);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_cooperative_mutual_draw_resolution() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "MUTUAL_DRAW_GAME");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+
+    client.create_match(&game_code, &player1, &token.address, &300);
+    client.join_match(&game_code, &player2);
+
+    assert_eq!(client.get_draw_status(&game_code), (false, false));
+
+    // Player 1 requests draw
+    client.request_draw(&game_code, &player1);
+    assert_eq!(client.get_draw_status(&game_code), (true, false));
+
+    let match_data_pending = client.get_match(&game_code);
+    assert_eq!(match_data_pending.status, MatchStatus::Active);
+
+    // Player 2 requests draw -> triggers 50/50 refund draw resolution
+    client.request_draw(&game_code, &player2);
+    assert_eq!(client.get_draw_status(&game_code), (true, true));
+
+    let match_data_resolved = client.get_match(&game_code);
+    assert_eq!(match_data_resolved.status, MatchStatus::Resolved);
+    assert_eq!(match_data_resolved.winner, None);
+
+    // 100% refund of wagers to both players (300 to P1, 300 to P2)
+    assert_eq!(token.balance(&player1), 1000);
+    assert_eq!(token.balance(&player2), 1000);
+    assert_eq!(token.balance(&contract_id), 0);
+}
