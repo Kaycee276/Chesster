@@ -232,6 +232,10 @@ pub struct Match {
     pub cancel_requested_player1: bool,
     /// Mutual cancellation request indicator for Player 2.
     pub cancel_requested_player2: bool,
+    /// Cooperative draw request indicator for Player 1.
+    pub draw_requested_player1: bool,
+    /// Cooperative draw request indicator for Player 2.
+    pub draw_requested_player2: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1034,8 @@ impl ChessterEscrow {
             nonce: next_nonce,
             cancel_requested_player1: false,
             cancel_requested_player2: false,
+            draw_requested_player1: false,
+            draw_requested_player2: false,
         };
 
         env.storage().persistent().set(&game_code, &m);
@@ -1272,6 +1278,111 @@ impl ChessterEscrow {
 
         env.storage().persistent().set(&game_code, &m);
         Self::bump_entry_ttl(&env, &game_code);
+    }
+
+    /// Instantly cancels an unjoined pending match created by Player 1 and returns deposit (Issue #20).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player1` - Creator player address.
+    pub fn cancel_pending_match(env: Env, game_code: String, player1: Address) {
+        player1.require_auth();
+
+        let mut m = Self::load_match(&env, &game_code);
+
+        if m.player1 != player1 {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+        if m.status != MatchStatus::Pending {
+            panic_with_error!(&env, EscrowError::MatchNotPending);
+        }
+        if m.player2.is_some() {
+            panic_with_error!(&env, EscrowError::AlreadyJoined);
+        }
+
+        let token_client = token::Client::new(&env, &m.token);
+        token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
+
+        let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
+        if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
+            for bet in pool.bets.iter() {
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &bet.spectator,
+                    &bet.amount,
+                );
+            }
+            Self::bump_entry_ttl(&env, &pool_key);
+        }
+
+        m.status = MatchStatus::Refunded;
+        Self::remove_from_active_lists(&env, &game_code, &m);
+
+        env.storage().persistent().set(&game_code, &m);
+        Self::bump_entry_ttl(&env, &game_code);
+
+        env.events().publish(
+            (symbol_short!("cancelled"), game_code.clone()),
+            MatchCancelledEvent {
+                game_code: game_code.clone(),
+            },
+        );
+    }
+
+    /// Requests a cooperative mutual draw for an active match (Issue #20).
+    /// When both players agree to a draw, the match is resolved into a 50/50 refund draw.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player` - Address of requesting player.
+    pub fn request_draw(env: Env, game_code: String, player: Address) {
+        player.require_auth();
+
+        let mut m = Self::load_match(&env, &game_code);
+
+        if m.status != MatchStatus::Active {
+            panic_with_error!(&env, EscrowError::MatchNotActive);
+        }
+
+        if player == m.player1 {
+            m.draw_requested_player1 = true;
+        } else if Some(player.clone()) == m.player2 {
+            m.draw_requested_player2 = true;
+        } else {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+
+        if m.draw_requested_player1 && m.draw_requested_player2 {
+            let coordinator = Self::get_coordinator(env.clone());
+            Self::settle_match(&env, &coordinator, &game_code, &mut m, None);
+
+            env.events().publish(
+                (symbol_short!("resolved"), game_code.clone()),
+                MatchResolvedEvent {
+                    game_code: game_code.clone(),
+                    winner: None,
+                    admin_fee: 0,
+                },
+            );
+        } else {
+            env.storage().persistent().set(&game_code, &m);
+            Self::bump_entry_ttl(&env, &game_code);
+        }
+    }
+
+    /// Retrieves cooperative draw request status for both players (Issue #20).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `(bool, bool)` - Tuple of `(draw_requested_player1, draw_requested_player2)`.
+    pub fn get_draw_status(env: Env, game_code: String) -> (bool, bool) {
+        let m = Self::load_match(&env, &game_code);
+        (m.draw_requested_player1, m.draw_requested_player2)
     }
 
     /// Coordinator resolves active match, distributing payouts and fee discounts (Issues #35 & #36).
