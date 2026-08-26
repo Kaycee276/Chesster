@@ -277,6 +277,9 @@ pub struct MatchRefundedEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MatchExpiredEvent {
     pub game_code: String,
+pub struct PlayerEloUpdatedEvent {
+    pub player: Address,
+    pub new_elo: u32,
 }
 
 /// Chesster Escrow Smart Contract instance.
@@ -1668,6 +1671,57 @@ impl ChessterEscrow {
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidTournament));
         Self::bump_entry_ttl(&env, &tournament_id);
         tournament
+    }
+
+    /// Updates the Elo rating for a player.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `player` - Address of the player.
+    /// * `new_elo` - New Elo rating.
+    pub fn update_player_elo(env: Env, player: Address, new_elo: u32) {
+        player.require_auth();
+        env.storage()
+            .persistent()
+            .set(&(symbol_short!("elo_r"), player.clone()), &new_elo);
+        env.storage().persistent().extend_ttl(
+            &(symbol_short!("elo_r"), player.clone()),
+            STORAGE_TTL_THRESHOLD,
+            STORAGE_TTL_EXTENDED,
+        );
+        env.events().publish(
+            (symbol_short!("elo_r"), player.clone()),
+            PlayerEloUpdatedEvent { player, new_elo },
+        );
+    }
+
+    /// Retrieves the Elo rating for a player. Defaults to 1200 if not set.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `player` - Address of the player.
+    ///
+    /// # Returns
+    /// * `u32` - Elo rating.
+    pub fn get_player_elo(env: Env, player: Address) -> u32 {
+        let elo = env
+            .storage()
+            .persistent()
+            .get(&(symbol_short!("elo_r"), player.clone()))
+            .unwrap_or(1200u32);
+
+        if env
+            .storage()
+            .persistent()
+            .has(&(symbol_short!("elo_r"), player.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &(symbol_short!("elo_r"), player),
+                STORAGE_TTL_THRESHOLD,
+                STORAGE_TTL_EXTENDED,
+            );
+        }
+        elo
     }
 }
 
