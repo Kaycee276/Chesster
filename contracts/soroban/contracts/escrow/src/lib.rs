@@ -16,6 +16,10 @@ pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
 pub const STALE_MATCH_THRESHOLD_SECS: u64 = 2_592_000;
 /// Default duration (in seconds) after which a pending or active match expires (1 hour).
 pub const MATCH_EXPIRATION_SECS: u64 = 3_600;
+/// Default minimum allowable wager amount (1 unit/stroop).
+pub const DEFAULT_MIN_WAGER: i128 = 1;
+/// Default maximum allowable wager amount (maximum positive i128).
+pub const DEFAULT_MAX_WAGER: i128 = i128::MAX;
 
 /// Errors returned by the Chesster Escrow smart contract.
 #[contracterror]
@@ -80,6 +84,12 @@ pub enum EscrowError {
     MatchNotStale = 27,
     /// Match has expired based on ledger timestamp timeout.
     MatchExpired = 28,
+    /// Wager amount is below configured minimum limit.
+    WagerBelowMinimum = 28,
+    /// Wager amount exceeds configured maximum limit.
+    WagerAboveMaximum = 29,
+    /// Minimum wager limit cannot exceed maximum wager limit or must be positive.
+    InvalidWagerLimit = 30,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -273,6 +283,29 @@ pub struct MatchRefundedEvent {
     pub game_code: String,
 }
 
+/// Configured minimum and maximum allowable wager limits (Issue #23).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WagerLimits {
+    /// Minimum allowable wager amount.
+    pub min_wager: i128,
+    /// Maximum allowable wager amount.
+    pub max_wager: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WagerLimitsUpdatedEvent {
+    pub min_wager: i128,
+    pub max_wager: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenWagerLimitsUpdatedEvent {
+    pub token: Address,
+    pub min_wager: i128,
+    pub max_wager: i128,
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MatchExpiredEvent {
@@ -498,6 +531,207 @@ impl ChessterEscrow {
         Self::join_match(env, game_code, player2);
     }
 
+    fn set_wager_limits_internal(env: &Env, min_wager: i128, max_wager: i128) {
+        if min_wager <= 0 || max_wager < min_wager {
+            panic_with_error!(env, EscrowError::InvalidWagerLimit);
+        }
+
+        let limits = WagerLimits {
+            min_wager,
+            max_wager,
+        };
+        env.storage()
+            .instance()
+            .set(&Symbol::new(env, "w_limits"), &limits);
+        Self::bump_instance_ttl(env);
+
+        env.events().publish(
+            (symbol_short!("w_limits"),),
+            WagerLimitsUpdatedEvent {
+                min_wager,
+                max_wager,
+            },
+        );
+    }
+
+    /// Configures global minimum and maximum allowable wager limits (Coordinator only) (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `min_wager` - Minimum allowable wager amount (must be > 0).
+    /// * `max_wager` - Maximum allowable wager amount (must be >= min_wager).
+    pub fn set_wager_limits(env: Env, min_wager: i128, max_wager: i128) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        Self::set_wager_limits_internal(&env, min_wager, max_wager);
+    }
+
+    /// Sets global minimum wager limit while keeping current maximum (Coordinator only) (Issue #23).
+    pub fn set_min_wager(env: Env, min_wager: i128) {
+        let current_max = Self::get_max_wager(env.clone());
+        Self::set_wager_limits(env, min_wager, current_max);
+    }
+
+    /// Sets global maximum wager limit while keeping current minimum (Coordinator only) (Issue #23).
+    pub fn set_max_wager(env: Env, max_wager: i128) {
+        let current_min = Self::get_min_wager(env.clone());
+        Self::set_wager_limits(env, current_min, max_wager);
+    }
+
+    /// Retrieves configured global minimum and maximum allowable wager limits (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `WagerLimits` - Struct containing `min_wager` and `max_wager`.
+    pub fn get_wager_limits(env: Env) -> WagerLimits {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "w_limits"))
+            .unwrap_or(WagerLimits {
+                min_wager: DEFAULT_MIN_WAGER,
+                max_wager: DEFAULT_MAX_WAGER,
+            })
+    }
+
+    /// Retrieves current global minimum allowable wager limit (Issue #23).
+    pub fn get_min_wager(env: Env) -> i128 {
+        Self::get_wager_limits(env).min_wager
+    }
+
+    /// Retrieves current global maximum allowable wager limit (Issue #23).
+    pub fn get_max_wager(env: Env) -> i128 {
+        Self::get_wager_limits(env).max_wager
+    }
+
+    fn set_token_wager_limits_internal(
+        env: &Env,
+        token: &Address,
+        min_wager: i128,
+        max_wager: i128,
+    ) {
+        if min_wager <= 0 || max_wager < min_wager {
+            panic_with_error!(env, EscrowError::InvalidWagerLimit);
+        }
+
+        let limits = WagerLimits {
+            min_wager,
+            max_wager,
+        };
+        let key = (Symbol::new(env, "tok_wlim"), token.clone());
+        env.storage().instance().set(&key, &limits);
+        Self::bump_instance_ttl(env);
+
+        env.events().publish(
+            (symbol_short!("tok_wlim"), token.clone()),
+            TokenWagerLimitsUpdatedEvent {
+                token: token.clone(),
+                min_wager,
+                max_wager,
+            },
+        );
+    }
+
+    /// Configures token-specific minimum and maximum wager limits (Coordinator only) (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `token` - Token address.
+    /// * `min_wager` - Minimum allowable wager for token (must be > 0).
+    /// * `max_wager` - Maximum allowable wager for token (must be >= min_wager).
+    pub fn set_token_wager_limits(env: Env, token: Address, min_wager: i128, max_wager: i128) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        Self::set_token_wager_limits_internal(&env, &token, min_wager, max_wager);
+    }
+
+    /// Removes token-specific wager limits, falling back to global limits (Coordinator only) (Issue #23).
+    pub fn remove_token_wager_limits(env: Env, token: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let key = (Symbol::new(&env, "tok_wlim"), token);
+        env.storage().instance().remove(&key);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Retrieves token-specific wager limits if configured, or falls back to global limits (Issue #23).
+    pub fn get_token_wager_limits(env: Env, token: Address) -> WagerLimits {
+        let key = (Symbol::new(&env, "tok_wlim"), token);
+        if let Some(limits) = env.storage().instance().get(&key) {
+            limits
+        } else {
+            Self::get_wager_limits(env)
+        }
+    }
+
+    /// Retrieves minimum allowable wager limit for specified token (Issue #23).
+    pub fn get_token_min_wager(env: Env, token: Address) -> i128 {
+        Self::get_token_wager_limits(env, token).min_wager
+    }
+
+    /// Retrieves maximum allowable wager limit for specified token (Issue #23).
+    pub fn get_token_max_wager(env: Env, token: Address) -> i128 {
+        Self::get_token_wager_limits(env, token).max_wager
+    }
+
+    /// Scales global wager limits dynamically by a scale factor in basis points (10000 = 100%) (Coordinator only) (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `scale_bps` - Scale factor in basis points (must be > 0).
+    pub fn scale_wager_limits(env: Env, scale_bps: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        if scale_bps == 0 {
+            panic_with_error!(&env, EscrowError::InvalidWagerLimit);
+        }
+
+        let current = Self::get_wager_limits(env.clone());
+        let new_min = (current.min_wager * (scale_bps as i128)) / 10_000;
+        let new_min = if new_min <= 0 { 1 } else { new_min };
+
+        let new_max = if current.max_wager == DEFAULT_MAX_WAGER {
+            DEFAULT_MAX_WAGER
+        } else {
+            (current.max_wager * (scale_bps as i128)) / 10_000
+        };
+
+        if new_max < new_min {
+            panic_with_error!(&env, EscrowError::InvalidWagerLimit);
+        }
+
+        Self::set_wager_limits_internal(&env, new_min, new_max);
+    }
+
+    /// Scales token-specific wager limits dynamically by a scale factor in basis points (Coordinator only) (Issue #23).
+    pub fn scale_token_wager_limits(env: Env, token: Address, scale_bps: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        if scale_bps == 0 {
+            panic_with_error!(&env, EscrowError::InvalidWagerLimit);
+        }
+
+        let current = Self::get_token_wager_limits(env.clone(), token.clone());
+        let new_min = (current.min_wager * (scale_bps as i128)) / 10_000;
+        let new_min = if new_min <= 0 { 1 } else { new_min };
+
+        let new_max = if current.max_wager == DEFAULT_MAX_WAGER {
+            DEFAULT_MAX_WAGER
+        } else {
+            (current.max_wager * (scale_bps as i128)) / 10_000
+        };
+
+        if new_max < new_min {
+            panic_with_error!(&env, EscrowError::InvalidWagerLimit);
+        }
+
+        Self::set_token_wager_limits_internal(&env, &token, new_min, new_max);
+    }
+
     fn whitelist_key(env: &Env) -> Symbol {
         Symbol::new(env, "wl_toks")
     }
@@ -656,6 +890,19 @@ impl ChessterEscrow {
         }
     }
 
+    fn validate_wager_amount(env: &Env, token: &Address, amount: i128) {
+        if amount <= 0 {
+            panic_with_error!(env, EscrowError::InvalidWager);
+        }
+        let limits = Self::get_token_wager_limits(env.clone(), token.clone());
+        if amount < limits.min_wager {
+            panic_with_error!(env, EscrowError::WagerBelowMinimum);
+        }
+        if amount > limits.max_wager {
+            panic_with_error!(env, EscrowError::WagerAboveMaximum);
+        }
+    }
+
     /// Creates a match and deposits Player 1's wager (Issue #34).
     ///
     /// # Arguments
@@ -688,9 +935,7 @@ impl ChessterEscrow {
         if env.storage().persistent().has(&game_code) {
             panic_with_error!(&env, EscrowError::MatchAlreadyExists);
         }
-        if amount <= 0 {
-            panic_with_error!(&env, EscrowError::InvalidWager);
-        }
+        Self::validate_wager_amount(&env, &token, amount);
 
         let player1_key = (Symbol::new(&env, "act_m"), player1.clone());
         let active_matches: Vec<String> = env
