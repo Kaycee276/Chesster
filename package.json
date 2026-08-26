@@ -1,11 +1,13 @@
 {
   "name": "chesster",
-  "version": "1.6.0",
+  "version": "1.8.0",
   "private": true,
   "description": "Chesster - Decentralized Chess Game on Stellar",
   "scripts": {
     "prepare": "husky",
-    "verify:branch-protection": "node scripts/verify-branch-protection.js"
+    "verify:branch-protection": "node scripts/verify-branch-protection.js",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@octokit/rest": "^22.0.1",
@@ -18,6 +20,7 @@
     "eslint": "^9.39.1",
     "husky": "^9.1.7",
     "lint-staged": "^15.4.3",
+    "prettier": "^3.5.0",
     "semantic-release": "^24.2.3"
   }
 }
