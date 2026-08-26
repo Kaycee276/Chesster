@@ -1064,6 +1064,11 @@ fn test_native_xlm_payment_wrapping() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #21 — Match Expiration & Auto-Claim Refund Timeout Logic
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_and_get_match_timeout() {
 // Issue #23 — Dynamic Wager Scaling with Configurable Minimum & Maximum Limits
 // ---------------------------------------------------------------------------
 
@@ -1083,6 +1088,17 @@ fn test_default_elo_is_1200() {
 
     client.init(&coordinator, &500);
 
+    // Defaults to MATCH_EXPIRATION_SECS (3600)
+    assert_eq!(client.get_match_timeout(), 3600);
+
+    // Coordinator updates match timeout to 1800 (30 mins)
+    client.set_match_timeout(&1800);
+    assert_eq!(client.get_match_timeout(), 1800);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_set_match_timeout_rejects_zero() {
     let limits = client.get_wager_limits();
     assert_eq!(limits.min_wager, 1);
     assert_eq!(limits.max_wager, i128::MAX);
@@ -1100,6 +1116,43 @@ fn test_set_and_get_global_wager_limits() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.set_match_timeout(&0);
+}
+
+#[test]
+fn test_is_match_expired_and_get_expiration() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 10_000;
+    });
+
+    let game_code = String::from_str(&env, "GAME_EXP_CHECK");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    assert_eq!(client.get_match_expiration(&game_code), 13_600);
+    assert!(!client.is_match_expired(&game_code));
+
+    // Fast forward to exactly expiration
+    env.ledger().with_mut(|li| {
+        li.timestamp = 13_600;
+    });
+    assert!(client.is_match_expired(&game_code));
 
     // Set custom global limits
     client.set_wager_limits(&100, &5000);
@@ -1121,29 +1174,133 @@ fn test_set_and_get_global_wager_limits() {
 
 #[test]
 #[should_panic(expected = "HostError")]
+fn test_join_match_rejects_expired_match() {
 fn test_set_wager_limits_zero_or_negative_min_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
     let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let game_code = String::from_str(&env, "GAME_EXPIRED_JOIN");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    // Timestamp past timeout (1000 + 3600 = 4600)
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    // Player 2 attempts to join expired match -> fails
+    client.join_match(&game_code, &player2);
     client.set_wager_limits(&0, &1000);
 }
 
 #[test]
 #[should_panic(expected = "HostError")]
+fn test_place_side_bet_rejects_expired_match() {
 fn test_set_wager_limits_max_smaller_than_min_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
     let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let spectator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+    token_admin_client.mint(&spectator, &500);
+
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let game_code = String::from_str(&env, "GAME_EXPIRED_BET");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    approve(&env, &token, &spectator, &contract_id, 500);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    // Expire match
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    client.place_side_bet(&game_code, &spectator, &player1, &100);
+}
+
+#[test]
+fn test_claim_refund_by_player1_pending() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let game_code = String::from_str(&env, "CLAIM_PENDING");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    assert_eq!(token.balance(&player1), 900);
+    assert_eq!(token.balance(&contract_id), 100);
+
+    // Advance past timeout
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    // Player 1 claims refund
+    client.claim_refund(&game_code, &player1);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Refunded);
+    assert_eq!(token.balance(&player1), 1000);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_claim_refund_by_player2_active() {
     client.set_wager_limits(&1000, &500);
 }
 
@@ -1158,6 +1315,92 @@ fn test_create_match_enforces_wager_limits() {
     let token_admin = Address::generate(&env);
 
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let game_code = String::from_str(&env, "CLAIM_ACTIVE");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    assert_eq!(token.balance(&player1), 900);
+    assert_eq!(token.balance(&player2), 900);
+    assert_eq!(token.balance(&contract_id), 200);
+
+    // Advance past timeout
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    // Player 2 claims refund
+    client.claim_refund(&game_code, &player2);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Refunded);
+    assert_eq!(token.balance(&player1), 1000);
+    assert_eq!(token.balance(&player2), 1000);
+    assert_eq!(token.balance(&contract_id), 0);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_claim_refund_before_timeout_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let game_code = String::from_str(&env, "CLAIM_EARLY");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    // Not yet timed out
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2000;
+    });
+
+    client.claim_refund(&game_code, &player1);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_claim_refund_unauthorized_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
     token_admin_client.mint(&player1, &10000);
     token_admin_client.mint(&player2, &10000);
     let player = Address::generate(&env);
@@ -1168,6 +1411,24 @@ fn test_create_match_enforces_wager_limits() {
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
 
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let game_code = String::from_str(&env, "CLAIM_UNAUTH");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    // Outsider tries to claim refund -> fails with Unauthorized
+    client.claim_refund(&game_code, &outsider);
+}
+
+#[test]
+fn test_auto_claim_refund_by_coordinator() {
     client.set_wager_limits(&100, &1000);
 
     approve(&env, &token, &player1, &contract_id, 10000);
@@ -1204,6 +1465,12 @@ fn test_update_player_elo() {
 
     let coordinator = Address::generate(&env);
     let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
     let token_admin = Address::generate(&env);
 
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
@@ -1215,6 +1482,29 @@ fn test_update_player_elo() {
 
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let game_code = String::from_str(&env, "AUTO_CLAIM_COORD");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    // Coordinator triggers auto_claim_refund
+    client.auto_claim_refund(&game_code, &coordinator);
+
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Refunded);
+    assert_eq!(token.balance(&player1), 1000);
+    assert_eq!(token.balance(&player2), 1000);
+    assert_eq!(token.balance(&contract_id), 0);
     client.set_wager_limits(&100, &1000);
 
     approve(&env, &token, &player1, &contract_id, 10000);
@@ -1230,12 +1520,18 @@ fn test_update_player_elo() {
 
 #[test]
 #[should_panic(expected = "HostError")]
+fn test_auto_claim_refund_unauthorized_fails() {
 fn test_create_match_wager_above_maximum_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
     let coordinator = Address::generate(&env);
     let player1 = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
     let token_admin = Address::generate(&env);
 
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
@@ -1252,6 +1548,24 @@ fn test_update_player_elo_unauthorized() {
 
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let game_code = String::from_str(&env, "AUTO_UNAUTH");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    client.auto_claim_refund(&game_code, &outsider);
+}
+
+#[test]
+fn test_auto_claim_expired_matches_batch() {
     client.set_wager_limits(&100, &1000);
 
     approve(&env, &token, &player1, &contract_id, 10000);
@@ -1267,6 +1581,12 @@ fn test_set_and_get_token_wager_limits() {
 
     let coordinator = Address::generate(&env);
     let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
     let token_admin = Address::generate(&env);
 
     let (token1, token1_admin_client) = create_token_contract(&env, &token_admin);
@@ -1279,6 +1599,41 @@ fn test_set_and_get_token_wager_limits() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let g1 = String::from_str(&env, "BATCH_EXP_1");
+    let g2 = String::from_str(&env, "BATCH_EXP_2");
+    let g3 = String::from_str(&env, "BATCH_EXP_3");
+
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+
+    client.create_match(&g1, &player1, &token.address, &100);
+    client.create_match(&g2, &player1, &token.address, &100);
+
+    // Advance time so g1 and g2 expire
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    // Create g3 at 4601 (not expired)
+    client.create_match(&g3, &player1, &token.address, &100);
+
+    let codes = vec![&env, g1.clone(), g2.clone(), g3.clone()];
+    let refunded_count = client.auto_claim_expired_matches(&codes);
+
+    assert_eq!(refunded_count, 2);
+    assert_eq!(client.get_match(&g1).status, MatchStatus::Refunded);
+    assert_eq!(client.get_match(&g2).status, MatchStatus::Refunded);
+    assert_eq!(client.get_match(&g3).status, MatchStatus::Pending);
+}
+
+#[test]
+fn test_expired_event_emitted_on_claim_refund() {
     client.add_whitelisted_token(&token1.address);
     client.add_whitelisted_token(&token2.address);
 
@@ -1372,6 +1727,8 @@ fn test_update_player_elo_emits_event() {
     let player1 = Address::generate(&env);
     let token_admin = Address::generate(&env);
 
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
     let (native_token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&player1, &10000);
     let player = Address::generate(&env);
@@ -1380,6 +1737,24 @@ fn test_update_player_elo_emits_event() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
     client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "GAME_EVENT_CLAIM_REFUND");
+    approve(&env, &token, &player1, &contract_id, 1000);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 4601;
+    });
+
+    client.claim_refund(&game_code, &player1);
+
+    let events = env.events().all();
+    assert!(events.iter().any(|(id, _, _)| id == contract_id));
     client.set_native_xlm_address(&native_token.address);
     client.set_wager_limits(&100, &1000);
 
