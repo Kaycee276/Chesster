@@ -1,7 +1,6 @@
 #![cfg(test)]
 
 use super::*;
-use proptest::prelude::*;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
@@ -1062,4 +1061,294 @@ fn test_native_xlm_payment_wrapping() {
     assert_eq!(match_data.status, MatchStatus::Active);
     assert_eq!(match_data.token, native_token.address);
     assert_eq!(match_data.total_staked, 200);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #23 — Dynamic Wager Scaling with Configurable Minimum & Maximum Limits
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_default_wager_limits() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    let limits = client.get_wager_limits();
+    assert_eq!(limits.min_wager, 1);
+    assert_eq!(limits.max_wager, i128::MAX);
+    assert_eq!(client.get_min_wager(), 1);
+    assert_eq!(client.get_max_wager(), i128::MAX);
+}
+
+#[test]
+fn test_set_and_get_global_wager_limits() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    // Set custom global limits
+    client.set_wager_limits(&100, &5000);
+    let limits = client.get_wager_limits();
+    assert_eq!(limits.min_wager, 100);
+    assert_eq!(limits.max_wager, 5000);
+    assert_eq!(client.get_min_wager(), 100);
+    assert_eq!(client.get_max_wager(), 5000);
+
+    // Set individual min and max
+    client.set_min_wager(&200);
+    assert_eq!(client.get_min_wager(), 200);
+    assert_eq!(client.get_max_wager(), 5000);
+
+    client.set_max_wager(&8000);
+    assert_eq!(client.get_min_wager(), 200);
+    assert_eq!(client.get_max_wager(), 8000);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_set_wager_limits_zero_or_negative_min_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.set_wager_limits(&0, &1000);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_set_wager_limits_max_smaller_than_min_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.set_wager_limits(&1000, &500);
+}
+
+#[test]
+fn test_create_match_enforces_wager_limits() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10000);
+    token_admin_client.mint(&player2, &10000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    client.set_wager_limits(&100, &1000);
+
+    approve(&env, &token, &player1, &contract_id, 10000);
+    approve(&env, &token, &player2, &contract_id, 10000);
+
+    // Exact min wager: 100 succeeds
+    let g1 = String::from_str(&env, "GAME_MIN");
+    client.create_match(&g1, &player1, &token.address, &100);
+    assert_eq!(client.get_match(&g1).wager_amount, 100);
+
+    // Mid-range wager: 500 succeeds
+    let g2 = String::from_str(&env, "GAME_MID");
+    client.create_match(&g2, &player1, &token.address, &500);
+    assert_eq!(client.get_match(&g2).wager_amount, 500);
+
+    // Exact max wager: 1000 succeeds
+    let g3 = String::from_str(&env, "GAME_MAX");
+    client.create_match(&g3, &player1, &token.address, &1000);
+    assert_eq!(client.get_match(&g3).wager_amount, 1000);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_create_match_wager_below_minimum_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+    client.set_wager_limits(&100, &1000);
+
+    approve(&env, &token, &player1, &contract_id, 10000);
+
+    let game_code = String::from_str(&env, "GAME_UNDER_MIN");
+    client.create_match(&game_code, &player1, &token.address, &99);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_create_match_wager_above_maximum_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+    client.set_wager_limits(&100, &1000);
+
+    approve(&env, &token, &player1, &contract_id, 10000);
+
+    let game_code = String::from_str(&env, "GAME_OVER_MAX");
+    client.create_match(&game_code, &player1, &token.address, &1001);
+}
+
+#[test]
+fn test_set_and_get_token_wager_limits() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token1, token1_admin_client) = create_token_contract(&env, &token_admin);
+    let (token2, token2_admin_client) = create_token_contract(&env, &token_admin);
+
+    token1_admin_client.mint(&player1, &10000);
+    token2_admin_client.mint(&player1, &10000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token1.address);
+    client.add_whitelisted_token(&token2.address);
+
+    // Global limits: 100 to 1000
+    client.set_wager_limits(&100, &1000);
+
+    // Token1 specific limits: 50 to 500
+    client.set_token_wager_limits(&token1.address, &50, &500);
+
+    assert_eq!(client.get_token_min_wager(&token1.address), 50);
+    assert_eq!(client.get_token_max_wager(&token1.address), 500);
+
+    // Token2 has no specific limits, falls back to global (100 to 1000)
+    assert_eq!(client.get_token_min_wager(&token2.address), 100);
+    assert_eq!(client.get_token_max_wager(&token2.address), 1000);
+
+    approve(&env, &token1, &player1, &contract_id, 10000);
+    approve(&env, &token2, &player1, &contract_id, 10000);
+
+    // Token1: 75 succeeds (between 50 and 500)
+    let g1 = String::from_str(&env, "GAME_TOK1_OK");
+    client.create_match(&g1, &player1, &token1.address, &75);
+
+    // Token2: 75 fails because global min is 100
+    let g2 = String::from_str(&env, "GAME_TOK2_FAIL");
+    let res = client.try_create_match(&g2, &player1, &token2.address, &75);
+    assert!(res.is_err());
+
+    // Remove token1 limits -> token1 now falls back to global (100 to 1000)
+    client.remove_token_wager_limits(&token1.address);
+    assert_eq!(client.get_token_min_wager(&token1.address), 100);
+    assert_eq!(client.get_token_max_wager(&token1.address), 1000);
+}
+
+#[test]
+fn test_dynamic_wager_scaling() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, _admin_client) = create_token_contract(&env, &token_admin);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.set_wager_limits(&100, &1000);
+
+    // Scale up by 1.5x (15,000 bps)
+    client.scale_wager_limits(&15_000);
+    assert_eq!(client.get_min_wager(), 150);
+    assert_eq!(client.get_max_wager(), 1500);
+
+    // Scale down by 50% (5,000 bps)
+    client.scale_wager_limits(&5_000);
+    assert_eq!(client.get_min_wager(), 75);
+    assert_eq!(client.get_max_wager(), 750);
+
+    // Dynamic scaling for token-specific limits
+    client.set_token_wager_limits(&token.address, &200, &2000);
+    client.scale_token_wager_limits(&token.address, &20_000); // 2x
+    assert_eq!(client.get_token_min_wager(&token.address), 400);
+    assert_eq!(client.get_token_max_wager(&token.address), 4000);
+}
+
+#[test]
+fn test_native_match_enforces_wager_limits() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (native_token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.set_native_xlm_address(&native_token.address);
+    client.set_wager_limits(&100, &1000);
+
+    approve(&env, &native_token, &player1, &contract_id, 10000);
+
+    // Native match below min fails
+    let g1 = String::from_str(&env, "NATIVE_BELOW_MIN");
+    let res = client.try_create_native_match(&g1, &player1, &50);
+    assert!(res.is_err());
+
+    // Native match within limits succeeds
+    let g2 = String::from_str(&env, "NATIVE_WITHIN_LIMITS");
+    client.create_native_match(&g2, &player1, &500);
+    let match_data = client.get_match(&g2);
+    assert_eq!(match_data.wager_amount, 500);
 }
