@@ -215,17 +215,19 @@ export default function ChessBoard() {
 	return <ChessBoardInner />;
 }
 
-const PlayerAvatar = ({ color }: { color: "white" | "black" }) => (
-	<div
-		className={`w-7 h-7 rounded-full flex items-center justify-center text-base border-2 shrink-0 ${
-			color === "white"
-				? "bg-white border-gray-300 text-gray-900"
-				: "bg-gray-900 border-gray-600 text-white"
-		}`}
-	>
-		{color === "white" ? "♔" : "♚"}
-	</div>
-);
+function PlayerAvatar({ color }: { color: "white" | "black" }) {
+	return (
+		<div
+			className={`w-7 h-7 rounded-full flex items-center justify-center text-base border-2 shrink-0 ${
+				color === "white"
+					? "bg-white border-gray-300 text-gray-900"
+					: "bg-gray-900 border-gray-600 text-white"
+			}`}
+		>
+			{color === "white" ? "♔" : "♚"}
+		</div>
+	);
+}
 
 function ChessBoardInner() {
 	const {
@@ -255,6 +257,8 @@ function ChessBoardInner() {
 	const [showPayoutModal, setShowPayoutModal] = useState(false);
 	const [confirmAction, setConfirmAction] = useState<"resign" | "leave" | null>(null);
 	const [soundEnabled, setSoundEnabled] = useState(() => soundService.isEnabled());
+	const [volume, setVolume] = useState(() => soundService.getVolume());
+	const [showVolumeSlider, setShowVolumeSlider] = useState(false);
 
 	// ── Piece move animation ───────────────────────────────────────────────────
 	const lastMove = useGameStore((s) => s.lastMove);
@@ -831,13 +835,35 @@ function ChessBoardInner() {
 							</span>
 						)
 					)}
-					<button
-						onClick={() => setSoundEnabled(soundService.toggle())}
-						title={soundEnabled ? "Mute sounds" : "Unmute sounds"}
-						className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
-					>
-						{soundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
-					</button>
+					<div className="relative flex items-center">
+						<button
+							onClick={() => setSoundEnabled(soundService.toggle())}
+							onContextMenu={(e) => { e.preventDefault(); setShowVolumeSlider((v) => !v); }}
+							title={soundEnabled ? "Mute sounds (right-click for volume)" : "Unmute sounds"}
+							className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+						>
+							{soundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
+						</button>
+						{showVolumeSlider && (
+							<div className="absolute bottom-full right-0 mb-1 bg-(--bg-secondary) border border-(--border) rounded-lg p-2 shadow-xl z-50 flex flex-col items-center gap-1">
+								<span className="text-[10px] text-(--text-tertiary)">Volume</span>
+								<input
+									type="range"
+									min={0}
+									max={1}
+									step={0.05}
+									value={volume}
+									onChange={(e) => {
+										const v = parseFloat(e.target.value);
+										soundService.setVolume(v);
+										setVolume(v);
+									}}
+									className="w-20 accent-(--accent-primary)"
+								/>
+								<span className="text-[10px] text-(--text-tertiary)">{Math.round(volume * 100)}%</span>
+							</div>
+						)}
+					</div>
 					<button
 						onClick={copyGameCode}
 						disabled={!gameCode}

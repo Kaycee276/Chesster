@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { MessageCircle, X, Send, Smile } from "lucide-react";
+import { MessageCircle, X, Send, Smile, Download, Check } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
+import { boardToFen } from "../utils/chessUtils";
 
 const MAX_CHARS = 50;
 const QUICK_REACTIONS = ["Good luck!", "Nice move", "Well played", "Good game"];
@@ -14,9 +15,12 @@ export default function ChatPanel() {
 	const setChatOpen = useGameStore((s) => s.setChatOpen);
 	const sendChatMessage = useGameStore((s) => s.sendChatMessage);
 	const status = useGameStore((s) => s.status);
+	const board = useGameStore((s) => s.board);
+	const currentTurn = useGameStore((s) => s.currentTurn);
 
 	const [input, setInput] = useState("");
 	const [emojiOpen, setEmojiOpen] = useState(false);
+	const [copiedFen, setCopiedFen] = useState(false);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
 
@@ -73,12 +77,29 @@ export default function ChatPanel() {
 								Chat
 							</span>
 						</div>
-						<button
-							onClick={() => setChatOpen(false)}
-							className="text-(--text-tertiary) hover:text-(--text) transition-colors p-0.5 rounded"
-						>
-							<X size={13} />
-						</button>
+						<div className="flex items-center gap-1">
+							<button
+								title="Copy FEN to clipboard"
+								onClick={() => {
+									if (!board.length) return;
+									const fen = boardToFen(board, currentTurn);
+									navigator.clipboard.writeText(fen).then(() => {
+										setCopiedFen(true);
+										setTimeout(() => setCopiedFen(false), 1500);
+									}).catch(() => {});
+								}}
+								className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+							>
+								{copiedFen ? <Check size={11} className="text-green-400" /> : <Download size={11} />}
+								FEN
+							</button>
+							<button
+								onClick={() => setChatOpen(false)}
+								className="text-(--text-tertiary) hover:text-(--text) transition-colors p-0.5 rounded"
+							>
+								<X size={13} />
+							</button>
+						</div>
 					</div>
 
 					{/* Messages */}
