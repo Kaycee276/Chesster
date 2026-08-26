@@ -264,7 +264,9 @@ function ChessBoardInner() {
 	const lastMove = useGameStore((s) => s.lastMove);
 	const [animKey, setAnimKey] = useState<string | null>(null);
 	const [animOffset, setAnimOffset] = useState({ dx: 0, dy: 0 });
+	const [captureKey, setCaptureKey] = useState<string | null>(null);
 	const prevLastMoveRef = useRef<typeof lastMove>(null);
+	const prevBoardRef = useRef<string[][]>([]);
 
 	useEffect(() => {
 		if (!lastMove) return;
@@ -277,6 +279,22 @@ function ChessBoardInner() {
 			prev.to[1] === lastMove.to[1]
 		)
 			return;
+
+		// Detect capture: destination had an opponent piece before the move
+		const prevBoard = prevBoardRef.current;
+		if (prevBoard.length) {
+			const destPiece = prevBoard[lastMove.to[0]]?.[lastMove.to[1]];
+			const movingPiece = lastMove.piece;
+			const isWhite = movingPiece === movingPiece.toUpperCase();
+			const isCapture = destPiece && destPiece !== "." &&
+				(isWhite ? destPiece === destPiece.toLowerCase() : destPiece === destPiece.toUpperCase());
+			if (isCapture) {
+				const ck = `${lastMove.to[0]}-${lastMove.to[1]}`;
+				setCaptureKey(ck);
+				setTimeout(() => setCaptureKey(null), 400);
+			}
+		}
+
 		prevLastMoveRef.current = lastMove;
 
 		// Compute how many squares the piece travelled, accounting for board flip
@@ -286,9 +304,14 @@ function ChessBoardInner() {
 
 		setAnimOffset({ dx, dy });
 		setAnimKey(`${lastMove.to[0]}-${lastMove.to[1]}`);
-		const t = setTimeout(() => setAnimKey(null), 350);
+		const t = setTimeout(() => setAnimKey(null), 380);
 		return () => clearTimeout(t);
 	}, [lastMove, playerColor]);
+
+	// Keep a snapshot of the board before each move so capture detection works
+	useEffect(() => {
+		prevBoardRef.current = board;
+	}, [board]);
 
 	const inCheck = useGameStore((s) => s.inCheck);
 	const winner = useGameStore((s) => s.winner);
@@ -618,6 +641,7 @@ function ChessBoardInner() {
 			<div
 				ref={boardWrapperRef}
 				className="flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden"
+				style={{ touchAction: "none" }}
 			>
 				{boardPx > 0 && (
 				<div
@@ -657,6 +681,7 @@ function ChessBoardInner() {
 							((actualRow === lastMove.from[0] && actualCol === lastMove.from[1]) ||
 								(actualRow === lastMove.to[0] && actualCol === lastMove.to[1]));
 						const isPieceAnimating = animKey === `${actualRow}-${actualCol}`;
+						const isCaptureSquare = captureKey === `${actualRow}-${actualCol}`;
 
 						return (
 							<div
@@ -668,7 +693,14 @@ function ChessBoardInner() {
 								} ${isLastMoveSquare ? "bg-yellow-300/45" : ""} ${
 									highlight ? " outline-2 outline-yellow-300/60 -outline-offset-2" : ""
 								}`}
+								style={isCaptureSquare ? { animation: "captureFlash 0.4s ease-out forwards" } : undefined}
 								onClick={() => handleSquareClick(actualRow, actualCol)}
+								onTouchEnd={(e) => {
+									// Prevent the synthetic click that follows touch so the
+									// handler doesn't fire twice on mobile browsers.
+									e.preventDefault();
+									handleSquareClick(actualRow, actualCol);
+								}}
 							>
 								{/* Possible-move dot */}
 								{possible && (
@@ -691,7 +723,7 @@ function ChessBoardInner() {
 												? WHITE_PIECE_STYLE
 												: BLACK_PIECE_STYLE),
 											...(isPieceAnimating && {
-												animation: "pieceSlide 0.3s ease-out forwards",
+												animation: "pieceSlide 0.38s cubic-bezier(0.22,1,0.36,1) forwards",
 												"--piece-dx": `calc(${animOffset.dx} * var(--board-size) / 8)`,
 												"--piece-dy": `calc(${animOffset.dy} * var(--board-size) / 8)`,
 											}),
