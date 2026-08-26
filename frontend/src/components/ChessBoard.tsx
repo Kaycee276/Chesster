@@ -83,8 +83,8 @@ function BoardSkeleton() {
 								key={i}
 								className={`animate-pulse ${
 									(Math.floor(i / 8) + (i % 8)) % 2 === 0
-										? "bg-(--accent-light)/30"
-										: "bg-(--accent-dark)/70"
+										? "bg-(--sq-light)/50"
+										: "bg-(--sq-dark)/60"
 								}`}
 							/>
 						))}
@@ -658,7 +658,7 @@ function ChessBoardInner() {
 							<div
 								key={`${rowIndex}-${colIndex}`}
 								className={`relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 ${
-									isLight ? "bg-(--accent-light)/90" : "bg-(--accent-dark)"
+									isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
 								} ${selected ? "bg-yellow-400/75" : ""} ${
 									isKingInCheck ? "bg-red-500/80" : ""
 								} ${isLastMoveSquare ? "bg-yellow-300/45" : ""} ${

@@ -1,3 +1,28 @@
+# [1.8.0](https://github.com/Kaycee276/Chesster/compare/v1.7.0...v1.8.0) (2026-08-26)
+
+
+### Bug Fixes
+
+* **database:** drop end_reason from seed (column not in canonical schema) ([c39d4c2](https://github.com/Kaycee276/Chesster/commit/c39d4c2bcabfd6aa74b8454080991fea1c73c625))
+* **database:** sync package-lock with pg dependency ([7abc974](https://github.com/Kaycee276/Chesster/commit/7abc974180e5e938fff854711cb92886a0c0c4fa))
+
+
+### Features
+
+* **contracts:** Implement On-Chain Player Elo Rating Ledger Proof ([93d6acb](https://github.com/Kaycee276/Chesster/commit/93d6acba0b0e3224d05afa6f3c5c053553b1e383))
+* **database:** add automated encrypted PostgreSQL backup & snapshot script ([3d93bf3](https://github.com/Kaycee276/Chesster/commit/3d93bf317bfbd291fb72ac7035f1256b0b3445f9)), closes [#119](https://github.com/Kaycee276/Chesster/issues/119)
+* **database:** add idempotent seed data script for local dev & E2E ([8d7dab4](https://github.com/Kaycee276/Chesster/commit/8d7dab463dd2cc8c3a0b13d0e8f42dd4559b5973)), closes [#117](https://github.com/Kaycee276/Chesster/issues/117)
+* **database:** add migration runner script with rollback support ([69dc8fa](https://github.com/Kaycee276/Chesster/commit/69dc8fa81716ab9db9174afab3fcf3458be6f719)), closes [#80](https://github.com/Kaycee276/Chesster/issues/80)
+* **database:** partition games table by month on created_at (012) ([cc63e5a](https://github.com/Kaycee276/Chesster/commit/cc63e5ae83135d5a41b35b2098ba4033af287903)), closes [#118](https://github.com/Kaycee276/Chesster/issues/118)
+* **frontend:** add customizable board themes (Wood, Neon, Classic, Marble) ([bca8b13](https://github.com/Kaycee276/Chesster/commit/bca8b1303e1a7ada5152d3016f159fdfaa7fc28b)), closes [#82](https://github.com/Kaycee276/Chesster/issues/82)
+
+# [1.7.0](https://github.com/Kaycee276/Chesster/compare/v1.6.0...v1.7.0) (2026-08-26)
+
+
+### Features
+
+* **database:** add token wager transaction ledger table migration ([#79](https://github.com/Kaycee276/Chesster/issues/79)) ([d2e0c74](https://github.com/Kaycee276/Chesster/commit/d2e0c74972c0c1a45fde3947ac412f42aff503a5))
+
 # [1.6.0](https://github.com/Kaycee276/Chesster/compare/v1.5.0...v1.6.0) (2026-08-25)
 
 
