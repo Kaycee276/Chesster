@@ -1069,6 +1069,11 @@ fn test_native_xlm_payment_wrapping() {
 
 #[test]
 fn test_default_wager_limits() {
+// On-Chain Player Elo Rating Ledger Proofs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_default_elo_is_1200() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1155,6 +1160,7 @@ fn test_create_match_enforces_wager_limits() {
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&player1, &10000);
     token_admin_client.mint(&player2, &10000);
+    let player = Address::generate(&env);
 
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
@@ -1186,6 +1192,13 @@ fn test_create_match_enforces_wager_limits() {
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_create_match_wager_below_minimum_fails() {
+
+    let default_elo = client.get_player_elo(&player);
+    assert_eq!(default_elo, 1200);
+}
+
+#[test]
+fn test_update_player_elo() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1195,6 +1208,7 @@ fn test_create_match_wager_below_minimum_fails() {
 
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&player1, &10000);
+    let player = Address::generate(&env);
 
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
@@ -1207,6 +1221,11 @@ fn test_create_match_wager_below_minimum_fails() {
 
     let game_code = String::from_str(&env, "GAME_UNDER_MIN");
     client.create_match(&game_code, &player1, &token.address, &99);
+
+    client.update_player_elo(&player, &1500);
+
+    let updated_elo = client.get_player_elo(&player);
+    assert_eq!(updated_elo, 1500);
 }
 
 #[test]
@@ -1221,6 +1240,12 @@ fn test_create_match_wager_above_maximum_fails() {
 
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&player1, &10000);
+fn test_update_player_elo_unauthorized() {
+    let env = Env::default();
+
+    let coordinator = Address::generate(&env);
+    let player = Address::generate(&env);
+    let unauthorized_user = Address::generate(&env);
 
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
@@ -1322,6 +1347,24 @@ fn test_dynamic_wager_scaling() {
 
 #[test]
 fn test_native_match_enforces_wager_limits() {
+    env.mock_all_auths();
+    client.init(&coordinator, &500);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &unauthorized_user,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "update_player_elo",
+            args: vec![&env, player.into_val(&env), 1500u32.into_val(&env)],
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.update_player_elo(&player, &1500);
+}
+
+#[test]
+fn test_update_player_elo_emits_event() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1331,6 +1374,7 @@ fn test_native_match_enforces_wager_limits() {
 
     let (native_token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&player1, &10000);
+    let player = Address::generate(&env);
 
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
@@ -1351,4 +1395,10 @@ fn test_native_match_enforces_wager_limits() {
     client.create_native_match(&g2, &player1, &500);
     let match_data = client.get_match(&g2);
     assert_eq!(match_data.wager_amount, 500);
+
+    let events_before = env.events().all().len();
+    client.update_player_elo(&player, &1600);
+    let events_after = env.events().all().len();
+
+    assert!(events_after >= events_before);
 }

@@ -1,0 +1,17 @@
+# Dependencies & Build artifacts
+node_modules
+dist
+build
+coverage
+target
+*.wasm
+contracts/soroban/target
+
+# Lock files
+package-lock.json
+backend/package-lock.json
+frontend/package-lock.json
+
+# VCS & Husky
+.git
+.husky
