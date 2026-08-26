@@ -90,6 +90,8 @@ pub enum EscrowError {
     WagerAboveMaximum = 30,
     /// Minimum wager limit cannot exceed maximum wager limit or must be positive.
     InvalidWagerLimit = 31,
+    /// Contract is paused; new match and tournament creation is temporarily disabled.
+    ContractPaused = 32,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -358,6 +360,22 @@ pub struct PlayerEloUpdatedEvent {
     pub new_elo: u32,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator activates the emergency circuit breaker pause.
+pub struct ContractPausedEvent {
+    /// Coordinator address that triggered the pause.
+    pub coordinator: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator lifts the emergency circuit breaker pause.
+pub struct ContractUnpausedEvent {
+    /// Coordinator address that lifted the pause.
+    pub coordinator: Address,
+}
+
 /// Chesster Escrow Smart Contract instance.
 #[contract]
 pub struct ChessterEscrow;
@@ -378,6 +396,56 @@ impl ChessterEscrow {
         env.storage()
             .instance()
             .set(&symbol_short!("fee"), &admin_bps);
+    }
+
+    /// Pauses the contract, blocking new match and tournament creation (coordinator only).
+    ///
+    /// Refunds and other settlement operations remain available while paused.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    pub fn pause(env: Env) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &true);
+        Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (symbol_short!("paused"),),
+            ContractPausedEvent { coordinator },
+        );
+    }
+
+    /// Unpauses the contract, re-enabling match and tournament creation (coordinator only).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    pub fn unpause(env: Env) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &false);
+        Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (symbol_short!("unpaused"),),
+            ContractUnpausedEvent { coordinator },
+        );
+    }
+
+    /// Returns whether the contract is currently paused.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `bool` - `true` if the contract is paused, `false` otherwise.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "paused"))
+            .unwrap_or(false)
     }
 
     /// Sets governance token address for calculating fee discounts (Issue #36).
@@ -1022,6 +1090,10 @@ impl ChessterEscrow {
     ) {
         player1.require_auth();
 
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
+
         if !Self::is_token_supported(env.clone(), token.clone()) {
             panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
         }
@@ -1107,6 +1179,10 @@ impl ChessterEscrow {
     /// * `player2` - Joining player address.
     pub fn join_match(env: Env, game_code: String, player2: Address) {
         player2.require_auth();
+
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
 
         let mut m = Self::load_match(&env, &game_code);
 
@@ -1995,6 +2071,10 @@ impl ChessterEscrow {
         prize_distribution: Vec<i128>,
         token: Address,
     ) {
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
+
         if !Self::is_token_supported(env.clone(), token.clone()) {
             panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
         }
@@ -2036,6 +2116,10 @@ impl ChessterEscrow {
     /// * `player` - Joining player address.
     pub fn join_tournament(env: Env, tournament_id: String, player: Address) {
         player.require_auth();
+
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
 
         let mut tournament: TournamentPrizePool = env
             .storage()
