@@ -85,11 +85,11 @@ pub enum EscrowError {
     /// Match has expired based on ledger timestamp timeout.
     MatchExpired = 28,
     /// Wager amount is below configured minimum limit.
-    WagerBelowMinimum = 28,
+    WagerBelowMinimum = 29,
     /// Wager amount exceeds configured maximum limit.
-    WagerAboveMaximum = 29,
+    WagerAboveMaximum = 30,
     /// Minimum wager limit cannot exceed maximum wager limit or must be positive.
-    InvalidWagerLimit = 30,
+    InvalidWagerLimit = 31,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -239,51 +239,72 @@ pub struct Match {
 }
 
 // ---------------------------------------------------------------------------
-// Typed contract events (Issue #24)
+// Typed contract events
 // ---------------------------------------------------------------------------
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published after Player 1 creates a match and their wager is locked.
 pub struct MatchCreatedEvent {
+    /// Identifier supplied by the client for this match.
     pub game_code: String,
+    /// Authorized address of the creating player.
     pub player1: Address,
+    /// Stellar Asset Contract used for the wager.
     pub token: Address,
+    /// Per-player amount locked for the match.
     pub wager_amount: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published after Player 2 joins and the full match pool is funded.
 pub struct MatchFundedEvent {
+    /// Identifier of the funded match.
     pub game_code: String,
+    /// Authorized address of the joining player.
     pub player2: Address,
+    /// Combined amount currently held in escrow.
     pub total_staked: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator settles a match or refunds a draw.
 pub struct MatchResolvedEvent {
+    /// Identifier of the settled match.
     pub game_code: String,
+    /// Recipient of the winner payout, or `None` for a draw.
     pub winner: Option<Address>,
+    /// Platform fee transferred during a winner settlement.
     pub admin_fee: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator awards a match due to a player forfeit.
 pub struct MatchForfeitedEvent {
+    /// Identifier of the forfeited match.
     pub game_code: String,
+    /// Participant whose forfeit triggered settlement.
     pub forfeiting_player: Address,
+    /// Opponent who received the resulting payout.
     pub winner: Address,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when a pending match is mutually cancelled.
 pub struct MatchCancelledEvent {
+    /// Identifier of the cancelled match.
     pub game_code: String,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when a timed-out or otherwise refundable match is refunded.
 pub struct MatchRefundedEvent {
+    /// Identifier of the refunded match.
     pub game_code: String,
 }
 
@@ -299,23 +320,41 @@ pub struct WagerLimits {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published after the coordinator updates global wager limits.
 pub struct WagerLimitsUpdatedEvent {
+    /// New inclusive global minimum wager.
     pub min_wager: i128,
+    /// New inclusive global maximum wager.
     pub max_wager: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published after the coordinator updates a token-specific wager limit.
 pub struct TokenWagerLimitsUpdatedEvent {
+    /// Token whose limits were updated.
     pub token: Address,
+    /// New inclusive minimum for this token.
     pub min_wager: i128,
+    /// New inclusive maximum for this token.
     pub max_wager: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when a match passes its configured expiration time.
 pub struct MatchExpiredEvent {
+    /// Identifier of the expired match.
     pub game_code: String,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator records a player's Elo rating.
 pub struct PlayerEloUpdatedEvent {
+    /// Player whose rating changed.
     pub player: Address,
+    /// Newly recorded Elo rating.
     pub new_elo: u32,
 }
 
