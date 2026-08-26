@@ -475,6 +475,65 @@ impl ChessterEscrow {
             .unwrap_or(500)
     }
 
+    /// Configures base platform fee basis points (Issue #19).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `fee_bps` - Fee basis points (e.g. 500 = 5%).
+    pub fn set_fee_bps(env: Env, fee_bps: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        if fee_bps > 10000 {
+            panic_with_error!(&env, EscrowError::InvalidWager);
+        }
+        env.storage()
+            .instance()
+            .set(&symbol_short!("fee"), &fee_bps);
+    }
+
+    /// Calculates platform fee basis points based on wager amount tiering (Issue #19).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `wager_amount` - Wager amount per player.
+    ///
+    /// # Returns
+    /// * `u32` - Effective fee basis points after wager volume tier discount.
+    pub fn get_wager_tier_fee_bps(env: Env, wager_amount: i128) -> u32 {
+        let base_fee = Self::get_fee_bps(env.clone());
+        if wager_amount >= 10_000 {
+            (base_fee * 70) / 100
+        } else if wager_amount >= 1_000 {
+            (base_fee * 85) / 100
+        } else {
+            base_fee
+        }
+    }
+
+    /// Configures protocol treasury vault address for platform fee collection (Issue #19).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `treasury_vault` - Treasury vault wallet contract address.
+    pub fn set_treasury_vault(env: Env, treasury_vault: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "trsy_vlt"), &treasury_vault);
+    }
+
+    /// Retrieves configured treasury vault address if set (Issue #19).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `Option<Address>` - Treasury vault address if set.
+    pub fn get_treasury_vault(env: Env) -> Option<Address> {
+        env.storage().instance().get(&Symbol::new(&env, "trsy_vlt"))
+    }
+
     /// Retrieves current contract treasury balance for specified token.
     ///
     /// # Arguments
@@ -1412,7 +1471,8 @@ impl ChessterEscrow {
             let winner_pay = m.total_staked - admin_fee;
 
             token_client.transfer(&env.current_contract_address(), &w, &winner_pay);
-            token_client.transfer(&env.current_contract_address(), coordinator, &admin_fee);
+            let fee_recipient = Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
+            token_client.transfer(&env.current_contract_address(), &fee_recipient, &admin_fee);
         } else {
             token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
             if let Some(p2) = m.player2.clone() {
