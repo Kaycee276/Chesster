@@ -137,10 +137,17 @@ button:disabled {
 	cursor: not-allowed;
 }
 
-/* Chess piece slide animation */
+/* Chess piece slide animation — cubic-bezier gives a natural deceleration */
 @keyframes pieceSlide {
-	from { transform: translate(var(--piece-dx, 0px), var(--piece-dy, 0px)); }
-	to   { transform: translate(0, 0); }
+	from { transform: translate(var(--piece-dx, 0px), var(--piece-dy, 0px)) scale(1.08); }
+	80%  { transform: translate(calc(var(--piece-dx, 0px) * 0.04), calc(var(--piece-dy, 0px) * 0.04)) scale(1.02); }
+	to   { transform: translate(0, 0) scale(1); }
+}
+
+/* Flash on the square where a capture just occurred */
+@keyframes captureFlash {
+	0%   { background-color: rgba(239, 68, 68, 0.55); }
+	100% { background-color: transparent; }
 }
 
 @media screen and (max-width: 768px) {
