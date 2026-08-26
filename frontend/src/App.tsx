@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import GameLobby from "./components/GameLobby";
 import GamePage from "./pages/GamePage";
 import Toast from "./components/Toast";
+import ThemeSelector from "./components/ThemeSelector";
 import { useWalletStore } from "./store/walletStore";
 
 const App = () => {
@@ -19,6 +20,7 @@ const App = () => {
 				<Route path="/" element={<GameLobby />} />
 				<Route path="/:gameCode" element={<GamePage />} />
 			</Routes>
+			<ThemeSelector />
 		</BrowserRouter>
 	);
 };

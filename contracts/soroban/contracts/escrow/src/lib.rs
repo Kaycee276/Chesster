@@ -14,6 +14,12 @@ pub const DISPUTE_TIMELOCK_SECS: u64 = 172_800;
 pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
 /// Duration (in seconds) after which settled or refunded matches become eligible for garbage collection (30 days).
 pub const STALE_MATCH_THRESHOLD_SECS: u64 = 2_592_000;
+/// Default duration (in seconds) after which a pending or active match expires (1 hour).
+pub const MATCH_EXPIRATION_SECS: u64 = 3_600;
+/// Default minimum allowable wager amount (1 unit/stroop).
+pub const DEFAULT_MIN_WAGER: i128 = 1;
+/// Default maximum allowable wager amount (maximum positive i128).
+pub const DEFAULT_MAX_WAGER: i128 = i128::MAX;
 
 /// Errors returned by the Chesster Escrow smart contract.
 #[contracterror]
@@ -76,6 +82,14 @@ pub enum EscrowError {
     InvalidBatchSize = 26,
     /// Match is not stale (must be resolved/refunded and >30 days old).
     MatchNotStale = 27,
+    /// Match has expired based on ledger timestamp timeout.
+    MatchExpired = 28,
+    /// Wager amount is below configured minimum limit.
+    WagerBelowMinimum = 28,
+    /// Wager amount exceeds configured maximum limit.
+    WagerAboveMaximum = 29,
+    /// Minimum wager limit cannot exceed maximum wager limit or must be positive.
+    InvalidWagerLimit = 30,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -267,6 +281,38 @@ pub struct MatchCancelledEvent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MatchRefundedEvent {
     pub game_code: String,
+}
+
+/// Configured minimum and maximum allowable wager limits (Issue #23).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WagerLimits {
+    /// Minimum allowable wager amount.
+    pub min_wager: i128,
+    /// Maximum allowable wager amount.
+    pub max_wager: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WagerLimitsUpdatedEvent {
+    pub min_wager: i128,
+    pub max_wager: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenWagerLimitsUpdatedEvent {
+    pub token: Address,
+    pub min_wager: i128,
+    pub max_wager: i128,
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchExpiredEvent {
+    pub game_code: String,
+pub struct PlayerEloUpdatedEvent {
+    pub player: Address,
+    pub new_elo: u32,
 }
 
 /// Chesster Escrow Smart Contract instance.
@@ -544,6 +590,207 @@ impl ChessterEscrow {
         Self::join_match(env, game_code, player2);
     }
 
+    fn set_wager_limits_internal(env: &Env, min_wager: i128, max_wager: i128) {
+        if min_wager <= 0 || max_wager < min_wager {
+            panic_with_error!(env, EscrowError::InvalidWagerLimit);
+        }
+
+        let limits = WagerLimits {
+            min_wager,
+            max_wager,
+        };
+        env.storage()
+            .instance()
+            .set(&Symbol::new(env, "w_limits"), &limits);
+        Self::bump_instance_ttl(env);
+
+        env.events().publish(
+            (symbol_short!("w_limits"),),
+            WagerLimitsUpdatedEvent {
+                min_wager,
+                max_wager,
+            },
+        );
+    }
+
+    /// Configures global minimum and maximum allowable wager limits (Coordinator only) (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `min_wager` - Minimum allowable wager amount (must be > 0).
+    /// * `max_wager` - Maximum allowable wager amount (must be >= min_wager).
+    pub fn set_wager_limits(env: Env, min_wager: i128, max_wager: i128) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        Self::set_wager_limits_internal(&env, min_wager, max_wager);
+    }
+
+    /// Sets global minimum wager limit while keeping current maximum (Coordinator only) (Issue #23).
+    pub fn set_min_wager(env: Env, min_wager: i128) {
+        let current_max = Self::get_max_wager(env.clone());
+        Self::set_wager_limits(env, min_wager, current_max);
+    }
+
+    /// Sets global maximum wager limit while keeping current minimum (Coordinator only) (Issue #23).
+    pub fn set_max_wager(env: Env, max_wager: i128) {
+        let current_min = Self::get_min_wager(env.clone());
+        Self::set_wager_limits(env, current_min, max_wager);
+    }
+
+    /// Retrieves configured global minimum and maximum allowable wager limits (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `WagerLimits` - Struct containing `min_wager` and `max_wager`.
+    pub fn get_wager_limits(env: Env) -> WagerLimits {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "w_limits"))
+            .unwrap_or(WagerLimits {
+                min_wager: DEFAULT_MIN_WAGER,
+                max_wager: DEFAULT_MAX_WAGER,
+            })
+    }
+
+    /// Retrieves current global minimum allowable wager limit (Issue #23).
+    pub fn get_min_wager(env: Env) -> i128 {
+        Self::get_wager_limits(env).min_wager
+    }
+
+    /// Retrieves current global maximum allowable wager limit (Issue #23).
+    pub fn get_max_wager(env: Env) -> i128 {
+        Self::get_wager_limits(env).max_wager
+    }
+
+    fn set_token_wager_limits_internal(
+        env: &Env,
+        token: &Address,
+        min_wager: i128,
+        max_wager: i128,
+    ) {
+        if min_wager <= 0 || max_wager < min_wager {
+            panic_with_error!(env, EscrowError::InvalidWagerLimit);
+        }
+
+        let limits = WagerLimits {
+            min_wager,
+            max_wager,
+        };
+        let key = (Symbol::new(env, "tok_wlim"), token.clone());
+        env.storage().instance().set(&key, &limits);
+        Self::bump_instance_ttl(env);
+
+        env.events().publish(
+            (symbol_short!("tok_wlim"), token.clone()),
+            TokenWagerLimitsUpdatedEvent {
+                token: token.clone(),
+                min_wager,
+                max_wager,
+            },
+        );
+    }
+
+    /// Configures token-specific minimum and maximum wager limits (Coordinator only) (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `token` - Token address.
+    /// * `min_wager` - Minimum allowable wager for token (must be > 0).
+    /// * `max_wager` - Maximum allowable wager for token (must be >= min_wager).
+    pub fn set_token_wager_limits(env: Env, token: Address, min_wager: i128, max_wager: i128) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        Self::set_token_wager_limits_internal(&env, &token, min_wager, max_wager);
+    }
+
+    /// Removes token-specific wager limits, falling back to global limits (Coordinator only) (Issue #23).
+    pub fn remove_token_wager_limits(env: Env, token: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let key = (Symbol::new(&env, "tok_wlim"), token);
+        env.storage().instance().remove(&key);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Retrieves token-specific wager limits if configured, or falls back to global limits (Issue #23).
+    pub fn get_token_wager_limits(env: Env, token: Address) -> WagerLimits {
+        let key = (Symbol::new(&env, "tok_wlim"), token);
+        if let Some(limits) = env.storage().instance().get(&key) {
+            limits
+        } else {
+            Self::get_wager_limits(env)
+        }
+    }
+
+    /// Retrieves minimum allowable wager limit for specified token (Issue #23).
+    pub fn get_token_min_wager(env: Env, token: Address) -> i128 {
+        Self::get_token_wager_limits(env, token).min_wager
+    }
+
+    /// Retrieves maximum allowable wager limit for specified token (Issue #23).
+    pub fn get_token_max_wager(env: Env, token: Address) -> i128 {
+        Self::get_token_wager_limits(env, token).max_wager
+    }
+
+    /// Scales global wager limits dynamically by a scale factor in basis points (10000 = 100%) (Coordinator only) (Issue #23).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `scale_bps` - Scale factor in basis points (must be > 0).
+    pub fn scale_wager_limits(env: Env, scale_bps: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        if scale_bps == 0 {
+            panic_with_error!(&env, EscrowError::InvalidWagerLimit);
+        }
+
+        let current = Self::get_wager_limits(env.clone());
+        let new_min = (current.min_wager * (scale_bps as i128)) / 10_000;
+        let new_min = if new_min <= 0 { 1 } else { new_min };
+
+        let new_max = if current.max_wager == DEFAULT_MAX_WAGER {
+            DEFAULT_MAX_WAGER
+        } else {
+            (current.max_wager * (scale_bps as i128)) / 10_000
+        };
+
+        if new_max < new_min {
+            panic_with_error!(&env, EscrowError::InvalidWagerLimit);
+        }
+
+        Self::set_wager_limits_internal(&env, new_min, new_max);
+    }
+
+    /// Scales token-specific wager limits dynamically by a scale factor in basis points (Coordinator only) (Issue #23).
+    pub fn scale_token_wager_limits(env: Env, token: Address, scale_bps: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        if scale_bps == 0 {
+            panic_with_error!(&env, EscrowError::InvalidWagerLimit);
+        }
+
+        let current = Self::get_token_wager_limits(env.clone(), token.clone());
+        let new_min = (current.min_wager * (scale_bps as i128)) / 10_000;
+        let new_min = if new_min <= 0 { 1 } else { new_min };
+
+        let new_max = if current.max_wager == DEFAULT_MAX_WAGER {
+            DEFAULT_MAX_WAGER
+        } else {
+            (current.max_wager * (scale_bps as i128)) / 10_000
+        };
+
+        if new_max < new_min {
+            panic_with_error!(&env, EscrowError::InvalidWagerLimit);
+        }
+
+        Self::set_token_wager_limits_internal(&env, &token, new_min, new_max);
+    }
+
     fn whitelist_key(env: &Env) -> Symbol {
         Symbol::new(env, "wl_toks")
     }
@@ -566,7 +813,9 @@ impl ChessterEscrow {
 
         tokens.push_back(token.clone());
         env.storage().instance().set(&key, &tokens);
-        env.storage().instance().set(&(Symbol::new(&env, "sup_tok"), token), &true);
+        env.storage()
+            .instance()
+            .set(&(Symbol::new(&env, "sup_tok"), token), &true);
     }
 
     /// Admin-gated: remove a token from the wager-asset whitelist (Issue #40).
@@ -592,7 +841,9 @@ impl ChessterEscrow {
             }
         }
         env.storage().instance().set(&key, &filtered);
-        env.storage().instance().remove(&(Symbol::new(&env, "sup_tok"), token));
+        env.storage()
+            .instance()
+            .remove(&(Symbol::new(&env, "sup_tok"), token));
     }
 
     /// Whether a token is currently whitelisted as a supported wager asset (Issue #40).
@@ -698,6 +949,19 @@ impl ChessterEscrow {
         }
     }
 
+    fn validate_wager_amount(env: &Env, token: &Address, amount: i128) {
+        if amount <= 0 {
+            panic_with_error!(env, EscrowError::InvalidWager);
+        }
+        let limits = Self::get_token_wager_limits(env.clone(), token.clone());
+        if amount < limits.min_wager {
+            panic_with_error!(env, EscrowError::WagerBelowMinimum);
+        }
+        if amount > limits.max_wager {
+            panic_with_error!(env, EscrowError::WagerAboveMaximum);
+        }
+    }
+
     /// Creates a match and deposits Player 1's wager (Issue #34).
     ///
     /// # Arguments
@@ -730,9 +994,7 @@ impl ChessterEscrow {
         if env.storage().persistent().has(&game_code) {
             panic_with_error!(&env, EscrowError::MatchAlreadyExists);
         }
-        if amount <= 0 {
-            panic_with_error!(&env, EscrowError::InvalidWager);
-        }
+        Self::validate_wager_amount(&env, &token, amount);
 
         let player1_key = (Symbol::new(&env, "act_m"), player1.clone());
         let active_matches: Vec<String> = env
@@ -806,6 +1068,12 @@ impl ChessterEscrow {
         if m.status != MatchStatus::Pending {
             panic_with_error!(&env, EscrowError::MatchNotPending);
         }
+
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() >= m.created_at + timeout {
+            panic_with_error!(&env, EscrowError::MatchExpired);
+        }
+
         if m.player2.is_some() {
             panic_with_error!(&env, EscrowError::AlreadyJoined);
         }
@@ -876,6 +1144,11 @@ impl ChessterEscrow {
 
         if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
             panic_with_error!(&env, EscrowError::SideBetClosed);
+        }
+
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() >= m.created_at + timeout {
+            panic_with_error!(&env, EscrowError::MatchExpired);
         }
 
         if predicted_winner != m.player1 && Some(predicted_winner.clone()) != m.player2 {
@@ -1148,7 +1421,166 @@ impl ChessterEscrow {
         admin_fee
     }
 
-    /// Refunds match wagers after 1-hour timeout period.
+    /// Configures the match expiration timeout period in seconds (Coordinator only).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `timeout_secs` - Timeout duration in seconds (must be > 0).
+    pub fn set_match_timeout(env: Env, timeout_secs: u64) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        if timeout_secs == 0 {
+            panic_with_error!(&env, EscrowError::InvalidWager);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "timeout"), &timeout_secs);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Retrieves current match expiration timeout period in seconds.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `u64` - Match timeout duration in seconds (defaults to `MATCH_EXPIRATION_SECS`).
+    pub fn get_match_timeout(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "timeout"))
+            .unwrap_or(MATCH_EXPIRATION_SECS)
+    }
+
+    /// Checks whether a match has expired based on current ledger timestamp.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `bool` - True if match is in Pending or Active status and ledger timestamp >= created_at + timeout.
+    pub fn is_match_expired(env: Env, game_code: String) -> bool {
+        let m = Self::load_match(&env, &game_code);
+        if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
+            return false;
+        }
+        let timeout = Self::get_match_timeout(env.clone());
+        env.ledger().timestamp() >= m.created_at + timeout
+    }
+
+    /// Retrieves ledger expiration timestamp for a match.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    ///
+    /// # Returns
+    /// * `u64` - Expiration timestamp (`created_at + timeout`).
+    pub fn get_match_expiration(env: Env, game_code: String) -> u64 {
+        let m = Self::load_match(&env, &game_code);
+        let timeout = Self::get_match_timeout(env.clone());
+        m.created_at + timeout
+    }
+
+    /// Allows a match player (player1 or player2) to claim refund after expiration timeout (Issue #21).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `player` - Address of player claiming refund (must be participant).
+    pub fn claim_refund(env: Env, game_code: String, player: Address) {
+        player.require_auth();
+
+        let mut m = Self::load_match(&env, &game_code);
+
+        if player != m.player1 && Some(player.clone()) != m.player2 {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+
+        if m.status == MatchStatus::Resolved || m.status == MatchStatus::Refunded {
+            panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
+        }
+
+        Self::ensure_dispute_not_locked(&env, &game_code);
+
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() < m.created_at + timeout {
+            panic_with_error!(&env, EscrowError::TimeoutNotReached);
+        }
+
+        Self::execute_refund(&env, &game_code, &mut m);
+    }
+
+    /// Auto-claims refund on an expired match by coordinator or participant (Issue #21).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `caller` - Caller address (must be coordinator or match participant).
+    pub fn auto_claim_refund(env: Env, game_code: String, caller: Address) {
+        caller.require_auth();
+
+        let mut m = Self::load_match(&env, &game_code);
+        let coordinator = Self::get_coordinator(env.clone());
+
+        if caller != coordinator && caller != m.player1 && Some(caller.clone()) != m.player2 {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+
+        if m.status == MatchStatus::Resolved || m.status == MatchStatus::Refunded {
+            panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
+        }
+
+        Self::ensure_dispute_not_locked(&env, &game_code);
+
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() < m.created_at + timeout {
+            panic_with_error!(&env, EscrowError::TimeoutNotReached);
+        }
+
+        Self::execute_refund(&env, &game_code, &mut m);
+    }
+
+    /// Coordinator batch auto-claims refunds for multiple expired matches (Issue #21).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_codes` - Vector of match game codes to evaluate and refund if expired.
+    ///
+    /// # Returns
+    /// * `u32` - Number of expired matches successfully refunded.
+    pub fn auto_claim_expired_matches(env: Env, game_codes: Vec<String>) -> u32 {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let mut count: u32 = 0;
+        let now = env.ledger().timestamp();
+        let timeout = Self::get_match_timeout(env.clone());
+
+        for game_code in game_codes.iter() {
+            if let Some(mut m) = env.storage().persistent().get::<_, Match>(&game_code) {
+                if (m.status == MatchStatus::Pending || m.status == MatchStatus::Active)
+                    && now >= m.created_at + timeout
+                {
+                    let dispute_key = Self::dispute_key(&env, &game_code);
+                    if let Some(d) = env.storage().persistent().get::<_, Dispute>(&dispute_key) {
+                        if d.status == DisputeStatus::Locked {
+                            continue;
+                        }
+                    }
+
+                    Self::execute_refund(&env, &game_code, &mut m);
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Refunds match wagers after match expiration timeout period.
     ///
     /// # Arguments
     /// * `env` - Environment reference.
@@ -1162,34 +1594,45 @@ impl ChessterEscrow {
 
         Self::ensure_dispute_not_locked(&env, &game_code);
 
-        if env.ledger().timestamp() < m.created_at + 3600 {
+        let timeout = Self::get_match_timeout(env.clone());
+        if env.ledger().timestamp() < m.created_at + timeout {
             panic_with_error!(&env, EscrowError::TimeoutNotReached);
         }
 
-        let token_client = token::Client::new(&env, &m.token);
+        Self::execute_refund(&env, &game_code, &mut m);
+    }
+
+    fn execute_refund(env: &Env, game_code: &String, m: &mut Match) {
+        let token_client = token::Client::new(env, &m.token);
 
         token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
         if let Some(p2) = m.player2.clone() {
             token_client.transfer(&env.current_contract_address(), &p2, &m.wager_amount);
         }
 
-        let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
+        let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
         if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
             for bet in pool.bets.iter() {
                 token_client.transfer(&env.current_contract_address(), &bet.spectator, &bet.amount);
             }
-            Self::bump_entry_ttl(&env, &pool_key);
+            Self::bump_entry_ttl(env, &pool_key);
         }
 
         m.status = MatchStatus::Refunded;
-        env.storage().persistent().set(&game_code, &m);
-        Self::bump_entry_ttl(&env, &game_code);
+        env.storage().persistent().set(game_code, m);
+        Self::bump_entry_ttl(env, game_code);
 
-        Self::remove_from_active_lists(&env, &game_code, &m);
+        Self::remove_from_active_lists(env, game_code, m);
 
         env.events().publish(
             (symbol_short!("refunded"), game_code.clone()),
             MatchRefundedEvent {
+                game_code: game_code.clone(),
+            },
+        );
+        env.events().publish(
+            (symbol_short!("expired"), game_code.clone()),
+            MatchExpiredEvent {
                 game_code: game_code.clone(),
             },
         );
@@ -1533,6 +1976,57 @@ impl ChessterEscrow {
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidTournament));
         Self::bump_entry_ttl(&env, &tournament_id);
         tournament
+    }
+
+    /// Updates the Elo rating for a player.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `player` - Address of the player.
+    /// * `new_elo` - New Elo rating.
+    pub fn update_player_elo(env: Env, player: Address, new_elo: u32) {
+        player.require_auth();
+        env.storage()
+            .persistent()
+            .set(&(symbol_short!("elo_r"), player.clone()), &new_elo);
+        env.storage().persistent().extend_ttl(
+            &(symbol_short!("elo_r"), player.clone()),
+            STORAGE_TTL_THRESHOLD,
+            STORAGE_TTL_EXTENDED,
+        );
+        env.events().publish(
+            (symbol_short!("elo_r"), player.clone()),
+            PlayerEloUpdatedEvent { player, new_elo },
+        );
+    }
+
+    /// Retrieves the Elo rating for a player. Defaults to 1200 if not set.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `player` - Address of the player.
+    ///
+    /// # Returns
+    /// * `u32` - Elo rating.
+    pub fn get_player_elo(env: Env, player: Address) -> u32 {
+        let elo = env
+            .storage()
+            .persistent()
+            .get(&(symbol_short!("elo_r"), player.clone()))
+            .unwrap_or(1200u32);
+
+        if env
+            .storage()
+            .persistent()
+            .has(&(symbol_short!("elo_r"), player.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &(symbol_short!("elo_r"), player),
+                STORAGE_TTL_THRESHOLD,
+                STORAGE_TTL_EXTENDED,
+            );
+        }
+        elo
     }
 }
 
