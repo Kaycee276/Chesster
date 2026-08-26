@@ -1,4 +1,7 @@
 require("dotenv").config();
+const { validateEnv } = require("./config/envValidator");
+validateEnv();
+
 const express = require("express");
 const cors = require("cors");
 const http = require("http");

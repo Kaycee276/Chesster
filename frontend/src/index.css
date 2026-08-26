@@ -40,6 +40,10 @@
 	--text-secondary: var(--text-light-secondary);
 	--text-tertiary: var(--text-light-tertiary);
 	--border: var(--border-light);
+
+	/* Board square colours (overridden at runtime by the board theme) */
+	--sq-light: #f0d9b5;
+	--sq-dark: #b58863;
 }
 
 .dark {
