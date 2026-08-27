@@ -16,6 +16,7 @@ import {
 	X,
 	Volume2,
 	VolumeX,
+	RefreshCw,
 } from "lucide-react";
 
 const NATIVE_XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
@@ -259,6 +260,7 @@ function ChessBoardInner() {
 	const [soundEnabled, setSoundEnabled] = useState(() => soundService.isEnabled());
 	const [volume, setVolume] = useState(() => soundService.getVolume());
 	const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+	const [flipped, setFlipped] = useState(false);
 
 	// ── Piece move animation ───────────────────────────────────────────────────
 	const lastMove = useGameStore((s) => s.lastMove);
@@ -494,7 +496,7 @@ function ChessBoardInner() {
 	}, []);
 
 	const displayBoard =
-		playerColor === "black"
+		(playerColor === "black") !== flipped
 			? [...board].reverse().map((row) => [...row].reverse())
 			: board;
 
@@ -789,6 +791,13 @@ function ChessBoardInner() {
 			<div className="shrink-0 flex items-center justify-between px-2.5 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) gap-1.5 min-w-0 overflow-hidden">
 				{/* Left: game actions */}
 				<div className="flex items-center gap-1 shrink-0">
+					<button
+						onClick={() => setFlipped((f) => !f)}
+						title="Flip board"
+						className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+					>
+						<RefreshCw size={13} />
+					</button>
 					{status === "finished" ? (
 						<button
 							onClick={handleLeaveGame}

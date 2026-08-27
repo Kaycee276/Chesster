@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Palette, Check } from "lucide-react";
+import { Palette, Check, Crown } from "lucide-react";
 import {
 	BOARD_THEMES,
+	PIECE_SETS,
 	useThemeStore,
 	type BoardThemeKey,
 } from "../store/themeStore";
@@ -23,6 +24,8 @@ function useApplyThemeOnMount() {
 export default function ThemeSelector() {
 	const boardTheme = useThemeStore((s) => s.boardTheme);
 	const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
+	const pieceSet = useThemeStore((s) => s.pieceSet);
+	const setPieceSet = useThemeStore((s) => s.setPieceSet);
 	const [open, setOpen] = useState(false);
 
 	useApplyThemeOnMount();
@@ -71,8 +74,8 @@ export default function ThemeSelector() {
 						</div>
 
 						<p className="text-xs text-(--text-secondary)">
-							Pick a colour scheme for the chessboard. Your choice is saved
-							locally and applied instantly.
+							Pick a colour scheme and piece set for the chessboard. Your choice
+							is saved locally and applied instantly.
 						</p>
 
 						<div className="grid grid-cols-2 gap-3">
@@ -103,6 +106,48 @@ export default function ThemeSelector() {
 													size={16}
 													className="text-(--accent-primary)"
 												/>
+											)}
+										</div>
+									</button>
+								);
+							})}
+						</div>
+
+						<div className="flex items-center gap-2 mt-2">
+							<Crown size={14} className="text-(--accent-primary)" />
+							<span className="text-sm font-bold">Piece Set</span>
+						</div>
+
+						<div className="grid grid-cols-2 gap-3">
+							{PIECE_SETS.map((ps) => {
+								const active = ps.key === pieceSet;
+								return (
+									<button
+										type="button"
+										key={ps.key}
+										onClick={() => setPieceSet(ps.key)}
+										className={`relative flex flex-col items-center gap-1 rounded-xl border p-2 text-left transition-colors ${
+											active
+												? "border-(--accent-primary) ring-1 ring-(--accent-primary)/50"
+												: "border-(--border) hover:border-(--accent-primary)/40"
+										}`}
+										aria-pressed={active}
+									>
+										<div className="flex gap-0.5 text-lg leading-none">
+											<span className="text-white" style={{ textShadow: "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000" }}>
+												{ps.pieces.K}
+											</span>
+											<span className="text-white" style={{ textShadow: "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000" }}>
+												{ps.pieces.Q}
+											</span>
+											<span className="text-white" style={{ textShadow: "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000" }}>
+												{ps.pieces.R}
+											</span>
+										</div>
+										<div className="flex items-center justify-between w-full">
+											<span className="text-sm font-semibold">{ps.name}</span>
+											{active && (
+												<Check size={16} className="text-(--accent-primary)" />
 											)}
 										</div>
 									</button>
