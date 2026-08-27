@@ -12,6 +12,7 @@ const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
 const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
+const metricsRoutes = require("./routes/metricsRoutes");
 const timerService = require("./services/timerService");
 const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
@@ -74,6 +75,7 @@ app.use("/api/escrow", escrowRoutes);
 app.use("/api", authRoutes);
 app.use("/api", botRoutes);
 app.use("/api", healthRoutes);
+app.use("/api", metricsRoutes);
 
 // Legacy health endpoint
 app.get("/health", (req, res) => {
@@ -108,6 +110,9 @@ function broadcastPresence(gameCode, color, status) {
 }
 
 io.on("connection", (socket) => {
+  // Update active socket connections gauge
+  metricsRoutes.activeSocketConnections.set(io.engine.clientsCount);
+  
   // Accepts either a bare gameCode string (spectator join) or
   // { gameCode, playerColor } so we can track presence / handle reconnects.
   socket.on("join-game", (payload) => {
@@ -151,6 +156,9 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    // Update active socket connections gauge
+    metricsRoutes.activeSocketConnections.set(io.engine.clientsCount);
+    
     const { gameCode, playerColor } = socket.data || {};
     if (!gameCode || !playerColor) return;
 
