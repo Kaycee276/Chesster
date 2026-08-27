@@ -16,6 +16,7 @@ import {
 	X,
 	Volume2,
 	VolumeX,
+	RefreshCw,
 } from "lucide-react";
 
 const NATIVE_XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
@@ -215,17 +216,19 @@ export default function ChessBoard() {
 	return <ChessBoardInner />;
 }
 
-const PlayerAvatar = ({ color }: { color: "white" | "black" }) => (
-	<div
-		className={`w-7 h-7 rounded-full flex items-center justify-center text-base border-2 shrink-0 ${
-			color === "white"
-				? "bg-white border-gray-300 text-gray-900"
-				: "bg-gray-900 border-gray-600 text-white"
-		}`}
-	>
-		{color === "white" ? "♔" : "♚"}
-	</div>
-);
+function PlayerAvatar({ color }: { color: "white" | "black" }) {
+	return (
+		<div
+			className={`w-7 h-7 rounded-full flex items-center justify-center text-base border-2 shrink-0 ${
+				color === "white"
+					? "bg-white border-gray-300 text-gray-900"
+					: "bg-gray-900 border-gray-600 text-white"
+			}`}
+		>
+			{color === "white" ? "♔" : "♚"}
+		</div>
+	);
+}
 
 function ChessBoardInner() {
 	const {
@@ -255,12 +258,17 @@ function ChessBoardInner() {
 	const [showPayoutModal, setShowPayoutModal] = useState(false);
 	const [confirmAction, setConfirmAction] = useState<"resign" | "leave" | null>(null);
 	const [soundEnabled, setSoundEnabled] = useState(() => soundService.isEnabled());
+	const [volume, setVolume] = useState(() => soundService.getVolume());
+	const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+	const [flipped, setFlipped] = useState(false);
 
 	// ── Piece move animation ───────────────────────────────────────────────────
 	const lastMove = useGameStore((s) => s.lastMove);
 	const [animKey, setAnimKey] = useState<string | null>(null);
 	const [animOffset, setAnimOffset] = useState({ dx: 0, dy: 0 });
+	const [captureKey, setCaptureKey] = useState<string | null>(null);
 	const prevLastMoveRef = useRef<typeof lastMove>(null);
+	const prevBoardRef = useRef<string[][]>([]);
 
 	useEffect(() => {
 		if (!lastMove) return;
@@ -273,6 +281,22 @@ function ChessBoardInner() {
 			prev.to[1] === lastMove.to[1]
 		)
 			return;
+
+		// Detect capture: destination had an opponent piece before the move
+		const prevBoard = prevBoardRef.current;
+		if (prevBoard.length) {
+			const destPiece = prevBoard[lastMove.to[0]]?.[lastMove.to[1]];
+			const movingPiece = lastMove.piece;
+			const isWhite = movingPiece === movingPiece.toUpperCase();
+			const isCapture = destPiece && destPiece !== "." &&
+				(isWhite ? destPiece === destPiece.toLowerCase() : destPiece === destPiece.toUpperCase());
+			if (isCapture) {
+				const ck = `${lastMove.to[0]}-${lastMove.to[1]}`;
+				setCaptureKey(ck);
+				setTimeout(() => setCaptureKey(null), 400);
+			}
+		}
+
 		prevLastMoveRef.current = lastMove;
 
 		// Compute how many squares the piece travelled, accounting for board flip
@@ -282,9 +306,14 @@ function ChessBoardInner() {
 
 		setAnimOffset({ dx, dy });
 		setAnimKey(`${lastMove.to[0]}-${lastMove.to[1]}`);
-		const t = setTimeout(() => setAnimKey(null), 350);
+		const t = setTimeout(() => setAnimKey(null), 380);
 		return () => clearTimeout(t);
 	}, [lastMove, playerColor]);
+
+	// Keep a snapshot of the board before each move so capture detection works
+	useEffect(() => {
+		prevBoardRef.current = board;
+	}, [board]);
 
 	const inCheck = useGameStore((s) => s.inCheck);
 	const winner = useGameStore((s) => s.winner);
@@ -467,7 +496,7 @@ function ChessBoardInner() {
 	}, []);
 
 	const displayBoard =
-		playerColor === "black"
+		(playerColor === "black") !== flipped
 			? [...board].reverse().map((row) => [...row].reverse())
 			: board;
 
@@ -614,6 +643,7 @@ function ChessBoardInner() {
 			<div
 				ref={boardWrapperRef}
 				className="flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden"
+				style={{ touchAction: "none" }}
 			>
 				{boardPx > 0 && (
 				<div
@@ -653,6 +683,7 @@ function ChessBoardInner() {
 							((actualRow === lastMove.from[0] && actualCol === lastMove.from[1]) ||
 								(actualRow === lastMove.to[0] && actualCol === lastMove.to[1]));
 						const isPieceAnimating = animKey === `${actualRow}-${actualCol}`;
+						const isCaptureSquare = captureKey === `${actualRow}-${actualCol}`;
 
 						return (
 							<div
@@ -664,7 +695,14 @@ function ChessBoardInner() {
 								} ${isLastMoveSquare ? "bg-yellow-300/45" : ""} ${
 									highlight ? " outline-2 outline-yellow-300/60 -outline-offset-2" : ""
 								}`}
+								style={isCaptureSquare ? { animation: "captureFlash 0.4s ease-out forwards" } : undefined}
 								onClick={() => handleSquareClick(actualRow, actualCol)}
+								onTouchEnd={(e) => {
+									// Prevent the synthetic click that follows touch so the
+									// handler doesn't fire twice on mobile browsers.
+									e.preventDefault();
+									handleSquareClick(actualRow, actualCol);
+								}}
 							>
 								{/* Possible-move dot */}
 								{possible && (
@@ -687,7 +725,7 @@ function ChessBoardInner() {
 												? WHITE_PIECE_STYLE
 												: BLACK_PIECE_STYLE),
 											...(isPieceAnimating && {
-												animation: "pieceSlide 0.3s ease-out forwards",
+												animation: "pieceSlide 0.38s cubic-bezier(0.22,1,0.36,1) forwards",
 												"--piece-dx": `calc(${animOffset.dx} * var(--board-size) / 8)`,
 												"--piece-dy": `calc(${animOffset.dy} * var(--board-size) / 8)`,
 											}),
@@ -753,6 +791,13 @@ function ChessBoardInner() {
 			<div className="shrink-0 flex items-center justify-between px-2.5 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) gap-1.5 min-w-0 overflow-hidden">
 				{/* Left: game actions */}
 				<div className="flex items-center gap-1 shrink-0">
+					<button
+						onClick={() => setFlipped((f) => !f)}
+						title="Flip board"
+						className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+					>
+						<RefreshCw size={13} />
+					</button>
 					{status === "finished" ? (
 						<button
 							onClick={handleLeaveGame}
@@ -831,13 +876,35 @@ function ChessBoardInner() {
 							</span>
 						)
 					)}
-					<button
-						onClick={() => setSoundEnabled(soundService.toggle())}
-						title={soundEnabled ? "Mute sounds" : "Unmute sounds"}
-						className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
-					>
-						{soundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
-					</button>
+					<div className="relative flex items-center">
+						<button
+							onClick={() => setSoundEnabled(soundService.toggle())}
+							onContextMenu={(e) => { e.preventDefault(); setShowVolumeSlider((v) => !v); }}
+							title={soundEnabled ? "Mute sounds (right-click for volume)" : "Unmute sounds"}
+							className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+						>
+							{soundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
+						</button>
+						{showVolumeSlider && (
+							<div className="absolute bottom-full right-0 mb-1 bg-(--bg-secondary) border border-(--border) rounded-lg p-2 shadow-xl z-50 flex flex-col items-center gap-1">
+								<span className="text-[10px] text-(--text-tertiary)">Volume</span>
+								<input
+									type="range"
+									min={0}
+									max={1}
+									step={0.05}
+									value={volume}
+									onChange={(e) => {
+										const v = parseFloat(e.target.value);
+										soundService.setVolume(v);
+										setVolume(v);
+									}}
+									className="w-20 accent-(--accent-primary)"
+								/>
+								<span className="text-[10px] text-(--text-tertiary)">{Math.round(volume * 100)}%</span>
+							</div>
+						)}
+					</div>
 					<button
 						onClick={copyGameCode}
 						disabled={!gameCode}

@@ -14,7 +14,7 @@ export async function depositXLM(fnName: "create_match" | "join_match", gameCode
     const contract = new Contract(ESCROW_ADDRESS);
 
     // Convert amount to stroops (1 XLM = 10,000,000 stroops)
-    const amountStroops = BigInt(parseFloat(amount) * 10000000).toString();
+    const amountStroops = BigInt(Math.round(parseFloat(amount) * 10_000_000)).toString();
 
     // The native token address on testnet
     const nativeTokenAddress = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
@@ -27,7 +27,7 @@ export async function depositXLM(fnName: "create_match" | "join_match", gameCode
         contract.call(
             fnName,
             nativeToScVal(gameCode, { type: "string" }),
-            fnName === "create_match" ? nativeToScVal(publicKey, { type: "address" }) : nativeToScVal(publicKey, { type: "address" }),
+            nativeToScVal(publicKey, { type: "address" }),
             ...(fnName === "create_match" ? [nativeToScVal(nativeTokenAddress, { type: "address" })] : []),
             nativeToScVal(amountStroops, { type: "i128" })
         )
@@ -40,12 +40,15 @@ export async function depositXLM(fnName: "create_match" | "join_match", gameCode
         networkPassphrase: NETWORK_PASSPHRASE,
     });
 
-    if (signedResponse.error) {
-        throw new Error(signedResponse.error);
+    if ("error" in signedResponse && signedResponse.error) {
+        throw new Error(String(signedResponse.error));
     }
 
+    const xdr = "signedTxXdr" in signedResponse ? signedResponse.signedTxXdr : "";
+    if (!xdr) throw new Error("Signing failed: no signed XDR returned");
+
     const sendResponse = await server.sendTransaction(
-        TransactionBuilder.fromXDR(signedResponse.signedTxXdr, NETWORK_PASSPHRASE) as unknown as Transaction
+        TransactionBuilder.fromXDR(xdr, NETWORK_PASSPHRASE) as unknown as Transaction
     );
 
     if (sendResponse.status === "PENDING") {

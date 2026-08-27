@@ -4,6 +4,7 @@ validateEnv();
 
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const http = require("http");
 const { Server } = require("socket.io");
 const gameRoutes = require("./routes/gameRoutes");
@@ -11,12 +12,15 @@ const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
 const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
+const metricsRoutes = require("./routes/metricsRoutes");
 const timerService = require("./services/timerService");
 const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
 const { geoBlock } = require("./middleware/geoBlock");
+const { createRateLimiter } = require("./middleware/rateLimiter");
+const { sanitizeInput } = require("./middleware/sanitizeInput");
 
 const app = express();
 const server = http.createServer(app);
@@ -28,21 +32,45 @@ const io = new Server(server, {
     origin: CORS_ORIGIN,
     methods: ["GET", "POST"],
   },
+  perMessageDeflate: true,
 });
 
 const PORT = process.env.PORT || 3001;
+
+// Security headers
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:"],
+        connectSrc: ["'self'", CORS_ORIGIN !== "*" ? CORS_ORIGIN : ""],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+  }),
+);
 
 // Apply structured logging middleware
 app.use(logger.requestMiddleware());
 
 app.use(
   cors({
-    origin: CORS_ORIGIN,
-    methods: ["GET", "POST"],
+    origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN,
+    methods: ["GET", "POST", "PATCH", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: CORS_ORIGIN !== "*",
   }),
 );
 app.use(express.json());
 app.use(geoBlock);
+app.use(createRateLimiter({ windowMs: 60_000, max: 100 }));
+app.use(sanitizeInput);
 
 // Mount routes
 app.use("/api", gameRoutes);
@@ -50,6 +78,7 @@ app.use("/api/escrow", escrowRoutes);
 app.use("/api", authRoutes);
 app.use("/api", botRoutes);
 app.use("/api", healthRoutes);
+app.use("/api", metricsRoutes);
 
 // Legacy health endpoint
 app.get("/health", (req, res) => {
@@ -84,6 +113,9 @@ function broadcastPresence(gameCode, color, status) {
 }
 
 io.on("connection", (socket) => {
+  // Update active socket connections gauge
+  metricsRoutes.activeSocketConnections.set(io.engine.clientsCount);
+  
   // Accepts either a bare gameCode string (spectator join) or
   // { gameCode, playerColor } so we can track presence / handle reconnects.
   socket.on("join-game", (payload) => {
@@ -127,6 +159,9 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    // Update active socket connections gauge
+    metricsRoutes.activeSocketConnections.set(io.engine.clientsCount);
+    
     const { gameCode, playerColor } = socket.data || {};
     if (!gameCode || !playerColor) return;
 

@@ -85,11 +85,13 @@ pub enum EscrowError {
     /// Match has expired based on ledger timestamp timeout.
     MatchExpired = 28,
     /// Wager amount is below configured minimum limit.
-    WagerBelowMinimum = 28,
+    WagerBelowMinimum = 29,
     /// Wager amount exceeds configured maximum limit.
-    WagerAboveMaximum = 29,
+    WagerAboveMaximum = 30,
     /// Minimum wager limit cannot exceed maximum wager limit or must be positive.
-    InvalidWagerLimit = 30,
+    InvalidWagerLimit = 31,
+    /// Contract is paused; new match and tournament creation is temporarily disabled.
+    ContractPaused = 32,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -239,51 +241,72 @@ pub struct Match {
 }
 
 // ---------------------------------------------------------------------------
-// Typed contract events (Issue #24)
+// Typed contract events
 // ---------------------------------------------------------------------------
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published after Player 1 creates a match and their wager is locked.
 pub struct MatchCreatedEvent {
+    /// Identifier supplied by the client for this match.
     pub game_code: String,
+    /// Authorized address of the creating player.
     pub player1: Address,
+    /// Stellar Asset Contract used for the wager.
     pub token: Address,
+    /// Per-player amount locked for the match.
     pub wager_amount: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published after Player 2 joins and the full match pool is funded.
 pub struct MatchFundedEvent {
+    /// Identifier of the funded match.
     pub game_code: String,
+    /// Authorized address of the joining player.
     pub player2: Address,
+    /// Combined amount currently held in escrow.
     pub total_staked: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator settles a match or refunds a draw.
 pub struct MatchResolvedEvent {
+    /// Identifier of the settled match.
     pub game_code: String,
+    /// Recipient of the winner payout, or `None` for a draw.
     pub winner: Option<Address>,
+    /// Platform fee transferred during a winner settlement.
     pub admin_fee: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator awards a match due to a player forfeit.
 pub struct MatchForfeitedEvent {
+    /// Identifier of the forfeited match.
     pub game_code: String,
+    /// Participant whose forfeit triggered settlement.
     pub forfeiting_player: Address,
+    /// Opponent who received the resulting payout.
     pub winner: Address,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when a pending match is mutually cancelled.
 pub struct MatchCancelledEvent {
+    /// Identifier of the cancelled match.
     pub game_code: String,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when a timed-out or otherwise refundable match is refunded.
 pub struct MatchRefundedEvent {
+    /// Identifier of the refunded match.
     pub game_code: String,
 }
 
@@ -299,24 +322,58 @@ pub struct WagerLimits {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published after the coordinator updates global wager limits.
 pub struct WagerLimitsUpdatedEvent {
+    /// New inclusive global minimum wager.
     pub min_wager: i128,
+    /// New inclusive global maximum wager.
     pub max_wager: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published after the coordinator updates a token-specific wager limit.
 pub struct TokenWagerLimitsUpdatedEvent {
+    /// Token whose limits were updated.
     pub token: Address,
+    /// New inclusive minimum for this token.
     pub min_wager: i128,
+    /// New inclusive maximum for this token.
     pub max_wager: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when a match passes its configured expiration time.
 pub struct MatchExpiredEvent {
+    /// Identifier of the expired match.
     pub game_code: String,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator records a player's Elo rating.
 pub struct PlayerEloUpdatedEvent {
+    /// Player whose rating changed.
     pub player: Address,
+    /// Newly recorded Elo rating.
     pub new_elo: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator activates the emergency circuit breaker pause.
+pub struct ContractPausedEvent {
+    /// Coordinator address that triggered the pause.
+    pub coordinator: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when the coordinator lifts the emergency circuit breaker pause.
+pub struct ContractUnpausedEvent {
+    /// Coordinator address that lifted the pause.
+    pub coordinator: Address,
 }
 
 /// Chesster Escrow Smart Contract instance.
@@ -339,6 +396,56 @@ impl ChessterEscrow {
         env.storage()
             .instance()
             .set(&symbol_short!("fee"), &admin_bps);
+    }
+
+    /// Pauses the contract, blocking new match and tournament creation (coordinator only).
+    ///
+    /// Refunds and other settlement operations remain available while paused.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    pub fn pause(env: Env) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &true);
+        Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (symbol_short!("paused"),),
+            ContractPausedEvent { coordinator },
+        );
+    }
+
+    /// Unpauses the contract, re-enabling match and tournament creation (coordinator only).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    pub fn unpause(env: Env) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &false);
+        Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (symbol_short!("unpaused"),),
+            ContractUnpausedEvent { coordinator },
+        );
+    }
+
+    /// Returns whether the contract is currently paused.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `bool` - `true` if the contract is paused, `false` otherwise.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, "paused"))
+            .unwrap_or(false)
     }
 
     /// Sets governance token address for calculating fee discounts (Issue #36).
@@ -983,6 +1090,10 @@ impl ChessterEscrow {
     ) {
         player1.require_auth();
 
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
+
         if !Self::is_token_supported(env.clone(), token.clone()) {
             panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
         }
@@ -1068,6 +1179,10 @@ impl ChessterEscrow {
     /// * `player2` - Joining player address.
     pub fn join_match(env: Env, game_code: String, player2: Address) {
         player2.require_auth();
+
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
 
         let mut m = Self::load_match(&env, &game_code);
 
@@ -1956,6 +2071,10 @@ impl ChessterEscrow {
         prize_distribution: Vec<i128>,
         token: Address,
     ) {
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
+
         if !Self::is_token_supported(env.clone(), token.clone()) {
             panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
         }
@@ -1997,6 +2116,10 @@ impl ChessterEscrow {
     /// * `player` - Joining player address.
     pub fn join_tournament(env: Env, tournament_id: String, player: Address) {
         player.require_auth();
+
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
 
         let mut tournament: TournamentPrizePool = env
             .storage()
