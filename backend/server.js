@@ -31,6 +31,7 @@ const io = new Server(server, {
     origin: CORS_ORIGIN,
     methods: ["GET", "POST"],
   },
+  perMessageDeflate: true,
 });
 
 const PORT = process.env.PORT || 3001;
