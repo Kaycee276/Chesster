@@ -216,3 +216,5 @@ cronService.start();
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Chesster backend running on port ${PORT}`);
 });
+
+module.exports = { app, server, io };
