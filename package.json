@@ -22,5 +22,8 @@
     "lint-staged": "^15.4.3",
     "prettier": "^3.5.0",
     "semantic-release": "^24.2.3"
+  },
+  "dependencies": {
+    "prom-client": "^15.1.3"
   }
 }
