@@ -17,6 +17,8 @@ const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
+const { createRateLimiter } = require("./middleware/rateLimiter");
+const { sanitizeInput } = require("./middleware/sanitizeInput");
 
 const app = express();
 const server = http.createServer(app);
@@ -63,6 +65,8 @@ app.use(
   }),
 );
 app.use(express.json());
+app.use(createRateLimiter({ windowMs: 60_000, max: 100 }));
+app.use(sanitizeInput);
 
 // Mount routes
 app.use("/api", gameRoutes);
