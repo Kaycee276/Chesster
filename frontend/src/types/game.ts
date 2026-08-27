@@ -1,7 +1,23 @@
+export interface MoveRecord {
+	id?: string | number;
+	game_id?: string | number;
+	move_number: number;
+	player: "white" | "black";
+	from_position: [number, number];
+	to_position: [number, number];
+	piece: string;
+	board_state_after: string[][];
+	is_check?: boolean;
+	is_checkmate?: boolean;
+	promotion?: string | null;
+	created_at?: string;
+}
+
 export interface GameState {
 	board_state: string[][];
 	current_turn: "white" | "black";
 	status: string;
+	move_count?: number | null;
 	game_code?: string;
 	player_white?: boolean;
 	player_black?: boolean;
