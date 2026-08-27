@@ -8,13 +8,18 @@
  *   import { soundService } from "../services/soundService";
  *   soundService.move();
  *   soundService.setEnabled(false);
+ *   soundService.setVolume(0.5);
  */
 
 type OscType = OscillatorType;
 
+const LS_MUTED_KEY = "chesster:sound:muted";
+const LS_VOLUME_KEY = "chesster:sound:volume";
+
 class SoundService {
   private ctx: AudioContext | null = null;
-  private _enabled = true;
+  private _enabled = localStorage.getItem(LS_MUTED_KEY) !== "true";
+  private _volume = Math.min(1, Math.max(0, parseFloat(localStorage.getItem(LS_VOLUME_KEY) ?? "1") || 1));
 
   private getCtx(): AudioContext | null {
     if (!this._enabled) return null;
@@ -47,10 +52,11 @@ class SoundService {
       osc.connect(gain);
       gain.connect(ctx.destination);
 
+      const scaledVolume = volume * this._volume;
       osc.type = type;
       osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
       gain.gain.setValueAtTime(0, ctx.currentTime + delay);
-      gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + delay + 0.01);
+      gain.gain.linearRampToValueAtTime(scaledVolume, ctx.currentTime + delay + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
       osc.start(ctx.currentTime + delay);
       osc.stop(ctx.currentTime + delay + duration + 0.05);
@@ -115,6 +121,7 @@ class SoundService {
 
   setEnabled(value: boolean) {
     this._enabled = value;
+    localStorage.setItem(LS_MUTED_KEY, String(!value));
   }
 
   isEnabled() {
@@ -123,7 +130,19 @@ class SoundService {
 
   toggle() {
     this._enabled = !this._enabled;
+    localStorage.setItem(LS_MUTED_KEY, String(!this._enabled));
     return this._enabled;
+  }
+
+  // ── Volume ────────────────────────────────────────────────────────────────
+
+  setVolume(value: number) {
+    this._volume = Math.min(1, Math.max(0, value));
+    localStorage.setItem(LS_VOLUME_KEY, String(this._volume));
+  }
+
+  getVolume() {
+    return this._volume;
   }
 }
 

@@ -1874,3 +1874,347 @@ fn test_update_player_elo_emits_event() {
 
     assert!(events_after >= events_before);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #22 – Contract Pause / Unpause (circuit breaker) tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_is_paused_defaults_to_false() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    assert!(!client.is_paused());
+}
+
+#[test]
+fn test_pause_sets_paused_flag() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    assert!(!client.is_paused());
+    client.pause();
+    assert!(client.is_paused());
+}
+
+#[test]
+fn test_unpause_clears_paused_flag() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    client.pause();
+    assert!(client.is_paused());
+    client.unpause();
+    assert!(!client.is_paused());
+}
+
+#[test]
+fn test_pause_blocks_create_match() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10_000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    approve(&env, &token, &player1, &contract_id, 10_000);
+
+    // Pause the contract
+    client.pause();
+
+    let game_code = String::from_str(&env, "GAME_PAUSED");
+    let result = client.try_create_match(&game_code, &player1, &token.address, &100);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_pause_blocks_join_match() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10_000);
+    token_admin_client.mint(&player2, &10_000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    approve(&env, &token, &player1, &contract_id, 10_000);
+    approve(&env, &token, &player2, &contract_id, 10_000);
+
+    let game_code = String::from_str(&env, "GAME_JOIN_PAUSED");
+    // Player 1 creates while unpaused
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    // Pause before player 2 joins
+    client.pause();
+
+    let result = client.try_join_match(&game_code, &player2);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_pause_blocks_create_tournament() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, _) = create_token_contract(&env, &token_admin);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    client.pause();
+
+    let tournament_id = String::from_str(&env, "TOURN_PAUSED");
+    let prize_dist = vec![&env, 500_i128, 300_i128, 200_i128];
+    let result = client.try_create_tournament(&tournament_id, &100, &prize_dist, &token.address);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_pause_blocks_join_tournament() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10_000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let tournament_id = String::from_str(&env, "TOURN_JOIN_PAUSED");
+    let prize_dist = vec![&env, 500_i128];
+    // Create tournament while unpaused
+    client.create_tournament(&tournament_id, &100, &prize_dist, &token.address);
+
+    // Pause before anyone joins
+    client.pause();
+
+    approve(&env, &token, &player1, &contract_id, 10_000);
+    let result = client.try_join_tournament(&tournament_id, &player1);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_unpause_allows_create_match() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10_000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+    approve(&env, &token, &player1, &contract_id, 10_000);
+
+    // Pause then unpause
+    client.pause();
+    assert!(client.is_paused());
+    client.unpause();
+    assert!(!client.is_paused());
+
+    // create_match should succeed after unpausing
+    let game_code = String::from_str(&env, "GAME_AFTER_UNPAUSE");
+    client.create_match(&game_code, &player1, &token.address, &100);
+    let m = client.get_match(&game_code);
+    assert_eq!(m.status, MatchStatus::Pending);
+}
+
+#[test]
+fn test_refund_allowed_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &10_000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    approve(&env, &token, &player1, &contract_id, 10_000);
+
+    env.ledger().with_mut(|li| li.timestamp = 1000);
+    let game_code = String::from_str(&env, "GAME_REFUND_PAUSED");
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    // Pause the contract after match creation
+    client.pause();
+
+    // Fast-forward past the timeout
+    env.ledger().with_mut(|li| li.timestamp = 1000 + MATCH_EXPIRATION_SECS + 1);
+
+    // refund_after_timeout should still work while paused
+    client.refund_after_timeout(&game_code);
+
+    let m = client.get_match(&game_code);
+    assert_eq!(m.status, MatchStatus::Refunded);
+    // Player 1 gets their wager back
+    assert_eq!(token.balance(&player1), 10_000);
+}
+
+#[test]
+fn test_pause_emits_paused_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    let events_before = env.events().all().len();
+    client.pause();
+    let events_after = env.events().all();
+    assert!(events_after.len() > events_before);
+}
+
+#[test]
+fn test_unpause_emits_unpaused_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    client.pause();
+    let events_before = env.events().all().len();
+    client.unpause();
+    let events_after = env.events().all();
+    assert!(events_after.len() > events_before);
+}
+
+#[test]
+fn test_pause_requires_coordinator_auth() {
+    let env = Env::default();
+    // Do NOT mock all auths — only mock specific ones
+    let coordinator = Address::generate(&env);
+    let non_coordinator = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    // init requires coordinator auth
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &coordinator,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: (&coordinator, 500u32).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.init(&coordinator, &500);
+
+    // Calling pause as non_coordinator should fail
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &non_coordinator,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    // pause internally calls get_coordinator().require_auth() which will fail
+    // because the actual coordinator is different from non_coordinator
+    let result = client.try_pause();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_unpause_requires_coordinator_auth() {
+    let env = Env::default();
+    let coordinator = Address::generate(&env);
+    let non_coordinator = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &coordinator,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: (&coordinator, 500u32).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.init(&coordinator, &500);
+
+    // Pause with valid coordinator
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &coordinator,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.pause();
+
+    // Attempt unpause as non_coordinator
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &non_coordinator,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "unpause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_unpause();
+    assert!(result.is_err());
+}

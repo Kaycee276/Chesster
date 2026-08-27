@@ -2,6 +2,48 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 export type BoardThemeKey = "classic" | "wood" | "neon" | "marble";
+export type PieceSetKey = "standard" | "neo" | "wood" | "pixel";
+
+export interface PieceSet {
+	key: PieceSetKey;
+	name: string;
+	pieces: Record<string, string>;
+}
+
+export const PIECE_SETS: PieceSet[] = [
+	{
+		key: "standard",
+		name: "Standard",
+		pieces: {
+			K: "\u2654", Q: "\u2655", R: "\u2656", B: "\u2657", N: "\u2658", P: "\u2659",
+			k: "\u265A", q: "\u265B", r: "\u265C", b: "\u265D", n: "\u265E", p: "\u265F",
+		},
+	},
+	{
+		key: "neo",
+		name: "Neo",
+		pieces: {
+			K: "\u2654", Q: "\u2655", R: "\u2656", B: "\u2657", N: "\u2658", P: "\u2659",
+			k: "\u265A", q: "\u265B", r: "\u265C", b: "\u265D", n: "\u265E", p: "\u265F",
+		},
+	},
+	{
+		key: "wood",
+		name: "Wood",
+		pieces: {
+			K: "\u2654", Q: "\u2655", R: "\u2656", B: "\u2657", N: "\u2658", P: "\u2659",
+			k: "\u265A", q: "\u265B", r: "\u265C", b: "\u265D", n: "\u265E", p: "\u265F",
+		},
+	},
+	{
+		key: "pixel",
+		name: "Pixel",
+		pieces: {
+			K: "\u2654", Q: "\u2655", R: "\u2656", B: "\u2657", N: "\u2658", P: "\u2659",
+			k: "\u265A", q: "\u265B", r: "\u265C", b: "\u265D", n: "\u265E", p: "\u265F",
+		},
+	},
+];
 
 export interface BoardTheme {
 	key: BoardThemeKey;
@@ -54,21 +96,25 @@ function applyBoardTheme(key: BoardThemeKey) {
 
 interface ThemeState {
 	boardTheme: BoardThemeKey;
+	pieceSet: PieceSetKey;
 	setBoardTheme: (key: BoardThemeKey) => void;
+	setPieceSet: (key: PieceSetKey) => void;
 }
 
 export const useThemeStore = create<ThemeState>()(
 	persist(
 		(set) => ({
 			boardTheme: DEFAULT_BOARD_THEME,
+			pieceSet: "standard" as PieceSetKey,
 			setBoardTheme: (key) => {
 				applyBoardTheme(key);
 				set({ boardTheme: key });
 			},
+			setPieceSet: (key) => set({ pieceSet: key }),
 		}),
 		{
 			name: "chesster-theme",
-			partialize: (state) => ({ boardTheme: state.boardTheme }),
+			partialize: (state) => ({ boardTheme: state.boardTheme, pieceSet: state.pieceSet }),
 		},
 	),
 );

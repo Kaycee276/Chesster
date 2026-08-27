@@ -346,7 +346,13 @@ class GameModel {
 		// ── 4. Match is PENDING (player2 never deposited) — can't resolve ────
 		if (chainStatus === ON_CHAIN_STATUS.PENDING) {
 			console.error(`[Escrow] ${gameCode} is PENDING on-chain — player2 never deposited XLM`);
-			await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+			try {
+				const receipt = await escrowService.refundUnresolvedMatch(gameCode);
+				await supabase.from("games").update({ escrow_status: "refunded", escrow_resolve_tx: receipt.hash }).eq("game_code", gameCode);
+			} catch (refundErr) {
+				console.error(`[Escrow] refund fallback failed for ${gameCode}:`, refundErr.message);
+				await supabase.from("games").update({ escrow_status: "failed" }).eq("game_code", gameCode);
+			}
 			return;
 		}
 

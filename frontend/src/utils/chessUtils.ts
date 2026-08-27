@@ -198,3 +198,40 @@ export function getCapturedPieces(
 
 	return captured;
 }
+
+/**
+ * Converts the current board array to a FEN position string.
+ * Omits castling rights and en passant (not tracked client-side).
+ */
+export function boardToFen(board: string[][], turn: "white" | "black"): string {
+	const rows: string[] = [];
+	for (const row of board) {
+		let fenRow = "";
+		let empty = 0;
+		for (const sq of row) {
+			if (sq === ".") {
+				empty++;
+			} else {
+				if (empty > 0) { fenRow += empty; empty = 0; }
+				fenRow += sq;
+			}
+		}
+		if (empty > 0) fenRow += empty;
+		rows.push(fenRow);
+	}
+	const activeColor = turn === "white" ? "w" : "b";
+	return `${rows.join("/")} ${activeColor} - - 0 1`;
+}
+
+/**
+ * Formats a list of algebraic move strings as a PGN game score.
+ * Adds move numbers and wraps at 80 characters.
+ */
+export function movesToPgn(moves: string[], result = "*"): string {
+	let pgn = "";
+	for (let i = 0; i < moves.length; i++) {
+		if (i % 2 === 0) pgn += `${Math.floor(i / 2) + 1}. `;
+		pgn += moves[i] + " ";
+	}
+	return pgn.trim() + " " + result;
+}

@@ -91,6 +91,17 @@ class GameController {
 			const moverColor = (await gameModel.getGame(gameCode)).current_turn;
 			const game = await gameModel.makeMove(gameCode, from, to, promotion);
 
+			// Record timing for anti-cheat analysis (non-blocking — never fails the move)
+			try {
+				const antiCheat = require("../services/antiCheatService");
+				const { flagged, reasons } = antiCheat.recordMove(gameCode, moverColor);
+				if (flagged) {
+					const logger = require("../utils/logger");
+					logger.warn("Anti-cheat flag", { gameCode, color: moverColor, reasons });
+				}
+				if (game.status !== "active") antiCheat.clearGame(gameCode);
+			} catch { /* non-critical */ }
+
 			let clock = null;
 			if (game.status === "active") {
 				clock = timerService.applyMove(gameCode, moverColor);

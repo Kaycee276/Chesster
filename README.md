@@ -12,6 +12,8 @@ A fully decentralized, two-player chess game built on the Stellar network using 
 
 ## 🏗 Architecture
 
+For component responsibilities, trust boundaries, and match/escrow sequence diagrams, see the [architecture guide](docs/ARCHITECTURE.md).
+
 ```text
 Chesster/
 ├── backend/          # Node.js + Express API
@@ -44,6 +46,7 @@ Chesster/
 ## 🚀 Prerequisites
 
 Before you begin, ensure you have the following installed:
+
 - [Node.js](https://nodejs.org/) (v20+)
 - [Rust](https://www.rust-lang.org/tools/install) (for Soroban contracts)
 - [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup)
@@ -53,6 +56,7 @@ Before you begin, ensure you have the following installed:
 ## 🛠 Setup Instructions
 
 ### 1. Smart Contract Deployment
+
 ```bash
 cd contracts/soroban
 rustup target add wasm32-unknown-unknown
@@ -62,14 +66,17 @@ soroban contract deploy \
   --source <YOUR_SECRET_KEY> \
   --network testnet
 ```
-*Save the deployed contract ID for the environment variables.*
+
+_Save the deployed contract ID for the environment variables._
 
 ### 2. Supabase Setup
+
 1. Create a new project on [Supabase](https://supabase.com).
 2. Run the SQL schemas located in `backend/database/schema.sql` and `backend/database/migrations/add_escrow_columns.sql`.
 3. Copy your Project URL and Anon Key.
 
 ### 3. Backend Setup
+
 ```bash
 cd backend
 cp .env.example .env
@@ -77,9 +84,11 @@ cp .env.example .env
 npm install
 npm run dev
 ```
-*Backend runs on http://localhost:3000*
+
+_Backend runs on http://localhost:3000_
 
 ### 4. Frontend Setup
+
 ```bash
 cd frontend
 cp .env.example .env
@@ -87,7 +96,8 @@ cp .env.example .env
 npm install
 npm run dev
 ```
-*Frontend runs on http://localhost:5173*
+
+_Frontend runs on http://localhost:5173_
 
 ## 🎮 How to Play
 
@@ -108,6 +118,7 @@ npm run dev
 ## 📜 Smart Contract (Escrow)
 
 The Soroban smart contract (`ChessterEscrow`) handles the financial logic of the game:
+
 - **`init`**: Initializes the contract with a coordinator address and fee percentage.
 - **`create_match`**: Player 1 locks their wager in the contract.
 - **`join_match`**: Player 2 locks their matching wager.
@@ -117,6 +128,7 @@ The Soroban smart contract (`ChessterEscrow`) handles the financial logic of the
 ## 🧪 Testing
 
 The project includes comprehensive test suites:
+
 - **Smart Contract**: `cd contracts/soroban && cargo test`
 - **Backend**: `cd backend && npm test`
 
