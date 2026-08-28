@@ -522,7 +522,7 @@ export default function GameLobby() {
 				{isConnected ? (
                     <WalletDropdown />
                 ) : (
-                    <button onClick={connect} className="bg-(--accent-dark) hover:bg-(--accent-primary) px-4 py-1.5 rounded-lg text-sm font-bold transition-colors">
+                    <button onClick={connect} data-testid="connect-wallet" className="bg-(--accent-dark) hover:bg-(--accent-primary) px-4 py-1.5 rounded-lg text-sm font-bold transition-colors">
                         Connect Freighter
                     </button>
                 )}
@@ -627,6 +627,7 @@ export default function GameLobby() {
 						{/* Create button */}
 						<button
 							onClick={handleCreateGame}
+							data-testid="create-game-btn"
 							disabled={isLoading || !isConnected}
 							className="w-full px-6 py-3 text-base font-bold bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl shadow-lg active:scale-[0.98] flex items-center justify-center gap-2"
 						>
@@ -671,10 +672,12 @@ export default function GameLobby() {
 							}
 							maxLength={10}
 							disabled={isLoading}
+							data-testid="join-code-input"
 							className="w-full px-4 py-3 text-base border border-(--border) rounded-xl text-center uppercase outline-none focus:ring-2 focus:ring-(--accent-primary) bg-(--bg) text-(--text) placeholder:text-(--text-tertiary) transition-all tracking-widest font-mono disabled:opacity-50"
 						/>
 						<button
 							onClick={handleJoinGame}
+							data-testid="join-game-btn"
 							disabled={!gameCode.trim() || isLoading || !isConnected}
 							className="w-full px-6 py-3 text-base font-bold bg-(--bg-tertiary) hover:bg-(--bg) border border-(--border) disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl active:scale-[0.98] flex items-center justify-center gap-2"
 						>
