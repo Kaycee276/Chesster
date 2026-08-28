@@ -2218,3 +2218,56 @@ fn test_unpause_requires_coordinator_auth() {
     let result = client.try_unpause();
     assert!(result.is_err());
 }
+
+#[test]
+fn test_set_fee_bps_rejects_values_above_100_percent() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    let result = client.try_set_fee_bps(&10_001);
+
+    assert!(result.is_err());
+    assert_eq!(client.get_fee_bps(), 500);
+}
+
+#[test]
+fn test_set_fee_bps_requires_coordinator_auth() {
+    let env = Env::default();
+    let coordinator = Address::generate(&env);
+    let non_coordinator = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &coordinator,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "init",
+            args: (&coordinator, 500u32).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.init(&coordinator, &500);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &non_coordinator,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_fee_bps",
+            args: (1000u32,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_set_fee_bps(&1000);
+
+    assert!(result.is_err());
+    assert_eq!(client.get_fee_bps(), 500);
+}
