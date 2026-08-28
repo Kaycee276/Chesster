@@ -174,6 +174,7 @@ function WaitingScreen() {
 				{/* Copyable game code */}
 				<button
 					onClick={copyCode}
+					data-testid="game-code-display"
 					className="flex items-center gap-3 px-6 py-3 bg-(--bg-secondary) border border-(--border) rounded-xl font-mono text-2xl font-bold tracking-widest hover:border-(--accent-primary)/60 transition-colors"
 				>
 					{gameCode}
@@ -688,6 +689,7 @@ function ChessBoardInner() {
 						return (
 							<div
 								key={`${rowIndex}-${colIndex}`}
+								data-testid={`square-${actualRow}-${actualCol}`}
 								className={`relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 ${
 									isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
 								} ${selected ? "bg-yellow-400/75" : ""} ${
@@ -777,7 +779,11 @@ function ChessBoardInner() {
 						<span className="text-xs text-(--text-tertiary) italic">your turn next</span>
 					)}
 					{status === "finished" && (
-						<span className="font-bold text-(--info) uppercase text-xs tracking-wide">
+						<span
+							data-testid="game-over-banner"
+							data-winner={winner ?? ""}
+							className="font-bold text-(--info) uppercase text-xs tracking-wide"
+						>
 							{winner === "draw" ? "Draw!" : winner === playerColor ? "You win!" : "You lose"}
 						</span>
 					)}
