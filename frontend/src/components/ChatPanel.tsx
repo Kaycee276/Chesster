@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { MessageCircle, X, Send, Smile, Download, Check } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
-import { boardToFen } from "../utils/chessUtils";
+import { boardToFen, moveToAlgebraic } from "../utils/chessUtils";
 
 const MAX_CHARS = 50;
 const QUICK_REACTIONS = ["Good luck!", "Nice move", "Well played", "Good game"];
@@ -21,8 +21,13 @@ export default function ChatPanel() {
 	const [input, setInput] = useState("");
 	const [emojiOpen, setEmojiOpen] = useState(false);
 	const [copiedFen, setCopiedFen] = useState(false);
+	const [activeTab, setActiveTab] = useState<"chat" | "moves">("chat");
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+
+	const moveHistory = useGameStore((s) => s.moveHistory);
+	const viewingIndex = useGameStore((s) => s.viewingIndex);
+	const setViewingIndex = useGameStore((s) => s.setViewingIndex);
 
 	// Scroll to bottom when new messages arrive or panel opens
 	useEffect(() => {
@@ -30,6 +35,15 @@ export default function ChatPanel() {
 			messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 		}
 	}, [chatMessages, chatOpen]);
+
+	// Keep the active move in view while browsing the history panel
+	useEffect(() => {
+		if (chatOpen && activeTab === "moves" && viewingIndex !== null) {
+			document
+				.getElementById(`move-${viewingIndex}`)
+				?.scrollIntoView({ block: "nearest" });
+		}
+	}, [chatOpen, activeTab, viewingIndex, moveHistory.length]);
 
 	// Focus input when panel opens
 	useEffect(() => {
@@ -70,29 +84,55 @@ export default function ChatPanel() {
 					style={{ height: "320px" }}
 				>
 					{/* Header */}
-					<div className="flex items-center justify-between px-3 py-2 border-b border-(--border) shrink-0">
-						<div className="flex items-center gap-1.5">
-							<MessageCircle size={13} className="text-(--text-tertiary)" />
-							<span className="text-xs font-semibold text-(--text-secondary) uppercase tracking-wider">
-								Chat
-							</span>
-						</div>
+					<div className="flex items-center justify-between px-3 py-2 border-b border-(--border) shrink-0 gap-1">
 						<div className="flex items-center gap-1">
 							<button
-								title="Copy FEN to clipboard"
-								onClick={() => {
-									if (!board.length) return;
-									const fen = boardToFen(board, currentTurn);
-									navigator.clipboard.writeText(fen).then(() => {
-										setCopiedFen(true);
-										setTimeout(() => setCopiedFen(false), 1500);
-									}).catch(() => {});
-								}}
-								className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+								type="button"
+								onClick={() => setActiveTab("chat")}
+								className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+									activeTab === "chat"
+										? "bg-(--bg-tertiary) text-(--text)"
+										: "text-(--text-tertiary) hover:text-(--text)"
+								}`}
 							>
-								{copiedFen ? <Check size={11} className="text-green-400" /> : <Download size={11} />}
-								FEN
+								<MessageCircle size={11} />
+								Chat
+								{unreadCount > 0 && activeTab === "chat" && (
+									<span className="min-w-[14px] h-3.5 px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+										{unreadCount > 9 ? "9+" : unreadCount}
+									</span>
+								)}
 							</button>
+							<button
+								type="button"
+								onClick={() => setActiveTab("moves")}
+								className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+									activeTab === "moves"
+										? "bg-(--bg-tertiary) text-(--text)"
+										: "text-(--text-tertiary) hover:text-(--text)"
+								}`}
+							>
+								Moves
+							</button>
+						</div>
+						<div className="flex items-center gap-1">
+							{activeTab === "chat" && (
+								<button
+									title="Copy FEN to clipboard"
+									onClick={() => {
+										if (!board.length) return;
+										const fen = boardToFen(board, currentTurn);
+										navigator.clipboard.writeText(fen).then(() => {
+											setCopiedFen(true);
+											setTimeout(() => setCopiedFen(false), 1500);
+										}).catch(() => {});
+									}}
+									className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+								>
+									{copiedFen ? <Check size={11} className="text-green-400" /> : <Download size={11} />}
+									FEN
+								</button>
+							)}
 							<button
 								onClick={() => setChatOpen(false)}
 								className="text-(--text-tertiary) hover:text-(--text) transition-colors p-0.5 rounded"
@@ -102,7 +142,9 @@ export default function ChatPanel() {
 						</div>
 					</div>
 
-					{/* Messages */}
+					{activeTab === "chat" ? (
+						<>
+							{/* Messages */}
 					<div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5 min-h-0">
 						{chatMessages.length === 0 ? (
 							<p className="text-xs text-(--text-tertiary) text-center mt-6">
@@ -202,6 +244,74 @@ export default function ChatPanel() {
 							<Send size={12} />
 						</button>
 					</div>
+						</>
+					) : (
+						/* Move history navigation (#112) */
+						<div className="flex-1 flex flex-col min-h-0">
+							<div className="flex items-center justify-between px-3 py-1.5 border-b border-(--border) shrink-0">
+								<span className="text-[10px] font-semibold uppercase tracking-wider text-(--text-tertiary)">
+									Playback
+								</span>
+								<button
+									type="button"
+									onClick={() => setViewingIndex(null)}
+									disabled={viewingIndex === null}
+									className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-colors disabled:cursor-not-allowed ${
+										viewingIndex === null
+											? "bg-(--bg-tertiary) text-(--text-secondary)"
+											: "bg-(--accent-dark) hover:bg-(--accent-primary) text-white"
+									}`}
+								>
+									Live
+								</button>
+							</div>
+							<div className="flex-1 overflow-y-auto px-2 py-1.5 min-h-0">
+								{moveHistory.length === 0 ? (
+									<p className="text-xs text-(--text-tertiary) text-center mt-6">
+										No moves yet.
+									</p>
+								) : (
+									<div className="flex flex-col gap-0.5">
+										{moveHistory.map((move, index) => {
+											const isActive = viewingIndex === index;
+											return (
+												<button
+													key={`${move.move_number}-${move.player}`}
+													id={`move-${index}`}
+													type="button"
+													onClick={() => setViewingIndex(index)}
+													className={`flex items-center gap-2 w-full text-left rounded-md px-1.5 py-1 text-[11px] font-mono transition-colors ${
+														isActive
+															? "bg-(--accent-primary)/20 text-(--text)"
+															: "text-(--text-secondary) hover:bg-(--bg-tertiary) hover:text-(--text)"
+													}`}
+												>
+													<span className="w-8 shrink-0 text-(--text-tertiary)">
+														{move.player === "white"
+															? `${move.move_number}.`
+															: `${move.move_number}…`}
+													</span>
+													<span className="flex-1 truncate">
+														{moveToAlgebraic(
+															move.from_position,
+															move.to_position,
+															move.promotion,
+														)}
+													</span>
+													{move.is_checkmate && (
+														<span className="text-(--accent-primary) shrink-0">#</span>
+													)}
+													{move.is_check && !move.is_checkmate && (
+														<span className="text-(--text-tertiary) shrink-0">+</span>
+													)}
+												</button>
+											);
+										})}
+									</div>
+								)}
+							</div>
+						</div>
+					)}
 				</div>
 			)}
 
