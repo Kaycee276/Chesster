@@ -17,6 +17,12 @@ describe("Health Check Routes", () => {
   let app;
 
   beforeEach(() => {
+    // Other suites exercise missing configuration and may mutate process.env.
+    // Restore the route test's safe configuration for every test in this file.
+    process.env.SUPABASE_URL = "http://localhost";
+    process.env.SUPABASE_ANON_KEY = "test-anon-key";
+    process.env.SUPABASE_KEY = "test-service-key";
+    process.env.SOROBAN_RPC_URL = "http://localhost";
     app = express();
     app.use(express.json());
     app.use("/api", healthRoutes);
