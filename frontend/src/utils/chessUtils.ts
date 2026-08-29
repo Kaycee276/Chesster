@@ -198,3 +198,92 @@ export function getCapturedPieces(
 
 	return captured;
 }
+
+/** Standard chess piece values used to compute material (king = 0). */
+export const PIECE_VALUES: Record<string, number> = {
+	p: 1,
+	n: 3,
+	b: 3,
+	r: 5,
+	q: 9,
+	k: 0,
+};
+
+/** Total material value captured in a list of captured pieces. */
+export function capturedMaterial(captured: string[]): number {
+	return captured.reduce(
+		(sum, piece) => sum + (PIECE_VALUES[piece.toLowerCase()] ?? 0),
+		0,
+	);
+}
+
+/**
+ * Live material values currently held by each side on the board,
+ * computed from what each side has captured so far.
+ */
+export function materialAdvantage(board: string[][]): {
+	white: number;
+	black: number;
+} {
+	return {
+		white: capturedMaterial(getCapturedPieces(board, "white")),
+		black: capturedMaterial(getCapturedPieces(board, "black")),
+	};
+}
+
+/**
+ * Converts a board index position ([row, col]) to algebraic notation
+ * (e.g. [4, 4] -> "e4").
+ */
+export function squareToAlgebraic(pos: [number, number]): string {
+	const [row, col] = pos;
+	return `${String.fromCharCode(97 + col)}${8 - row}`;
+}
+
+/** Formats a move as compact algebraic notation (e.g. "e2e4" or "e7e8q"). */
+export function moveToAlgebraic(
+	from: [number, number],
+	to: [number, number],
+	promotion?: string | null,
+): string {
+	return `${squareToAlgebraic(from)}${squareToAlgebraic(to)}${
+		promotion ?? ""
+	}`;
+}
+
+/**
+ * Converts the current board array to a FEN position string.
+ * Omits castling rights and en passant (not tracked client-side).
+ */
+export function boardToFen(board: string[][], turn: "white" | "black"): string {
+	const rows: string[] = [];
+	for (const row of board) {
+		let fenRow = "";
+		let empty = 0;
+		for (const sq of row) {
+			if (sq === ".") {
+				empty++;
+			} else {
+				if (empty > 0) { fenRow += empty; empty = 0; }
+				fenRow += sq;
+			}
+		}
+		if (empty > 0) fenRow += empty;
+		rows.push(fenRow);
+	}
+	const activeColor = turn === "white" ? "w" : "b";
+	return `${rows.join("/")} ${activeColor} - - 0 1`;
+}
+
+/**
+ * Formats a list of algebraic move strings as a PGN game score.
+ * Adds move numbers and wraps at 80 characters.
+ */
+export function movesToPgn(moves: string[], result = "*"): string {
+	let pgn = "";
+	for (let i = 0; i < moves.length; i++) {
+		if (i % 2 === 0) pgn += `${Math.floor(i / 2) + 1}. `;
+		pgn += moves[i] + " ";
+	}
+	return pgn.trim() + " " + result;
+}

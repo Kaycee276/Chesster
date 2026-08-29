@@ -4,12 +4,25 @@
 
 const request = require("supertest");
 const express = require("express");
+
+// Keep route tests independent of the SDK's ESM-only transitive hash module.
+jest.mock("@stellar/stellar-sdk", () => ({
+  Networks: { TESTNET: "Test SDF Network ; September 2015" },
+  rpc: { Server: jest.fn(() => ({ getLatestLedger: jest.fn().mockResolvedValue({ sequence: 1 }) })) },
+}));
+
 const healthRoutes = require("../routes/healthRoutes");
 
 describe("Health Check Routes", () => {
   let app;
 
   beforeEach(() => {
+    // Other suites exercise missing configuration and may mutate process.env.
+    // Restore the route test's safe configuration for every test in this file.
+    process.env.SUPABASE_URL = "http://localhost";
+    process.env.SUPABASE_ANON_KEY = "test-anon-key";
+    process.env.SUPABASE_KEY = "test-service-key";
+    process.env.SOROBAN_RPC_URL = "http://localhost";
     app = express();
     app.use(express.json());
     app.use("/api", healthRoutes);

@@ -778,6 +778,18 @@
                       },
                       {
                         "key": {
+                          "symbol": "signers"
+                        },
+                        "val": {
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
                           "vec": [
                             {
                               "symbol": "sup_tok"

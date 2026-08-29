@@ -6,10 +6,13 @@ import { socketService } from "../api/socket";
 import type { ChatMessage } from "../api/socket";
 import { useToastStore } from "./toastStore";
 import { soundService } from "../services/soundService";
-import type { GameState } from "../types/game";
+import type { GameState, MoveRecord } from "../types/game";
 
 // ── Module-level local countdown timer ────────────────────────────────────────
 let _timerInterval: ReturnType<typeof setInterval> | null = null;
+
+// Debounce guard so concurrent polls/socket updates don't spam /moves.
+let _loadingMoves = false;
 
 function startLocalTimer() {
   if (_timerInterval !== null) return; // already running
@@ -50,6 +53,9 @@ interface GameStore {
     piece: string;
   } | null;
   selectedSquare: [number, number] | null;
+  // Move history + board playback rewind
+  moveHistory: MoveRecord[];
+  viewingIndex: number | null;
   // Escrow / wager info (populated from fetched game state)
   wagerAmount?: number | string | null;
   tokenAddress?: string | null;
@@ -80,6 +86,8 @@ interface GameStore {
     promotion?: string,
   ) => Promise<void>;
   selectSquare: (pos: [number, number] | null) => void;
+  loadMoveHistory: () => Promise<void>;
+  setViewingIndex: (index: number | null) => void;
   updateGameState: (data: GameState) => void;
   resignGame: () => Promise<void>;
   offerDraw: () => Promise<void>;
@@ -112,6 +120,8 @@ export const useGameStore = create<GameStore>()(
       capturedBlack: [],
       lastMove: null,
       selectedSquare: null,
+      moveHistory: [],
+      viewingIndex: null,
       wagerAmount: null,
       tokenAddress: null,
       escrowStatus: null,
@@ -153,6 +163,7 @@ export const useGameStore = create<GameStore>()(
             playerAddress: walletAddress,
           });
           await get().fetchGameState();
+          await get().loadMoveHistory();
 
           socketService.connect();
           socketService.joinGame(code);
@@ -223,6 +234,7 @@ export const useGameStore = create<GameStore>()(
           });
 
           await get().loadChatHistory();
+          await get().loadMoveHistory();
 
           if (data.data.status === "active") {
             startLocalTimer();
@@ -277,6 +289,13 @@ export const useGameStore = create<GameStore>()(
             escrowResolveTx: data.data.escrow_resolve_tx ?? null,
           });
 
+          if (
+            data.data.move_count != null &&
+            get().moveHistory.length < data.data.move_count
+          ) {
+            get().loadMoveHistory();
+          }
+
           if (isTransitionToActive) {
             startLocalTimer();
           }
@@ -313,6 +332,8 @@ export const useGameStore = create<GameStore>()(
             escrowStatus: data.data.escrow_status ?? null,
             escrowResolveTx: data.data.escrow_resolve_tx ?? null,
           });
+          get().setViewingIndex(null);
+          get().loadMoveHistory();
           if (data.data.status !== "active") {
             stopLocalTimer();
           }
@@ -351,6 +372,12 @@ export const useGameStore = create<GameStore>()(
           escrowJoinTx: data.escrow_join_tx ?? null,
           escrowResolveTx: data.escrow_resolve_tx ?? null,
         });
+        if (
+          data.move_count != null &&
+          get().moveHistory.length < data.move_count
+        ) {
+          get().loadMoveHistory();
+        }
         if (data.status !== "active") {
           stopLocalTimer();
         }
@@ -358,6 +385,25 @@ export const useGameStore = create<GameStore>()(
 
       selectSquare: (pos: [number, number] | null) =>
         set({ selectedSquare: pos }),
+
+      loadMoveHistory: async () => {
+        const { gameCode } = get();
+        if (!gameCode || _loadingMoves) return;
+        _loadingMoves = true;
+        try {
+          const data = await api.getMoves(gameCode);
+          if (data.success) {
+            set({ moveHistory: Array.isArray(data.data) ? data.data : [] });
+          }
+        } catch {
+          // Ignore transient fetch failures; next poll/action retries.
+        } finally {
+          _loadingMoves = false;
+        }
+      },
+
+      setViewingIndex: (index: number | null) =>
+        set({ viewingIndex: index, selectedSquare: null }),
 
       resignGame: async () => {
         const { gameCode, playerColor } = get();
@@ -424,6 +470,8 @@ export const useGameStore = create<GameStore>()(
           secondsLeft: 600,
           timeControlSeconds: 600,
           selectedSquare: null,
+          moveHistory: [],
+          viewingIndex: null,
           wagerAmount: null,
           tokenAddress: null,
           escrowStatus: null,
