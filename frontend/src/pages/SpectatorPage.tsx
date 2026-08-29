@@ -110,8 +110,8 @@ function SpectatorBoard({ board }: { board: string[][] }) {
 export default function SpectatorPage() {
 	const { gameCode } = useParams<{ gameCode: string }>();
 	const [board] = useState(INITIAL_BOARD);
-	const [moveHistory, setMoveHistory] = useState<string[]>([]);
-	const [evalScore, setEvalScore] = useState(0);
+	const [moveHistory] = useState<string[]>([]);
+	const [evalScore] = useState(0);
 	const [spectatorCount] = useState(1);
 
 	const whiteMaterial = useMemo(() => {
@@ -190,12 +190,12 @@ export default function SpectatorPage() {
 					</div>
 					<div className="flex items-center justify-between pt-2 border-t border-(--border)">
 						<div className="flex items-center gap-1 text-xs">
-							{TrendingUp size={12} className="text-white" />
+							<TrendingUp size={12} className="text-white" />
 							<span className="font-mono">{whiteMaterial}</span>
 						</div>
 						<div className="flex items-center gap-1 text-xs">
 							<span className="font-mono">{blackMaterial}</span>
-							{TrendingDown size={12} className="text-gray-400" />
+							<TrendingDown size={12} className="text-gray-400" />
 						</div>
 					</div>
 				</div>

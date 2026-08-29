@@ -859,6 +859,7 @@ function ChessBoardInner() {
 						return (
 							<div
 								key={`${rowIndex}-${colIndex}`}
+								data-testid={`square-${actualRow}-${actualCol}`}
 								className={`relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 ${
 									isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
 								} ${selected ? "bg-yellow-400/75" : ""} ${
