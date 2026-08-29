@@ -4,6 +4,13 @@
 
 const request = require("supertest");
 const express = require("express");
+
+// Keep route tests independent of the SDK's ESM-only transitive hash module.
+jest.mock("@stellar/stellar-sdk", () => ({
+  Networks: { TESTNET: "Test SDF Network ; September 2015" },
+  rpc: { Server: jest.fn(() => ({ getLatestLedger: jest.fn().mockResolvedValue({ sequence: 1 }) })) },
+}));
+
 const healthRoutes = require("../routes/healthRoutes");
 
 describe("Health Check Routes", () => {
