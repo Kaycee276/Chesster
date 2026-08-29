@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
-    Address, Env, IntoVal, String, Symbol, Val, Vec,
+    Address, BytesN, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 /// Remaining TTL (in ledgers) below which escrow storage entries are auto-extended (~6 days).
@@ -83,7 +83,7 @@ pub enum EscrowError {
     /// Match is not stale (must be resolved/refunded and >30 days old).
     MatchNotStale = 27,
     /// Match has expired based on ledger timestamp timeout.
-    MatchExpired = 28,
+    MatchExpired = 37,
     /// Wager amount is below configured minimum limit.
     WagerBelowMinimum = 29,
     /// Wager amount exceeds configured maximum limit.
@@ -396,6 +396,12 @@ impl ChessterEscrow {
         env.storage()
             .instance()
             .set(&symbol_short!("fee"), &admin_bps);
+
+        let mut signers = Vec::new(&env);
+        signers.push_back(coordinator);
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "signers"), &signers);
     }
 
     /// Pauses the contract, blocking new match and tournament creation (coordinator only).
@@ -654,6 +660,19 @@ impl ChessterEscrow {
         token_client.balance(&env.current_contract_address())
     }
 
+    /// Returns the total amount of the given token currently escrowed (locked) in
+    /// active matches and side pools. Used to verify the balance invariant (Issue #42).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `token` - Token address.
+    ///
+    /// # Returns
+    /// * `i128` - Total escrowed (locked) balance for the token.
+    pub fn get_escrowed_balance(env: Env, token: Address) -> i128 {
+        Self::get_locked(&env, &token)
+    }
+
     /// Configures native XLM SAC token address in contract storage (Issue #38).
     ///
     /// # Arguments
@@ -676,6 +695,234 @@ impl ChessterEscrow {
     /// * `Option<Address>` - Address of native XLM token if set.
     pub fn get_native_xlm_address(env: Env) -> Option<Address> {
         env.storage().instance().get(&Symbol::new(&env, "xlm_tok"))
+    }
+
+    // -----------------------------------------------------------------------
+    // Coordinator Key Rotation Protocol (Multi-Sig) (Issue #25)
+    // -----------------------------------------------------------------------
+
+    fn signers_key(env: &Env) -> Symbol {
+        Symbol::new(env, "signers")
+    }
+
+    fn get_signers(env: &Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&Self::signers_key(env))
+            .unwrap_or_else(|| Vec::new(env))
+    }
+
+    fn is_authorized_signer(env: &Env, addr: &Address) -> bool {
+        Self::get_signers(env).contains(addr)
+    }
+
+    /// Adds an additional authorized multisig signer for coordinator rotations (Coordinator only) (Issue #25).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `signer` - Address to grant multisig signing authority.
+    pub fn add_admin_signer(env: Env, signer: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        let key = Self::signers_key(&env);
+        let mut signers = Self::get_signers(&env);
+        if !signers.contains(&signer) {
+            signers.push_back(signer);
+            env.storage().instance().set(&key, &signers);
+            Self::bump_instance_ttl(&env);
+        }
+    }
+
+    /// Removes an authorized multisig signer (Coordinator only). The final signer cannot be removed (Issue #25).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `signer` - Address to revoke multisig signing authority.
+    pub fn remove_admin_signer(env: Env, signer: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        let key = Self::signers_key(&env);
+        let signers = Self::get_signers(&env);
+        if !signers.contains(&signer) {
+            return;
+        }
+        if signers.len() <= 1 {
+            panic_with_error!(&env, EscrowError::UnauthorizedSigner);
+        }
+        let mut filtered = Vec::new(&env);
+        for s in signers.iter() {
+            if s != signer {
+                filtered.push_back(s);
+            }
+        }
+        env.storage().instance().set(&key, &filtered);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Returns the current list of authorized multisig signers (Issue #25).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `Vec<Address>` - Authorized signer addresses.
+    pub fn get_admin_signers(env: Env) -> Vec<Address> {
+        Self::get_signers(&env)
+    }
+
+    fn pending_rotation_key(env: &Env) -> Symbol {
+        Symbol::new(env, "pend_rot")
+    }
+
+    /// Proposes a new coordinator address, recording the proposing signer's approval (Issue #25).
+    ///
+    /// Requires authorization from an authorized multisig signer. A second distinct
+    /// signer approval (via `approve_coordinator_rotation`) is required before the
+    /// coordinator address is actually updated.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `signer` - Authorized signer proposing the rotation.
+    /// * `new_coordinator` - Proposed new coordinator address.
+    pub fn propose_coordinator_rotation(env: Env, signer: Address, new_coordinator: Address) {
+        signer.require_auth();
+        if !Self::is_authorized_signer(&env, &signer) {
+            panic_with_error!(&env, EscrowError::UnauthorizedSigner);
+        }
+        Self::record_rotation_approval(&env, &signer, &new_coordinator);
+        env.events().publish(
+            (symbol_short!("rot_prop"),),
+            CoordinatorRotationProposedEvent {
+                proposed_coordinator: new_coordinator,
+            },
+        );
+    }
+
+    /// Approves a pending coordinator rotation, recording the approving signer's vote (Issue #25).
+    ///
+    /// Requires authorization from a second distinct authorized signer. Once two
+    /// distinct approvals are recorded the coordinator address is atomically updated.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `signer` - Authorized signer approving the rotation.
+    /// * `new_coordinator` - Proposed new coordinator address (must match the pending proposal).
+    pub fn approve_coordinator_rotation(env: Env, signer: Address, new_coordinator: Address) {
+        signer.require_auth();
+        if !Self::is_authorized_signer(&env, &signer) {
+            panic_with_error!(&env, EscrowError::UnauthorizedSigner);
+        }
+        Self::record_rotation_approval(&env, &signer, &new_coordinator);
+    }
+
+    fn record_rotation_approval(env: &Env, signer: &Address, new_coordinator: &Address) {
+        let key = Self::pending_rotation_key(env);
+        let pending: Option<PendingRotation> = env.storage().instance().get(&key);
+
+        let mut approvals = match pending {
+            Some(p) => {
+                if p.proposed_coordinator != *new_coordinator {
+                    panic_with_error!(&env, EscrowError::RotationAlreadyProposed);
+                }
+                p.approvals
+            }
+            None => Vec::new(env),
+        };
+
+        if approvals.contains(signer) {
+            panic_with_error!(&env, EscrowError::AlreadyApproved);
+        }
+        approvals.push_back(signer.clone());
+
+        env.storage().instance().set(
+            &key,
+            &PendingRotation {
+                proposed_coordinator: new_coordinator.clone(),
+                approvals: approvals.clone(),
+            },
+        );
+        Self::bump_instance_ttl(env);
+
+        if approvals.len() >= 2 {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("coord"), new_coordinator);
+            env.storage().instance().remove(&key);
+            Self::bump_instance_ttl(env);
+            env.events().publish(
+                (symbol_short!("rot_exec"),),
+                CoordinatorRotationExecutedEvent {
+                    new_coordinator: new_coordinator.clone(),
+                },
+            );
+        }
+    }
+
+    /// Returns the currently pending coordinator rotation proposal, if any (Issue #25).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    ///
+    /// # Returns
+    /// * `Option<PendingRotation>` - Pending rotation proposal.
+    pub fn get_pending_rotation(env: Env) -> Option<PendingRotation> {
+        env.storage()
+            .instance()
+            .get(&Self::pending_rotation_key(&env))
+    }
+
+    // -----------------------------------------------------------------------
+    // Contract Upgradeability (WASM Hash) (Issue #34)
+    // -----------------------------------------------------------------------
+
+    /// Upgrades the running contract to a new WASM bytecode hash (Coordinator only) (Issue #34).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `new_wasm_hash` - 32-byte WASM hash of the upgraded contract.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    }
+
+    // -----------------------------------------------------------------------
+    // Balance Invariant Helpers (Issue #42)
+    // -----------------------------------------------------------------------
+
+    fn locked_key(env: &Env, token: &Address) -> (Symbol, Address) {
+        (Symbol::new(env, "lk_tok"), token.clone())
+    }
+
+    fn add_locked(env: &Env, token: &Address, amount: i128) {
+        let key = Self::locked_key(env, token);
+        let cur = env.storage().instance().get::<_, i128>(&key).unwrap_or(0);
+        env.storage().instance().set(&key, &(cur + amount));
+    }
+
+    fn sub_locked(env: &Env, token: &Address, amount: i128) {
+        let key = Self::locked_key(env, token);
+        let cur = env.storage().instance().get::<_, i128>(&key).unwrap_or(0);
+        env.storage().instance().set(&key, &(cur - amount));
+    }
+
+    fn get_locked(env: &Env, token: &Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&Self::locked_key(env, token))
+            .unwrap_or(0)
+    }
+
+    /// Asserts the contract token balance covers all currently escrowed (locked)
+    /// wager balances. This guards against silent loss or double-spend of escrowed
+    /// funds during resolution (Issue #42).
+    fn assert_balance_invariant(env: &Env, token: &Address) {
+        let locked = Self::get_locked(env, token);
+        let token_client = token::Client::new(env, token);
+        let actual = token_client.balance(&env.current_contract_address());
+        if actual < locked {
+            panic_with_error!(env, EscrowError::InvariantViolated);
+        }
     }
 
     /// Creates a match using the configured native XLM SAC token (Issue #38).
@@ -1088,6 +1335,17 @@ impl ChessterEscrow {
         token: Address,
         amount: i128,
     ) {
+        Self::create_match_internal(env, game_code, player1, token, amount);
+    }
+
+    fn create_match_internal(
+        env: Env,
+        game_code: String,
+        player1: Address,
+        token: Address,
+        amount: i128,
+    ) {
+        acquire_reentrancy(&env);
         player1.require_auth();
 
         if Self::is_paused(env.clone()) {
@@ -1131,6 +1389,7 @@ impl ChessterEscrow {
         let token_client = token::Client::new(&env, &token);
         Self::validate_player_funds(&env, &token, &player1, amount);
         token_client.transfer(&player1, &env.current_contract_address(), &amount);
+        Self::add_locked(&env, &token, amount);
 
         let m = Match {
             game_code: game_code.clone(),
@@ -1169,6 +1428,7 @@ impl ChessterEscrow {
                 wager_amount: amount,
             },
         );
+        release_reentrancy(&env);
     }
 
     /// Joins an existing pending match and deposits Player 2's wager.
@@ -1178,6 +1438,11 @@ impl ChessterEscrow {
     /// * `game_code` - Unique match game code.
     /// * `player2` - Joining player address.
     pub fn join_match(env: Env, game_code: String, player2: Address) {
+        Self::join_match_internal(env, game_code, player2);
+    }
+
+    fn join_match_internal(env: Env, game_code: String, player2: Address) {
+        acquire_reentrancy(&env);
         player2.require_auth();
 
         if Self::is_paused(env.clone()) {
@@ -1216,6 +1481,7 @@ impl ChessterEscrow {
         let token_client = token::Client::new(&env, &m.token);
         Self::validate_player_funds(&env, &m.token, &player2, m.wager_amount);
         token_client.transfer(&player2, &env.current_contract_address(), &m.wager_amount);
+        Self::add_locked(&env, &m.token, m.wager_amount);
 
         m.player2 = Some(player2.clone());
         m.status = MatchStatus::Active;
@@ -1239,6 +1505,7 @@ impl ChessterEscrow {
                 total_staked: m.total_staked,
             },
         );
+        release_reentrancy(&env);
     }
 
     /// Places a spectator side bet on predicted match winner (Issue #35).
@@ -1257,6 +1524,7 @@ impl ChessterEscrow {
         amount: i128,
     ) {
         spectator.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
         if amount <= 0 {
             panic_with_error!(&env, EscrowError::InvalidWager);
         }
@@ -1279,6 +1547,7 @@ impl ChessterEscrow {
         let token_client = token::Client::new(&env, &m.token);
         Self::validate_player_funds(&env, &m.token, &spectator, amount);
         token_client.transfer(&spectator, &env.current_contract_address(), &amount);
+        Self::add_locked(&env, &m.token, amount);
 
         let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
         let mut pool: SidePool = env
@@ -1340,6 +1609,7 @@ impl ChessterEscrow {
     /// * `player` - Address of requesting player.
     pub fn request_cancellation(env: Env, game_code: String, player: Address) {
         player.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
 
         let mut m = Self::load_match(&env, &game_code);
 
@@ -1362,13 +1632,21 @@ impl ChessterEscrow {
         };
 
         if is_canceled {
+            let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
+            let side_total =
+                if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
+                    pool.total_player1_side_staked + pool.total_player2_side_staked
+                } else {
+                    0
+                };
+
+            Self::assert_balance_invariant(&env, &m.token);
             let token_client = token::Client::new(&env, &m.token);
             token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
             if let Some(p2) = m.player2.clone() {
                 token_client.transfer(&env.current_contract_address(), &p2, &m.wager_amount);
             }
 
-            let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
             if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
                 for bet in pool.bets.iter() {
                     token_client.transfer(
@@ -1379,6 +1657,9 @@ impl ChessterEscrow {
                 }
                 Self::bump_entry_ttl(&env, &pool_key);
             }
+
+            Self::sub_locked(&env, &m.token, m.total_staked + side_total);
+            Self::assert_balance_invariant(&env, &m.token);
 
             m.status = MatchStatus::Refunded;
             Self::remove_from_active_lists(&env, &game_code, &m);
@@ -1403,6 +1684,7 @@ impl ChessterEscrow {
     /// * `player1` - Creator player address.
     pub fn cancel_pending_match(env: Env, game_code: String, player1: Address) {
         player1.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
 
         let mut m = Self::load_match(&env, &game_code);
 
@@ -1416,20 +1698,27 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::AlreadyJoined);
         }
 
+        let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
+        let side_total =
+            if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
+                pool.total_player1_side_staked + pool.total_player2_side_staked
+            } else {
+                0
+            };
+
+        Self::assert_balance_invariant(&env, &m.token);
         let token_client = token::Client::new(&env, &m.token);
         token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
 
-        let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
         if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
             for bet in pool.bets.iter() {
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &bet.spectator,
-                    &bet.amount,
-                );
+                token_client.transfer(&env.current_contract_address(), &bet.spectator, &bet.amount);
             }
             Self::bump_entry_ttl(&env, &pool_key);
         }
+
+        Self::sub_locked(&env, &m.token, m.total_staked + side_total);
+        Self::assert_balance_invariant(&env, &m.token);
 
         m.status = MatchStatus::Refunded;
         Self::remove_from_active_lists(&env, &game_code, &m);
@@ -1454,6 +1743,7 @@ impl ChessterEscrow {
     /// * `player` - Address of requesting player.
     pub fn request_draw(env: Env, game_code: String, player: Address) {
         player.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
 
         let mut m = Self::load_match(&env, &game_code);
 
@@ -1507,6 +1797,7 @@ impl ChessterEscrow {
     /// * `game_code` - Unique match game code.
     /// * `winner` - Optional winner address, or None for a draw.
     pub fn resolve_match(env: Env, game_code: String, winner: Option<Address>) {
+        let _guard = ReentrancyGuard::new(&env);
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
 
@@ -1531,6 +1822,7 @@ impl ChessterEscrow {
 
     /// Coordinator forfeits an active match on behalf of a disconnected/timing out player (Issue #39).
     pub fn forfeit_match(env: Env, game_code: String, forfeiting_player: Address) {
+        let _guard = ReentrancyGuard::new(&env);
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
 
@@ -1574,6 +1866,16 @@ impl ChessterEscrow {
         winner: Option<Address>,
     ) -> i128 {
         let token_client = token::Client::new(env, &m.token);
+
+        let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
+        let side_total =
+            if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
+                pool.total_player1_side_staked + pool.total_player2_side_staked
+            } else {
+                0
+            };
+
+        Self::assert_balance_invariant(env, &m.token);
         let mut admin_fee: i128 = 0;
 
         if let Some(w) = winner.clone() {
@@ -1586,7 +1888,8 @@ impl ChessterEscrow {
             let winner_pay = m.total_staked - admin_fee;
 
             token_client.transfer(&env.current_contract_address(), &w, &winner_pay);
-            let fee_recipient = Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
+            let fee_recipient =
+                Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
             token_client.transfer(&env.current_contract_address(), &fee_recipient, &admin_fee);
         } else {
             token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
@@ -1642,6 +1945,9 @@ impl ChessterEscrow {
         m.winner = winner;
         env.storage().persistent().set(game_code, m);
         Self::bump_entry_ttl(env, game_code);
+
+        Self::sub_locked(env, &m.token, m.total_staked + side_total);
+        Self::assert_balance_invariant(env, &m.token);
 
         Self::remove_from_active_lists(env, game_code, m);
         admin_fee
@@ -1719,6 +2025,7 @@ impl ChessterEscrow {
     /// * `player` - Address of player claiming refund (must be participant).
     pub fn claim_refund(env: Env, game_code: String, player: Address) {
         player.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
 
         let mut m = Self::load_match(&env, &game_code);
 
@@ -1748,6 +2055,7 @@ impl ChessterEscrow {
     /// * `caller` - Caller address (must be coordinator or match participant).
     pub fn auto_claim_refund(env: Env, game_code: String, caller: Address) {
         caller.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
 
         let mut m = Self::load_match(&env, &game_code);
         let coordinator = Self::get_coordinator(env.clone());
@@ -1779,6 +2087,7 @@ impl ChessterEscrow {
     /// # Returns
     /// * `u32` - Number of expired matches successfully refunded.
     pub fn auto_claim_expired_matches(env: Env, game_codes: Vec<String>) -> u32 {
+        let _guard = ReentrancyGuard::new(&env);
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
 
@@ -1812,6 +2121,7 @@ impl ChessterEscrow {
     /// * `env` - Environment reference.
     /// * `game_code` - Unique match game code.
     pub fn refund_after_timeout(env: Env, game_code: String) {
+        let _guard = ReentrancyGuard::new(&env);
         let mut m = Self::load_match(&env, &game_code);
 
         if m.status == MatchStatus::Resolved || m.status == MatchStatus::Refunded {
@@ -1831,18 +2141,30 @@ impl ChessterEscrow {
     fn execute_refund(env: &Env, game_code: &String, m: &mut Match) {
         let token_client = token::Client::new(env, &m.token);
 
+        let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
+        let side_total =
+            if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
+                pool.total_player1_side_staked + pool.total_player2_side_staked
+            } else {
+                0
+            };
+
+        Self::assert_balance_invariant(env, &m.token);
+
         token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
         if let Some(p2) = m.player2.clone() {
             token_client.transfer(&env.current_contract_address(), &p2, &m.wager_amount);
         }
 
-        let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
         if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
             for bet in pool.bets.iter() {
                 token_client.transfer(&env.current_contract_address(), &bet.spectator, &bet.amount);
             }
             Self::bump_entry_ttl(env, &pool_key);
         }
+
+        Self::sub_locked(env, &m.token, m.total_staked + side_total);
+        Self::assert_balance_invariant(env, &m.token);
 
         m.status = MatchStatus::Refunded;
         env.storage().persistent().set(game_code, m);
@@ -1948,6 +2270,7 @@ impl ChessterEscrow {
     /// * `game_code` - Unique match game code.
     /// * `winner` - Optional winner address, or None for draw.
     pub fn resolve_dispute(env: Env, game_code: String, winner: Option<Address>) {
+        let _guard = ReentrancyGuard::new(&env);
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
 
@@ -1979,6 +2302,7 @@ impl ChessterEscrow {
     /// * `env` - Environment reference.
     /// * `resolutions` - Vector of match resolutions.
     pub fn batch_resolve_matches(env: Env, resolutions: Vec<BatchResolution>) {
+        let _guard = ReentrancyGuard::new(&env);
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
 
@@ -2158,6 +2482,7 @@ impl ChessterEscrow {
     /// * `tournament_id` - Unique tournament identifier.
     /// * `final_rankings` - Vector of ranked player addresses.
     pub fn complete_tournament(env: Env, tournament_id: String, final_rankings: Vec<Address>) {
+        let _guard = ReentrancyGuard::new(&env);
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
 
