@@ -18,6 +18,7 @@ const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
+const { geoBlock } = require("./middleware/geoBlock");
 const { createRateLimiter } = require("./middleware/rateLimiter");
 const { sanitizeInput } = require("./middleware/sanitizeInput");
 
@@ -67,6 +68,7 @@ app.use(
   }),
 );
 app.use(express.json());
+app.use(geoBlock);
 app.use(createRateLimiter({ windowMs: 60_000, max: 100 }));
 app.use(sanitizeInput);
 

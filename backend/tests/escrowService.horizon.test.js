@@ -2,6 +2,10 @@
  * Tests for Stellar Horizon Transaction Indexer
  */
 
+jest.mock("@stellar/stellar-sdk", () => ({
+  Networks: { TESTNET: "Test SDF Network ; September 2015" },
+}));
+
 const escrowService = require("../services/escrowService");
 
 jest.mock("axios");
