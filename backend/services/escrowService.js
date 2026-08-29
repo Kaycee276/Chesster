@@ -298,6 +298,15 @@ async function forfeitMatch(gameCode, forfeitingPlayer) {
 	});
 }
 
+/** Refund a wager that never reached an active match (Issue #68). */
+async function refundUnresolvedMatch(gameCode) {
+	if (!contract) throw new Error("Escrow contract not configured");
+	if (!coordinatorKeypair) throw new Error("Coordinator secret key not configured");
+	return submitWithRetry(() => contract.call("refund_after_timeout", gameCodeToScVal(gameCode)), {
+		label: `refund_after_timeout(${gameCode})`,
+	});
+}
+
 /**
  * Read match details from the contract.
  */
@@ -602,6 +611,7 @@ module.exports = {
 	resolveWithWinner,
 	resolveAsDraw,
 	forfeitMatch,
+	refundUnresolvedMatch,
 	getMatch,
 	estimateFee,
 	isRetryableError,
