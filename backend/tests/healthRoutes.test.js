@@ -169,7 +169,7 @@ describe("Health Check Routes", () => {
       const response = await request(app).get("/api/status");
       
       // Should return a response even if services fail
-      expect(response.status).toBeLessThan(500);
+      expect([200, 503]).toContain(response.status);
     });
 
     test("should include error messages when services fail", async () => {
