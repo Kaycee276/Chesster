@@ -87,7 +87,7 @@ interface GameStore {
   ) => Promise<void>;
   selectSquare: (pos: [number, number] | null) => void;
   loadMoveHistory: () => Promise<void>;
-  setViewingIndex: (index: number | null) => void;
+  setViewingIndex: (index: number | null | ((prev: number | null) => number | null)) => void;
   updateGameState: (data: GameState) => void;
   resignGame: () => Promise<void>;
   offerDraw: () => Promise<void>;
@@ -402,8 +402,10 @@ export const useGameStore = create<GameStore>()(
         }
       },
 
-      setViewingIndex: (index: number | null) =>
-        set({ viewingIndex: index, selectedSquare: null }),
+      setViewingIndex: (index: number | null | ((prev: number | null) => number | null)) => {
+        const next = typeof index === "function" ? index(get().viewingIndex) : index;
+        set({ viewingIndex: next, selectedSquare: null });
+      },
 
       resignGame: async () => {
         const { gameCode, playerColor } = get();
