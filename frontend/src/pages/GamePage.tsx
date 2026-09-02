@@ -6,6 +6,7 @@ import { useWalletStore } from "../store/walletStore";
 import ChessBoard from "../components/ChessBoard";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "../components/WalletDropdown";
+import ThemeToggle from "../components/ThemeToggle";
 
 interface GameInfo {
 	wager_amount?: number | null;
@@ -146,7 +147,8 @@ export default function GamePage() {
 	// Join prompt
 	return (
 		<div className="flex flex-col items-center justify-center h-svh overflow-hidden gap-6 bg-(--bg) p-4">
-			<div className="absolute top-4 right-4">
+			<div className="absolute top-4 right-4 flex items-center gap-2">
+			<ThemeToggle />
 				{isConnected ? (
                     <WalletDropdown />
                 ) : (
