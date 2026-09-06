@@ -1,3 +1,10 @@
+## [1.9.2](https://github.com/Kaycee276/Chesster/compare/v1.9.1...v1.9.2) (2026-09-06)
+
+
+### Bug Fixes
+
+* **backend:** validate coordinator secret key gracefully and support env alias fallback keys ([cfa57d3](https://github.com/Kaycee276/Chesster/commit/cfa57d3d3da3dc160d08b71ef989cfafb87b5214))
+
 ## [1.9.1](https://github.com/Kaycee276/Chesster/compare/v1.9.0...v1.9.1) (2026-09-06)
 
 
