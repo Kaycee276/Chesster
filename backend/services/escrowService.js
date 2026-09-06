@@ -48,8 +48,12 @@ function init() {
 	if (!COORDINATOR_SECRET_KEY) {
 		console.warn("[Escrow] COORDINATOR_SECRET_KEY not set — operating in read-only mode");
 	} else {
-		coordinatorKeypair = Keypair.fromSecret(COORDINATOR_SECRET_KEY);
-		console.log("[Escrow] Coordinator wallet:", coordinatorKeypair.publicKey());
+		try {
+			coordinatorKeypair = Keypair.fromSecret(COORDINATOR_SECRET_KEY);
+			console.log("[Escrow] Coordinator wallet:", coordinatorKeypair.publicKey());
+		} catch (err) {
+			console.error("[Escrow] Invalid COORDINATOR_SECRET_KEY provided — operating in read-only mode:", err.message);
+		}
 	}
 
 	if (ESCROW_ADDRESS) {
