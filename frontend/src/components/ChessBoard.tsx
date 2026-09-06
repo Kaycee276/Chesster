@@ -462,21 +462,21 @@ function ChessBoardInner() {
 
 			if (e.key === "ArrowLeft") {
 				e.preventDefault();
-				setViewingIndex((prev) =>
-					prev === null ? null : Math.max(0, prev - 1),
+				setViewingIndex(
+					viewingIndex === null ? null : Math.max(0, viewingIndex - 1),
 				);
 			} else if (e.key === "ArrowRight") {
 				e.preventDefault();
-				setViewingIndex((prev) =>
-					prev === null
+				setViewingIndex(
+					viewingIndex === null
 						? null
-						: Math.min(moveHistory.length - 1, prev + 1),
+						: Math.min(moveHistory.length - 1, viewingIndex + 1),
 				);
 			}
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [moveHistory.length]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [moveHistory.length, viewingIndex]);
 
 	// Load move history once the board is present (#112)
 	useEffect(() => {

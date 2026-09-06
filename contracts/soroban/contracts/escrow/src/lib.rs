@@ -83,7 +83,7 @@ pub enum EscrowError {
     /// Match is not stale (must be resolved/refunded and >30 days old).
     MatchNotStale = 27,
     /// Match has expired based on ledger timestamp timeout.
-    MatchExpired = 37,
+    MatchExpired = 28,
     /// Wager amount is below configured minimum limit.
     WagerBelowMinimum = 29,
     /// Wager amount exceeds configured maximum limit.
@@ -92,6 +92,18 @@ pub enum EscrowError {
     InvalidWagerLimit = 31,
     /// Contract is paused; new match and tournament creation is temporarily disabled.
     ContractPaused = 32,
+    /// Coordinator key rotation has not been proposed.
+    RotationNotProposed = 33,
+    /// Coordinator rotation already proposed for a different address.
+    RotationAlreadyProposed = 34,
+    /// Signer has already approved the pending rotation.
+    AlreadyApproved = 35,
+    /// Caller is not an authorized multisig signer.
+    UnauthorizedSigner = 36,
+    /// Reentrant call detected on a guarded escrow function.
+    ReentrancyGuard = 37,
+    /// Contract balance invariant check failed.
+    InvariantViolated = 38,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -362,6 +374,27 @@ pub struct PlayerEloUpdatedEvent {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingRotation {
+    /// Proposed new coordinator address.
+    pub proposed_coordinator: Address,
+    /// Ordered list of authorized signers who approved the rotation.
+    pub approvals: Vec<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoordinatorRotationProposedEvent {
+    pub proposed_coordinator: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoordinatorRotationExecutedEvent {
+    pub new_coordinator: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 /// Published when the coordinator activates the emergency circuit breaker pause.
 pub struct ContractPausedEvent {
     /// Coordinator address that triggered the pause.
@@ -374,6 +407,57 @@ pub struct ContractPausedEvent {
 pub struct ContractUnpausedEvent {
     /// Coordinator address that lifted the pause.
     pub coordinator: Address,
+}
+
+/// Reentrancy guard that locks guarded escrow functions for the duration of a
+/// transaction, preventing cross-contract re-entry. The lock is set
+/// on entry via `acquire_reentrancy` or `ReentrancyGuard::new` and cleared on exit.
+struct ReentrancyGuard<'a> {
+    env: &'a Env,
+}
+
+impl<'a> ReentrancyGuard<'a> {
+    fn new(env: &'a Env) -> Self {
+        let key = symbol_short!("reentr");
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&key)
+            .unwrap_or(false)
+        {
+            panic_with_error!(env, EscrowError::ReentrancyGuard);
+        }
+        env.storage().instance().set(&key, &true);
+        ReentrancyGuard { env }
+    }
+}
+
+impl<'a> Drop for ReentrancyGuard<'a> {
+    fn drop(&mut self) {
+        self.env
+            .storage()
+            .instance()
+            .set(&symbol_short!("reentr"), &false);
+    }
+}
+
+fn acquire_reentrancy(env: &Env) {
+    let key = symbol_short!("reentr");
+    if env
+        .storage()
+        .instance()
+        .get::<_, bool>(&key)
+        .unwrap_or(false)
+    {
+        panic_with_error!(env, EscrowError::ReentrancyGuard);
+    }
+    env.storage().instance().set(&key, &true);
+}
+
+fn release_reentrancy(env: &Env) {
+    env.storage()
+        .instance()
+        .set(&symbol_short!("reentr"), &false);
 }
 
 /// Chesster Escrow Smart Contract instance.
@@ -435,7 +519,7 @@ impl ChessterEscrow {
             .set(&Symbol::new(&env, "paused"), &false);
         Self::bump_instance_ttl(&env);
         env.events().publish(
-            (symbol_short!("unpaused"),),
+            (symbol_short!("unpause"),),
             ContractUnpausedEvent { coordinator },
         );
     }

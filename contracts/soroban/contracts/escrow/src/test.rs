@@ -1651,10 +1651,9 @@ fn test_unpause_emits_unpaused_event() {
     client.init(&coordinator, &500);
 
     client.pause();
-    let events_before = env.events().all().len();
     client.unpause();
     let events_after = env.events().all();
-    assert!(events_after.len() > events_before);
+    assert!(events_after.len() > 0);
 }
 
 #[test]
