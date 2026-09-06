@@ -1,3 +1,10 @@
+## [1.9.1](https://github.com/Kaycee276/Chesster/compare/v1.9.0...v1.9.1) (2026-09-06)
+
+
+### Bug Fixes
+
+* **contracts:** fix clippy len_zero warning in test.rs ([90c2354](https://github.com/Kaycee276/Chesster/commit/90c235493bb3786a5957d9e7f5ca273331bf93cd))
+
 # [1.9.0](https://github.com/Kaycee276/Chesster/compare/v1.8.0...v1.9.0) (2026-09-06)
 
 
