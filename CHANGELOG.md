@@ -1,3 +1,34 @@
+# [1.9.0](https://github.com/Kaycee276/Chesster/compare/v1.8.0...v1.9.0) (2026-09-06)
+
+
+### Bug Fixes
+
+* **ci:** refresh backend lockfile ([41de40b](https://github.com/Kaycee276/Chesster/commit/41de40bb0e96bb7426663aa5d2aa6e18687bc1f5))
+* **database:** add indexes for game and move queries ([6b76cea](https://github.com/Kaycee276/Chesster/commit/6b76ceaeb46b1e0fa9e8ec62a7fe9cc0e5656898))
+* resolve smart contract compilation errors, frontend TS build, and test suite configs ([6e83092](https://github.com/Kaycee276/Chesster/commit/6e83092faa04528fb9bce38f4e65b0364eb3bb23))
+* stabilize backend CI test environment ([5f306c8](https://github.com/Kaycee276/Chesster/commit/5f306c8d1a6fda90dca44151feeb664b7c44e3da))
+* stabilize backend CI test environment ([42d5860](https://github.com/Kaycee276/Chesster/commit/42d58602f7bd9842b105bab003568f55867f8909))
+
+
+### Features
+
+* add configurable regional wager blocking ([eadb5c0](https://github.com/Kaycee276/Chesster/commit/eadb5c0c7cf97db4ac8d16a9041e3892390f3373))
+* add escrow unresolved-match fallback ([883b464](https://github.com/Kaycee276/Chesster/commit/883b4648fafd8b4e6551cf680487f9388e8139a2))
+* anti-cheat telemetry, helmet CORS/CSP, touch gestures, animation improvements ([f73de28](https://github.com/Kaycee276/Chesster/commit/f73de28185075b66218c954419a2ac5b0955aca8)), closes [#105](https://github.com/Kaycee276/Chesster/issues/105) [#106](https://github.com/Kaycee276/Chesster/issues/106) [#116](https://github.com/Kaycee276/Chesster/issues/116) [#120](https://github.com/Kaycee276/Chesster/issues/120)
+* **backend:** enable websocket per-message deflate ([b6e68db](https://github.com/Kaycee276/Chesster/commit/b6e68db91eafb251114e6c2300ab256b831cb628))
+* **contracts:** add emergency pause circuit breaker (issue [#22](https://github.com/Kaycee276/Chesster/issues/22)) ([910a11f](https://github.com/Kaycee276/Chesster/commit/910a11ff5ce0c9423ab607eb6bcc321ec5e1bbb4))
+* **contracts:** Add match cancellation and cooperative mutual draw resolution ([#20](https://github.com/Kaycee276/Chesster/issues/20)) ([b9118cb](https://github.com/Kaycee276/Chesster/commit/b9118cba9c68ecf89ee48f5b9ab8c00d278ea1fe))
+* **contracts:** Escrow security hardening — coordinator rotation, reentrancy guard, balance invariants, upgradeability ([03f1eab](https://github.com/Kaycee276/Chesster/commit/03f1eab8985b7f68dc0761fe447cef05377e4e3b)), closes [#100](https://github.com/Kaycee276/Chesster/issues/100) [#103](https://github.com/Kaycee276/Chesster/issues/103) [#104](https://github.com/Kaycee276/Chesster/issues/104) [#102](https://github.com/Kaycee276/Chesster/issues/102) [#100](https://github.com/Kaycee276/Chesster/issues/100) [#102](https://github.com/Kaycee276/Chesster/issues/102) [#103](https://github.com/Kaycee276/Chesster/issues/103) [#104](https://github.com/Kaycee276/Chesster/issues/104)
+* **contracts:** Implement Dynamic Wager Scaling with Configurable Minimum & Maximum Limits ([c5d44b6](https://github.com/Kaycee276/Chesster/commit/c5d44b6e7275a0d97a7b295ad10d96d95ac334af)), closes [#23](https://github.com/Kaycee276/Chesster/issues/23)
+* **contracts:** implement match expiration & auto-claim refund timeout logic ([e391bc5](https://github.com/Kaycee276/Chesster/commit/e391bc55195d745db3da1c5521eb60bb6f0fcaba)), closes [#19](https://github.com/Kaycee276/Chesster/issues/19) [#21](https://github.com/Kaycee276/Chesster/issues/21)
+* **contracts:** Implement platform fee tiering and treasury vault configuration ([#19](https://github.com/Kaycee276/Chesster/issues/19)) ([b9db53c](https://github.com/Kaycee276/Chesster/commit/b9db53c606d4dc53d0f9e360c5b0179397b66ad7))
+* **frontend:** add customizable piece sets and board flip toggle ([#125](https://github.com/Kaycee276/Chesster/issues/125), [#128](https://github.com/Kaycee276/Chesster/issues/128)) ([7eb1c0f](https://github.com/Kaycee276/Chesster/commit/7eb1c0f597dc163e2a79a90a50fc5e98bc4b2c4a))
+* **frontend:** add in-app notification toast system for game invitations ([#126](https://github.com/Kaycee276/Chesster/issues/126)) ([bb9b515](https://github.com/Kaycee276/Chesster/commit/bb9b515ddc72cdf1b916b619e3de39ede5d3a765))
+* **frontend:** add live game spectator mode with evaluation bar ([#127](https://github.com/Kaycee276/Chesster/issues/127)) ([3016823](https://github.com/Kaycee276/Chesster/commit/30168231d922694287def19f624fc660a554ed79))
+* **frontend:** game playback rewind, material display, move indicators, fullscreen ([37f1312](https://github.com/Kaycee276/Chesster/commit/37f13121e26348fabc120b1ec54a14e6cfb817e8)), closes [#124](https://github.com/Kaycee276/Chesster/issues/124) [#123](https://github.com/Kaycee276/Chesster/issues/123) [#112](https://github.com/Kaycee276/Chesster/issues/112) [#109](https://github.com/Kaycee276/Chesster/issues/109)
+* **frontend:** volume control, PGN/FEN export, multi-wallet, ESLint fixes ([bf7d586](https://github.com/Kaycee276/Chesster/commit/bf7d5869cd08e672b2b759892f63027cc39ec005)), closes [#107](https://github.com/Kaycee276/Chesster/issues/107) [#108](https://github.com/Kaycee276/Chesster/issues/108) [#110](https://github.com/Kaycee276/Chesster/issues/110) [#111](https://github.com/Kaycee276/Chesster/issues/111)
+* moderate player chat messages ([02bc34a](https://github.com/Kaycee276/Chesster/commit/02bc34a2b9d15a52a338af62204f47f1acd575bc))
+
 # [1.8.0](https://github.com/Kaycee276/Chesster/compare/v1.7.0...v1.8.0) (2026-08-26)
 
 
