@@ -1613,7 +1613,8 @@ fn test_refund_allowed_while_paused() {
     client.pause();
 
     // Fast-forward past the timeout
-    env.ledger().with_mut(|li| li.timestamp = 1000 + MATCH_EXPIRATION_SECS + 1);
+    env.ledger()
+        .with_mut(|li| li.timestamp = 1000 + MATCH_EXPIRATION_SECS + 1);
 
     // refund_after_timeout should still work while paused
     client.refund_after_timeout(&game_code);

@@ -476,7 +476,7 @@ function ChessBoardInner() {
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [moveHistory.length, viewingIndex]);
+	}, [moveHistory.length, viewingIndex, setViewingIndex]);
 
 	// Load move history once the board is present (#112)
 	useEffect(() => {
