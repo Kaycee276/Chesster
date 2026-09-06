@@ -1654,7 +1654,7 @@ fn test_unpause_emits_unpaused_event() {
     client.pause();
     client.unpause();
     let events_after = env.events().all();
-    assert!(events_after.len() > 0);
+    assert!(!events_after.is_empty());
 }
 
 #[test]
