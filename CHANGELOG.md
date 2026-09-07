@@ -1,3 +1,10 @@
+## [1.9.4](https://github.com/Kaycee276/Chesster/compare/v1.9.3...v1.9.4) (2026-09-07)
+
+
+### Bug Fixes
+
+* resolve frontend/backend env validation and DB schema fallback for time control columns ([ff43083](https://github.com/Kaycee276/Chesster/commit/ff430839de28b409626af12cfb93029a906683c7))
+
 ## [1.9.3](https://github.com/Kaycee276/Chesster/compare/v1.9.2...v1.9.3) (2026-09-07)
 
 
