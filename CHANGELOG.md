@@ -1,3 +1,10 @@
+## [1.9.3](https://github.com/Kaycee276/Chesster/compare/v1.9.2...v1.9.3) (2026-09-07)
+
+
+### Bug Fixes
+
+* **frontend:** remove leave game button while waiting for opponent ([601e34a](https://github.com/Kaycee276/Chesster/commit/601e34a75ec967b66afd4991c0951736647d0c3e))
+
 ## [1.9.2](https://github.com/Kaycee276/Chesster/compare/v1.9.1...v1.9.2) (2026-09-06)
 
 

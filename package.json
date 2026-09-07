@@ -1,6 +1,6 @@
 {
   "name": "chesster",
-  "version": "1.9.2",
+  "version": "1.9.3",
   "private": true,
   "description": "Chesster - Decentralized Chess Game on Stellar",
   "scripts": {
