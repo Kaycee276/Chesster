@@ -23,7 +23,10 @@ export function validateFrontendEnv(): boolean {
   const missing: RequiredFrontendEnv[] = [];
 
   for (const envVar of REQUIRED_FRONTEND_VARS) {
-    const value = import.meta.env[envVar.key];
+    let value = import.meta.env[envVar.key];
+    if (!value && envVar.key === "VITE_CONTRACT_ID") {
+      value = import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS;
+    }
     if (!value || String(value).trim() === "") {
       missing.push(envVar);
     }

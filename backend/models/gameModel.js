@@ -21,23 +21,37 @@ class GameModel {
 		if (!gameCode) gameCode = this.generateGameCode();
 		const initialBoard = chessEngine.initBoard();
 
-		const { data, error } = await supabase
+		const insertPayload = {
+			game_code: gameCode,
+			game_type: gameType,
+			board_state: initialBoard,
+			current_turn: "white",
+			status: "waiting",
+			wager_amount: wagerAmount,
+			player_white_address: playerWhiteAddress,
+			escrow_status: wagerAmount ? "pending" : null,
+			time_control_seconds: timeControlSeconds,
+			time_control_preset: timeControlPreset,
+			time_increment_seconds: timeIncrementSeconds || 0,
+		};
+
+		let { data, error } = await supabase
 			.from("games")
-			.insert({
-				game_code: gameCode,
-				game_type: gameType,
-				board_state: initialBoard,
-				current_turn: "white",
-				status: "waiting",
-				wager_amount: wagerAmount,
-				player_white_address: playerWhiteAddress,
-				escrow_status: wagerAmount ? "pending" : null,
-				time_control_seconds: timeControlSeconds,
-				time_control_preset: timeControlPreset,
-				time_increment_seconds: timeIncrementSeconds || 0,
-			})
+			.insert(insertPayload)
 			.select()
 			.single();
+
+		if (error && error.message && (error.message.includes("time_control_preset") || error.message.includes("time_increment_seconds"))) {
+			delete insertPayload.time_control_preset;
+			delete insertPayload.time_increment_seconds;
+			const retry = await supabase
+				.from("games")
+				.insert(insertPayload)
+				.select()
+				.single();
+			data = retry.data;
+			error = retry.error;
+		}
 
 		if (error) throw error;
 		return data;

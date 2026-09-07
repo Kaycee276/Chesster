@@ -31,6 +31,7 @@ describe("Backend Environment Validator (envValidator)", () => {
   it("throws error when SUPABASE_KEY is missing", () => {
     process.env.SUPABASE_URL = "https://example.supabase.co";
     delete process.env.SUPABASE_KEY;
+    delete process.env.SUPABASE_ANON_KEY;
     process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
 
     expect(() => validateEnv({ skipExit: true })).toThrow(/SUPABASE_KEY/);
@@ -40,6 +41,7 @@ describe("Backend Environment Validator (envValidator)", () => {
     process.env.SUPABASE_URL = "https://example.supabase.co";
     process.env.SUPABASE_KEY = "test-key-123";
     delete process.env.SOROBAN_RPC_URL;
+    delete process.env.STELLAR_RPC_URL;
 
     expect(() => validateEnv({ skipExit: true })).toThrow(/SOROBAN_RPC_URL/);
   });
