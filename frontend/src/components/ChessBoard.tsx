@@ -200,14 +200,6 @@ function WaitingScreen() {
 						</span>
 					</div>
 				)}
-
-				{/* Leave */}
-				<button
-					onClick={() => (wagerAmount ? setConfirmLeave(true) : handleLeave())}
-					className="text-sm text-(--text-tertiary) hover:text-(--text) transition-colors underline underline-offset-2"
-				>
-					Leave game
-				</button>
 			</div>
 		</div>
 	);
