@@ -8,6 +8,15 @@ export interface ChatMessage {
 	createdAt: string;
 }
 
+export interface MatchReadyEvent {
+	gameCode: string;
+	round: number;
+	opponentName: string;
+	opponentRating: number;
+	color: "white" | "black";
+	walletAddress: string;
+}
+
 const BACKEND_URL =
 	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
 
@@ -64,6 +73,14 @@ class SocketService {
 
 	offChatMessage() {
 		this.socket?.off("chat-message");
+	}
+
+	onTournamentMatchReady(callback: (data: MatchReadyEvent) => void) {
+		this.socket?.on("tournament:match_ready", callback);
+	}
+
+	offTournamentMatchReady() {
+		this.socket?.off("tournament:match_ready");
 	}
 }
 

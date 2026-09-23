@@ -119,6 +119,13 @@ class SoundService {
 
   // ── Enable / disable ──────────────────────────────────────────────────────
 
+  /** Alert sound for notifications */
+  playAlert() {
+    [880, 1100].forEach((f, i) =>
+      this.tone(f, 0.15, "sine", 0.30, i * 0.15),
+    );
+  }
+
   setEnabled(value: boolean) {
     this._enabled = value;
     localStorage.setItem(LS_MUTED_KEY, String(!value));
