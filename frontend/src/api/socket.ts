@@ -65,6 +65,14 @@ class SocketService {
 	offChatMessage() {
 		this.socket?.off("chat-message");
 	}
+
+	onTournamentMatchCompleted(callback: (data: any) => void) {
+		this.socket?.on("tournament:match_completed", callback);
+	}
+
+	offTournamentMatchCompleted() {
+		this.socket?.off("tournament:match_completed");
+	}
 }
 
 export const socketService = new SocketService();
