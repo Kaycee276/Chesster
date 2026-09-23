@@ -104,6 +104,8 @@ pub enum EscrowError {
     ReentrancyGuard = 37,
     /// Contract balance invariant check failed.
     InvariantViolated = 38,
+    /// Timeout period has not expired yet.
+    TimeoutNotExpired = 39,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -250,6 +252,10 @@ pub struct Match {
     pub draw_requested_player1: bool,
     /// Cooperative draw request indicator for Player 2.
     pub draw_requested_player2: bool,
+    /// Last activity timestamp (ledger timestamp).
+    pub last_activity_timestamp: u64,
+    /// Timeout duration in seconds before claiming timeout victory.
+    pub timeout_seconds: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +366,14 @@ pub struct TokenWagerLimitsUpdatedEvent {
 pub struct MatchExpiredEvent {
     /// Identifier of the expired match.
     pub game_code: String,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when an active player claims victory due to opponent timeout.
+pub struct MatchTimeoutClaimedEvent {
+    pub game_code: String,
+    pub claimant: Address,
 }
 
 #[contracttype]
@@ -1490,6 +1504,8 @@ impl ChessterEscrow {
             cancel_requested_player2: false,
             draw_requested_player1: false,
             draw_requested_player2: false,
+            last_activity_timestamp: env.ledger().timestamp(),
+            timeout_seconds: 300,
         };
 
         env.storage().persistent().set(&game_code, &m);
@@ -1900,6 +1916,44 @@ impl ChessterEscrow {
                 game_code,
                 winner,
                 admin_fee,
+            },
+        );
+    }
+
+    /// Active player claims victory if the opponent has abandoned the match and timeout threshold elapsed.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `claimant` - Address of the player claiming timeout victory.
+    pub fn claim_timeout_victory(env: Env, game_code: String, claimant: Address) {
+        let _guard = ReentrancyGuard::new(&env);
+        claimant.require_auth();
+
+        Self::ensure_dispute_not_locked(&env, &game_code);
+
+        let mut m = Self::load_match(&env, &game_code);
+        if m.status != MatchStatus::Active {
+            panic_with_error!(&env, EscrowError::MatchNotActive);
+        }
+
+        if claimant != m.player1 && Some(claimant.clone()) != m.player2 {
+            panic_with_error!(&env, EscrowError::InvalidWinner);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time < m.last_activity_timestamp + m.timeout_seconds {
+            panic_with_error!(&env, EscrowError::TimeoutNotExpired);
+        }
+
+        let coordinator = Self::get_coordinator(env.clone());
+        Self::settle_match(&env, &coordinator, &game_code, &mut m, Some(claimant.clone()));
+
+        env.events().publish(
+            (symbol_short!("timeout"), game_code.clone()),
+            MatchTimeoutClaimedEvent {
+                game_code,
+                claimant,
             },
         );
     }
