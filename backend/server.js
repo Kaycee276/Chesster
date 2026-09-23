@@ -17,6 +17,12 @@ const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
 const { moderateMessage } = require("./services/chatService");
+const gameModel = require("./models/gameModel");
+const {
+  verifySocketToken,
+  resolvePlayerColor,
+  authorizeMove,
+} = require("./socket/moveAuthority");
 
 const app = express();
 const server = http.createServer(app);
@@ -85,29 +91,52 @@ function broadcastPresence(gameCode, color, status) {
 io.on("connection", (socket) => {
   // Accepts either a bare gameCode string (spectator join) or
   // { gameCode, playerColor } so we can track presence / handle reconnects.
-  socket.on("join-game", (payload) => {
+  socket.on("join-game", async (payload) => {
     const gameCode = typeof payload === "string" ? payload : payload?.gameCode;
-    const playerColor = typeof payload === "object" ? payload?.playerColor : null;
+    const requestedColor = typeof payload === "object" ? payload?.playerColor : null;
+    const token = typeof payload === "object" ? payload?.token : null;
     if (!gameCode) return;
 
     socket.join(gameCode);
 
-    if (playerColor && ["white", "black"].includes(playerColor)) {
-      socket.data.gameCode = gameCode;
-      socket.data.playerColor = playerColor;
+    if (requestedColor && ["white", "black"].includes(requestedColor)) {
+      // Server authority: a socket may only be bound to a player color if a
+      // valid JWT proves it owns the wallet registered for that color in this
+      // game. Without proof the connection is treated as a spectator, so a
+      // spectator or attacker cannot impersonate a player over the socket.
+      let boundColor = null;
+      const claims = verifySocketToken(token);
+      if (claims) {
+        try {
+          const game = await gameModel.getGame(gameCode);
+          boundColor = resolvePlayerColor(game, claims.address);
+        } catch (err) {
+          boundColor = null;
+        }
+      }
 
-      const presence = getPresenceEntry(gameCode);
-      const wasReconnecting = timerService.isPendingForfeit(gameCode, playerColor);
+      if (boundColor === requestedColor) {
+        socket.data.gameCode = gameCode;
+        socket.data.playerColor = boundColor;
+        socket.data.address = claims.address;
 
-      // A same-color reconnect within the grace period cancels the pending
-      // auto-forfeit and resumes the game/session normally.
-      timerService.cancelReconnectGrace(gameCode, playerColor);
+        const presence = getPresenceEntry(gameCode);
+        const wasReconnecting = timerService.isPendingForfeit(gameCode, boundColor);
 
-      presence[playerColor].socketId = socket.id;
-      broadcastPresence(gameCode, playerColor, "online");
+        // A same-color reconnect within the grace period cancels the pending
+        // auto-forfeit and resumes the game/session normally.
+        timerService.cancelReconnectGrace(gameCode, boundColor);
 
-      if (wasReconnecting) {
-        socket.to(gameCode).emit("player-reconnected", { gameCode, color: playerColor });
+        presence[boundColor].socketId = socket.id;
+        broadcastPresence(gameCode, boundColor, "online");
+
+        if (wasReconnecting) {
+          socket.to(gameCode).emit("player-reconnected", { gameCode, color: boundColor });
+        }
+      } else {
+        // Requested a color the caller cannot prove ownership of: stay a
+        // spectator and let the client know the color binding was refused.
+        socket.emit("auth-error", { gameCode, reason: "color-authentication-failed" });
       }
     }
 
@@ -119,6 +148,44 @@ io.on("connection", (socket) => {
       white: presence.white.status,
       black: presence.black.status,
     });
+  });
+
+  // Server-authoritative move channel. The move is applied only when the socket
+  // was bound to a player color via an authenticated join and it is that
+  // player's turn in an active game; otherwise it is rejected without touching
+  // game state. This blocks socket injection and client-side move spoofing.
+  socket.on("make-move", async ({ gameCode, from, to, promotion } = {}) => {
+    if (!gameCode) return;
+
+    const boundColor = socket.data.playerColor;
+    if (!boundColor || socket.data.gameCode !== gameCode) {
+      socket.emit("move-rejected", { gameCode, reason: "not-a-player" });
+      return;
+    }
+
+    try {
+      const game = await gameModel.getGame(gameCode);
+      const gate = authorizeMove(game, boundColor);
+      if (!gate.ok) {
+        socket.emit("move-rejected", { gameCode, reason: gate.code, message: gate.message });
+        return;
+      }
+
+      const moverColor = game.current_turn;
+      const updated = await gameModel.makeMove(gameCode, from, to, promotion);
+
+      let clock = null;
+      if (updated.status === "active") {
+        clock = timerService.applyMove(gameCode, moverColor);
+      } else {
+        timerService.clearTimer(gameCode);
+        timerService.clearClock(gameCode);
+      }
+
+      io.to(gameCode).emit("game-update", { ...updated, clock });
+    } catch (err) {
+      socket.emit("move-rejected", { gameCode, reason: "invalid-move", message: err.message });
+    }
   });
 
   socket.on("leave-game", (gameCode) => {
