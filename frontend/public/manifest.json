@@ -1,0 +1,18 @@
+{
+  "name": "Chesster",
+  "short_name": "Chesster",
+  "description": "Play chess with on-chain wagers on Chesster.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48 32x32 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

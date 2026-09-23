@@ -104,6 +104,8 @@ pub enum EscrowError {
     ReentrancyGuard = 37,
     /// Contract balance invariant check failed.
     InvariantViolated = 38,
+    /// Checked integer arithmetic overflowed or underflowed.
+    Overflow = 39,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -458,6 +460,34 @@ fn release_reentrancy(env: &Env) {
     env.storage()
         .instance()
         .set(&symbol_short!("reentr"), &false);
+}
+
+/// Overflow-checked addition of two i128 token/fee amounts. Panics with
+/// `EscrowError::Overflow` instead of wrapping, so no arithmetic on funds can
+/// ever silently exceed i128 bounds.
+fn checked_add(env: &Env, a: i128, b: i128) -> i128 {
+    a.checked_add(b)
+        .unwrap_or_else(|| panic_with_error!(env, EscrowError::Overflow))
+}
+
+/// Overflow-checked subtraction. Panics with `EscrowError::Overflow` on
+/// underflow rather than wrapping into a large positive balance.
+fn checked_sub(env: &Env, a: i128, b: i128) -> i128 {
+    a.checked_sub(b)
+        .unwrap_or_else(|| panic_with_error!(env, EscrowError::Overflow))
+}
+
+/// Computes `a * b / denom` with the multiplication checked against i128
+/// overflow before the division. Used for fee (bps) and pari-mutuel payout
+/// math where `a * b` can exceed i128 for large wagers. Panics with
+/// `EscrowError::Overflow` on overflow or a zero/negative denominator.
+fn checked_mul_div(env: &Env, a: i128, b: i128, denom: i128) -> i128 {
+    if denom <= 0 {
+        panic_with_error!(env, EscrowError::Overflow);
+    }
+    a.checked_mul(b)
+        .map(|product| product / denom)
+        .unwrap_or_else(|| panic_with_error!(env, EscrowError::Overflow))
 }
 
 /// Chesster Escrow Smart Contract instance.
@@ -981,13 +1011,17 @@ impl ChessterEscrow {
     fn add_locked(env: &Env, token: &Address, amount: i128) {
         let key = Self::locked_key(env, token);
         let cur = env.storage().instance().get::<_, i128>(&key).unwrap_or(0);
-        env.storage().instance().set(&key, &(cur + amount));
+        env.storage()
+            .instance()
+            .set(&key, &checked_add(env, cur, amount));
     }
 
     fn sub_locked(env: &Env, token: &Address, amount: i128) {
         let key = Self::locked_key(env, token);
         let cur = env.storage().instance().get::<_, i128>(&key).unwrap_or(0);
-        env.storage().instance().set(&key, &(cur - amount));
+        env.storage()
+            .instance()
+            .set(&key, &checked_sub(env, cur, amount));
     }
 
     fn get_locked(env: &Env, token: &Address) -> i128 {
@@ -1569,7 +1603,7 @@ impl ChessterEscrow {
 
         m.player2 = Some(player2.clone());
         m.status = MatchStatus::Active;
-        m.total_staked += m.wager_amount;
+        m.total_staked = checked_add(&env, m.total_staked, m.wager_amount);
 
         env.storage().persistent().set(&game_code, &m);
         Self::bump_entry_ttl(&env, &game_code);
@@ -1646,9 +1680,11 @@ impl ChessterEscrow {
             });
 
         if predicted_winner == m.player1 {
-            pool.total_player1_side_staked += amount;
+            pool.total_player1_side_staked =
+                checked_add(&env, pool.total_player1_side_staked, amount);
         } else {
-            pool.total_player2_side_staked += amount;
+            pool.total_player2_side_staked =
+                checked_add(&env, pool.total_player2_side_staked, amount);
         }
 
         pool.bets.push_back(SideBet {
@@ -1952,25 +1988,48 @@ impl ChessterEscrow {
         let token_client = token::Client::new(env, &m.token);
 
         let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
-        let side_total =
-            if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
-                pool.total_player1_side_staked + pool.total_player2_side_staked
-            } else {
-                0
-            };
+        let pool = env.storage().persistent().get::<_, SidePool>(&pool_key);
+        let side_total = if let Some(ref p) = pool {
+            checked_add(
+                env,
+                p.total_player1_side_staked,
+                p.total_player2_side_staked,
+            )
+        } else {
+            0
+        };
 
         Self::assert_balance_invariant(env, &m.token);
-        let mut admin_fee: i128 = 0;
 
         if let Some(w) = winner.clone() {
             if w != m.player1 && Some(w.clone()) != m.player2 {
                 panic_with_error!(env, EscrowError::InvalidWinner);
             }
+        }
 
+        // --- EFFECTS: mutate all contract state before any external token
+        // transfer, per the checks-effects-interactions pattern. Soroban reverts
+        // the whole transaction on a later panic, so a failed transfer undoes
+        // these writes atomically; doing them first denies any re-entrant caller
+        // a window where the match still looks unresolved. ---
+        let admin_fee: i128 = if let Some(ref w) = winner {
             let admin_bps = Self::get_effective_fee_bps(env.clone(), w.clone());
-            admin_fee = (m.total_staked * (admin_bps as i128)) / 10000;
-            let winner_pay = m.total_staked - admin_fee;
+            checked_mul_div(env, m.total_staked, admin_bps as i128, 10000)
+        } else {
+            0
+        };
 
+        m.status = MatchStatus::Resolved;
+        m.winner = winner.clone();
+        env.storage().persistent().set(game_code, m);
+        Self::bump_entry_ttl(env, game_code);
+
+        Self::sub_locked(env, &m.token, checked_add(env, m.total_staked, side_total));
+        Self::remove_from_active_lists(env, game_code, m);
+
+        // --- INTERACTIONS: external token transfers only after state is final. ---
+        if let Some(w) = winner.clone() {
+            let winner_pay = checked_sub(env, m.total_staked, admin_fee);
             token_client.transfer(&env.current_contract_address(), &w, &winner_pay);
             let fee_recipient =
                 Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
@@ -1982,21 +2041,24 @@ impl ChessterEscrow {
             }
         }
 
-        let pool_key = (Symbol::new(env, "side_p"), game_code.clone());
-        if let Some(pool) = env.storage().persistent().get::<_, SidePool>(&pool_key) {
+        if let Some(pool) = pool {
             if let Some(w) = winner.clone() {
                 let winning_staked = if w == m.player1 {
                     pool.total_player1_side_staked
                 } else {
                     pool.total_player2_side_staked
                 };
-                let total_side_staked =
-                    pool.total_player1_side_staked + pool.total_player2_side_staked;
+                let total_side_staked = checked_add(
+                    env,
+                    pool.total_player1_side_staked,
+                    pool.total_player2_side_staked,
+                );
 
                 if winning_staked > 0 {
                     for bet in pool.bets.iter() {
                         if bet.predicted_winner == w {
-                            let payout = (bet.amount * total_side_staked) / winning_staked;
+                            let payout =
+                                checked_mul_div(env, bet.amount, total_side_staked, winning_staked);
                             token_client.transfer(
                                 &env.current_contract_address(),
                                 &bet.spectator,
@@ -2025,15 +2087,7 @@ impl ChessterEscrow {
             Self::bump_entry_ttl(env, &pool_key);
         }
 
-        m.status = MatchStatus::Resolved;
-        m.winner = winner;
-        env.storage().persistent().set(game_code, m);
-        Self::bump_entry_ttl(env, game_code);
-
-        Self::sub_locked(env, &m.token, m.total_staked + side_total);
         Self::assert_balance_invariant(env, &m.token);
-
-        Self::remove_from_active_lists(env, game_code, m);
         admin_fee
     }
 
@@ -2544,6 +2598,7 @@ impl ChessterEscrow {
     /// * `player` - Joining player address.
     pub fn join_tournament(env: Env, tournament_id: String, player: Address) {
         player.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
 
         if Self::is_paused(env.clone()) {
             panic_with_error!(&env, EscrowError::ContractPaused);
@@ -2573,7 +2628,7 @@ impl ChessterEscrow {
         );
 
         tournament.players.push_back(player);
-        tournament.total_pool += tournament.buy_in_amount;
+        tournament.total_pool = checked_add(&env, tournament.total_pool, tournament.buy_in_amount);
 
         env.storage().persistent().set(&tournament_id, &tournament);
         Self::bump_entry_ttl(&env, &tournament_id);
@@ -2607,6 +2662,15 @@ impl ChessterEscrow {
 
         let token_client = token::Client::new(&env, &tournament.token);
 
+        // --- EFFECTS: finalize tournament state before paying out prizes, per
+        // checks-effects-interactions. ---
+        tournament.status = TournamentStatus::Completed;
+        tournament.final_rankings = final_rankings.clone();
+        env.storage().persistent().set(&tournament_id, &tournament);
+        Self::bump_entry_ttl(&env, &tournament_id);
+
+        // --- INTERACTIONS: prize transfers after the tournament is marked
+        // completed, so a re-entrant call sees the final state. ---
         for (i, winner) in final_rankings.iter().enumerate() {
             if (i as u32) < tournament.prize_distribution.len() {
                 let prize = tournament.prize_distribution.get(i as u32).unwrap_or(0);
@@ -2615,12 +2679,6 @@ impl ChessterEscrow {
                 }
             }
         }
-
-        tournament.status = TournamentStatus::Completed;
-        tournament.final_rankings = final_rankings;
-
-        env.storage().persistent().set(&tournament_id, &tournament);
-        Self::bump_entry_ttl(&env, &tournament_id);
     }
 
     /// Retrieves tournament details.

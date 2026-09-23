@@ -1976,3 +1976,124 @@ fn test_batch_resolve_matches_rejects_exceeding_max() {
     }
     client.batch_resolve_tournament_matches(&resolutions);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #145 - integer overflow / underflow audit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_checked_arithmetic_is_correct_for_normal_values() {
+    let env = Env::default();
+    assert_eq!(checked_add(&env, 200, 300), 500);
+    assert_eq!(checked_sub(&env, 300, 200), 100);
+    // 5% fee on a 200 pot.
+    assert_eq!(checked_mul_div(&env, 200, 500, 10000), 10);
+}
+
+#[test]
+#[should_panic]
+fn test_checked_add_blocks_overflow() {
+    // Exploit: an attacker-inflated running total that would wrap past i128::MAX
+    // must abort instead of silently wrapping to a small/negative balance.
+    let env = Env::default();
+    checked_add(&env, i128::MAX, 1);
+}
+
+#[test]
+#[should_panic]
+fn test_checked_sub_blocks_underflow() {
+    let env = Env::default();
+    checked_sub(&env, i128::MIN, 1);
+}
+
+#[test]
+#[should_panic]
+fn test_checked_mul_div_blocks_overflow() {
+    // Exploit: a wager large enough that `total_staked * fee_bps` overflows i128
+    // must abort the fee computation rather than wrap to a bogus fee/payout.
+    let env = Env::default();
+    checked_mul_div(&env, i128::MAX, 2, 1);
+}
+
+#[test]
+#[should_panic]
+fn test_checked_mul_div_rejects_zero_denominator() {
+    let env = Env::default();
+    checked_mul_div(&env, 100, 1, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #143 - checks-effects-interactions ordering on settlement
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_resolve_match_pays_winner_minus_fee_and_finalizes_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500); // 5% fee
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "CEI1");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    client.resolve_match(&game_code, &Some(player1.clone()));
+
+    // 200 pot, 5% fee = 10; winner takes 190.
+    assert_eq!(token.balance(&player1), 1090);
+    assert_eq!(token.balance(&player2), 900);
+    assert_eq!(token.balance(&coordinator), 10);
+    assert_eq!(token.balance(&contract_id), 0);
+
+    // Effects were applied before the transfers: the match is fully resolved.
+    let match_data = client.get_match(&game_code);
+    assert_eq!(match_data.status, MatchStatus::Resolved);
+    assert_eq!(match_data.winner, Some(player1));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn test_resolve_match_cannot_be_replayed_after_settlement() {
+    // Exploit: a re-entrant or replayed resolve must not double-spend the pot.
+    // Because state is finalized before any transfer, the second resolve sees a
+    // non-Active match and aborts with MatchNotActive (#7).
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "CEI2");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    approve(&env, &token, &player2, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+    client.join_match(&game_code, &player2);
+
+    client.resolve_match(&game_code, &Some(player1.clone()));
+    client.resolve_match(&game_code, &Some(player1));
+}
