@@ -17,6 +17,8 @@ const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
 const { moderateMessage } = require("./services/chatService");
+const { createRateLimiter } = require("./middleware/rateLimiter");
+const { sanitizeInput } = require("./middleware/sanitizeInput");
 
 const app = express();
 const server = http.createServer(app);
@@ -42,6 +44,16 @@ app.use(
   }),
 );
 app.use(express.json());
+
+// Security middleware: strip/reject malicious input before it reaches any route
+// handler, and rate-limit the API surface to blunt brute-forcing and DoS.
+app.use(sanitizeInput);
+
+const apiLimiter = createRateLimiter({
+  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+  max: Number(process.env.RATE_LIMIT_MAX) || 300,
+});
+app.use("/api", apiLimiter);
 
 // Mount routes
 app.use("/api", gameRoutes);

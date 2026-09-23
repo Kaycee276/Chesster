@@ -6,8 +6,9 @@ interface GameTimerProps {
 }
 
 function formatTime(s: number): string {
-	const m = Math.floor(s / 60);
-	const sec = Math.max(0, Math.ceil(s % 60));
+	const clamped = Math.max(0, s);
+	const m = Math.floor(clamped / 60);
+	const sec = Math.max(0, Math.ceil(clamped % 60));
 	return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
