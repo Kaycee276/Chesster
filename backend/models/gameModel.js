@@ -8,6 +8,30 @@ escrowService.init();
 // On-chain MatchStatus enum values
 const ON_CHAIN_STATUS = { PENDING: 0, ACTIVE: 1, RESOLVED: 2, REFUNDED: 3 };
 
+// Stellar public keys (account IDs) are 56-character base32 strings beginning
+// with "G". Contract addresses begin with "C". Anything else is rejected before
+// it is ever placed into a query filter.
+const STELLAR_ADDRESS_REGEX = /^[GC][A-Z2-7]{55}$/;
+
+/**
+ * Validates a caller-supplied wallet address against the strict Stellar address
+ * format. Supabase/PostgREST's `.or()` filter is built from a raw string, so any
+ * value that reaches it must first be proven safe — an address containing commas,
+ * parentheses, or PostgREST operators could otherwise inject additional filter
+ * clauses (SQL/filter injection). Returning a validated value keeps every call
+ * site parameterized-by-construction.
+ *
+ * @param {string} address - Caller-supplied wallet address.
+ * @returns {string} The validated address, unchanged.
+ * @throws {Error} If the address is missing or not a well-formed Stellar address.
+ */
+function assertValidStellarAddress(address) {
+	if (typeof address !== "string" || !STELLAR_ADDRESS_REGEX.test(address)) {
+		throw new Error("Invalid wallet address");
+	}
+	return address;
+}
+
 class GameModel {
 	async createGame(
 		gameType = "chess",
@@ -706,7 +730,11 @@ class GameModel {
 			);
 
 		if (playerAddress) {
-			query = query.or(`player_white_address.eq.${playerAddress},player_black_address.eq.${playerAddress}`);
+			// Reject any value that is not a well-formed Stellar address before it
+			// is interpolated into the PostgREST `.or()` filter string, preventing
+			// filter/SQL injection via crafted address input.
+			const safeAddress = assertValidStellarAddress(playerAddress);
+			query = query.or(`player_white_address.eq.${safeAddress},player_black_address.eq.${safeAddress}`);
 		}
 
 		if (status) {
@@ -830,4 +858,8 @@ class GameModel {
 	}
 }
 
-module.exports = new GameModel();
+const gameModel = new GameModel();
+// Expose the address validator for direct unit testing without changing the
+// default export contract used across the codebase.
+gameModel.assertValidStellarAddress = assertValidStellarAddress;
+module.exports = gameModel;
