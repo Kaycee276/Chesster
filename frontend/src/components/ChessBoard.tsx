@@ -23,6 +23,7 @@ import {
 	SkipForward,
 	ChevronLeft,
 	ChevronRight,
+	Download,
 } from "lucide-react";
 
 const NATIVE_XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
@@ -38,6 +39,7 @@ import { useNavigate } from "react-router-dom";
 import { getPossibleMoves, getCapturedPieces, materialAdvantage } from "../utils/chessUtils";
 import PromotionModal from "./PromotionModal";
 import ConfirmModal from "./ConfirmModal";
+import GameResultModal from "./GameResultModal";
 import TurnTimer from "./TurnTimer";
 import ChatPanel from "./ChatPanel";
 
@@ -299,6 +301,7 @@ function ChessBoardInner() {
 		to: [number, number];
 	} | null>(null);
 	const [showPayoutModal, setShowPayoutModal] = useState(false);
+	const [showResultModal, setShowResultModal] = useState(false);
 	const [confirmAction, setConfirmAction] = useState<"resign" | "leave" | null>(null);
 	const [soundEnabled, setSoundEnabled] = useState(() => soundService.isEnabled());
 	const [volume, setVolume] = useState(() => soundService.getVolume());
@@ -759,6 +762,22 @@ function ChessBoardInner() {
 				</div>
 			)}
 
+			{/* ── Game Result Modal (for sharing board image) ── */}
+			{status === "finished" && (
+				<GameResultModal
+					isOpen={showResultModal}
+					onClose={() => setShowResultModal(false)}
+					board={board}
+					currentTurn={currentTurn}
+					winner={winner}
+					endReason={endReason}
+					whiteUsername={opponentColor === "black" ? gameCode || "White" : "You"}
+					whiteRating={1600}
+					blackUsername={opponentColor === "white" ? gameCode || "Black" : "You"}
+					blackRating={1600}
+				/>
+			)}
+
 			{/* ── Opponent Bar ── */}
 			<div className="shrink-0 flex items-center justify-between px-3 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) min-w-0 gap-2 overflow-hidden">
 				<div className="flex items-center gap-2 min-w-0 overflow-hidden">
@@ -1021,13 +1040,23 @@ function ChessBoardInner() {
 						</>
 					)}
 					{status === "finished" ? (
-						<button
-							onClick={handleLeaveGame}
-							className="px-3 py-1.5 bg-(--accent-dark) hover:bg-(--accent-primary) text-white rounded-lg flex items-center gap-1.5 text-xs font-semibold transition-colors"
-						>
-							<LogOut size={11} />
-							Leave
-						</button>
+						<div className="flex items-center gap-1.5">
+							<button
+								onClick={() => setShowResultModal(true)}
+								className="px-2.5 py-1 bg-purple-500/15 hover:bg-purple-500 text-purple-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
+								title="Share this game's board position as an image"
+							>
+								<Download size={11} />
+								Share
+							</button>
+							<button
+								onClick={handleLeaveGame}
+								className="px-3 py-1.5 bg-(--accent-dark) hover:bg-(--accent-primary) text-white rounded-lg flex items-center gap-1.5 text-xs font-semibold transition-colors"
+							>
+								<LogOut size={11} />
+								Leave
+							</button>
+						</div>
 					) : status === "active" ? (
 						<>
 							<button
