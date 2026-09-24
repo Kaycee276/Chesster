@@ -53,7 +53,7 @@ class UserModel {
 	 * bookkeeping columns (wallet_address, created_at, ...).
 	 */
 	async updateProfile(address, updates = {}) {
-		const ALLOWED_FIELDS = ["username", "avatar_url", "bio", "country"];
+		const ALLOWED_FIELDS = ["username", "avatar_url", "bio", "country", "email"];
 		const sanitized = {};
 
 		for (const field of ALLOWED_FIELDS) {
@@ -68,6 +68,12 @@ class UserModel {
 
 		if (sanitized.username !== undefined && sanitized.username.trim().length === 0) {
 			throw new Error("Username cannot be empty");
+		}
+		if (sanitized.email !== undefined) {
+			sanitized.email = sanitized.email.trim().toLowerCase();
+			if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sanitized.email)) {
+				throw new Error("Email address is invalid");
+			}
 		}
 
 		const { data, error } = await supabase
