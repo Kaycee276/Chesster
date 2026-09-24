@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { useWalletStore, type WalletType } from "../store/walletStore";
 import { useToastStore } from "../store/toastStore";
-import { ChevronDown, LogOut, RefreshCw, Wallet } from "lucide-react";
+import { ChevronDown, LogOut, RefreshCw, Wallet, Gift } from "lucide-react";
 
 const WALLET_OPTIONS: { type: WalletType; label: string; hint: string }[] = [
   { type: "freighter", label: "Freighter", hint: "Official Stellar wallet" },
@@ -13,6 +14,7 @@ const WALLET_OPTIONS: { type: WalletType; label: string; hint: string }[] = [
 export default function WalletDropdown() {
   const { address, walletType, connectWith, disconnect } = useWalletStore();
   const { addToast } = useToastStore();
+  const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [connecting, setConnecting] = useState<WalletType | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -91,6 +93,16 @@ export default function WalletDropdown() {
       {isOpen && (
         <div className="absolute right-0 mt-2 w-48 bg-(--bg-secondary) border border-(--border) rounded-xl shadow-xl overflow-hidden z-50">
           <div className="p-2 flex flex-col gap-1">
+            <button
+              onClick={() => {
+                navigate("/referrals");
+                setIsOpen(false);
+              }}
+              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-(--text-secondary) hover:text-(--text) hover:bg-(--bg-tertiary) rounded-lg transition-colors text-left"
+            >
+              <Gift size={14} />
+              Referrals
+            </button>
             <button
               onClick={() => {
                 addToast("Please open the wallet extension to switch accounts", "info");
