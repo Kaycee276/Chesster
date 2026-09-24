@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const supabase = require("../config/supabase");
+const eventBus = require("../services/eventBus");
 
 const REFERRAL_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -54,7 +55,13 @@ class UserModel {
 				.select()
 				.single();
 
-			if (!error) return data;
+			if (!error) {
+				eventBus.publish("player.registered", {
+					userId: data.id,
+					walletAddress: data.wallet_address,
+				}).catch(() => {});
+				return data;
+			}
 			if (error.code !== "23505" || !String(error.message).includes("referral_code")) throw error;
 		}
 
