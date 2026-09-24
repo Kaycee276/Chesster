@@ -1,6 +1,7 @@
 const supabase = require("../config/supabase");
 const chessEngine = require("../services/chessEngine");
 const escrowService = require("../services/escrowService");
+const referralService = require("../services/referralService");
 
 // Initialize escrow service
 escrowService.init();
@@ -9,6 +10,26 @@ escrowService.init();
 const ON_CHAIN_STATUS = { PENDING: 0, ACTIVE: 1, RESOLVED: 2, REFUNDED: 3 };
 
 class GameModel {
+	async _creditReferralRake(dbGame, winner, onChain) {
+		if (!dbGame?.id || winner === "draw") return;
+
+		const loserWallet = winner === "white"
+			? dbGame.player_black_address
+			: dbGame.player_white_address;
+		if (!loserWallet) return;
+
+		const totalStaked = BigInt(onChain.totalStaked || 0);
+		const feeBps = BigInt(process.env.PLATFORM_RAKE_BPS || "500");
+		const rakeAmount = (totalStaked * feeBps) / 10000n;
+		if (rakeAmount === 0n) return;
+
+		try {
+			await referralService.creditReferralCommission(dbGame.id, rakeAmount, loserWallet);
+		} catch (error) {
+			console.error(`[Referral] commission credit failed for ${dbGame.game_code}:`, error.message);
+		}
+	}
+
 	async createGame(
 		gameType = "chess",
 		wagerAmount = null,
@@ -341,6 +362,7 @@ class GameModel {
 		// ── 2. Already resolved / refunded ───────────────────────────────────
 		if (chainStatus === ON_CHAIN_STATUS.RESOLVED) {
 			await supabase.from("games").update({ escrow_status: "settled" }).eq("game_code", gameCode);
+			await this._creditReferralRake(dbGame, winner, onChain);
 			console.log(`[Escrow] ${gameCode} already RESOLVED on-chain — DB updated`);
 			return;
 		}
@@ -411,6 +433,7 @@ class GameModel {
 				.from("games")
 				.update({ escrow_resolve_tx: receipt.hash, escrow_status: "settled" })
 				.eq("game_code", gameCode);
+			await this._creditReferralRake(dbGame, winner, onChain);
 
 			console.log(`[Escrow] ${gameCode} settled — tx: ${receipt.hash}`);
 		} catch (resolveErr) {
@@ -427,6 +450,7 @@ class GameModel {
 						escrow_status: "settled",
 						...(raceTxHash ? { escrow_resolve_tx: raceTxHash } : {}),
 					}).eq("game_code", gameCode);
+					await this._creditReferralRake(dbGame, winner, recheck);
 					return;
 				}
 			} catch (_) { /* ignore recheck failure */ }

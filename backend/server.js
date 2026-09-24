@@ -11,6 +11,7 @@ const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
 const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
+const referralRoutes = require("./routes/referralRoutes");
 const timerService = require("./services/timerService");
 const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
@@ -54,6 +55,7 @@ app.use("/api/escrow", escrowRoutes);
 app.use("/api", authRoutes);
 app.use("/api", botRoutes);
 app.use("/api", healthRoutes);
+app.use("/api/referrals", referralRoutes);
 
 // Legacy health endpoint
 app.get("/health", (req, res) => {

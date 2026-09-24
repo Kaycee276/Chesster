@@ -37,7 +37,11 @@ class GameController {
 	async joinGame(req, res) {
 		try {
 			const { gameCode } = req.params;
-			const { playerColor, playerAddress } = req.body;
+			const { playerColor, playerAddress, referralCode } = req.body;
+			if (playerAddress && referralCode) {
+				const userModel = require("../models/userModel");
+				await userModel.findOrCreateByAddress(playerAddress, referralCode);
+			}
 			const game = await gameModel.joinGame(
 				gameCode,
 				playerColor,
