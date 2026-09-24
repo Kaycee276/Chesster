@@ -7,7 +7,48 @@ const ESCROW_ADDRESS = import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS || import.me
 
 const server = new rpc.Server(RPC_URL);
 
+// Stellar account IDs (public keys) are 56-char base32 strings beginning with
+// "G". Secret seeds share the same length/alphabet but begin with "S" and must
+// never be requested, stored, transmitted, or logged by the frontend — signing
+// is delegated entirely to the Freighter wallet extension.
+const STELLAR_PUBLIC_KEY_REGEX = /^G[A-Z2-7]{55}$/;
+const STELLAR_SECRET_KEY_REGEX = /^S[A-Z2-7]{55}$/;
+
+/**
+ * Defensive guard: throws if a value looks like a Stellar secret seed. Applied
+ * to any externally supplied string that must only ever carry public data, so a
+ * secret key accidentally passed into a client-side flow is rejected loudly
+ * instead of being handled, stored, or sent over the wire.
+ *
+ * @param value - Untrusted string that must not contain a secret key.
+ */
+export function assertNoSecretKey(value: string): void {
+    if (STELLAR_SECRET_KEY_REGEX.test(value)) {
+        throw new Error("Secret keys must never be handled by the client");
+    }
+}
+
+/**
+ * Validates that a value is a well-formed Stellar public key (account ID) and
+ * not a secret seed. Returns the key unchanged so call sites stay concise.
+ *
+ * @param publicKey - Caller-supplied wallet public key.
+ * @returns The validated public key.
+ */
+export function assertValidPublicKey(publicKey: string): string {
+    assertNoSecretKey(publicKey);
+    if (!STELLAR_PUBLIC_KEY_REGEX.test(publicKey)) {
+        throw new Error("Invalid Stellar public key");
+    }
+    return publicKey;
+}
+
 export async function depositXLM(fnName: "create_match" | "join_match", gameCode: string, amount: string, publicKey: string) {
+    // Validate untrusted input first: only a public key may ever reach this
+    // flow. Reject secret seeds and malformed keys before any configuration
+    // lookup, network call, or transaction construction.
+    assertValidPublicKey(publicKey);
+
     if (!ESCROW_ADDRESS) throw new Error("Escrow contract address not configured");
 
     const account = await server.getAccount(publicKey);
