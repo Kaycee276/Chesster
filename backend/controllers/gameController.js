@@ -1,7 +1,24 @@
 const gameModel = require("../models/gameModel");
 const timerService = require("../services/timerService");
+const eventBus = require("../services/eventBus");
 
 class GameController {
+	publishGameEnded(game, endReason) {
+		if (!game || game.status !== "finished") return;
+		const winnerAddress = game.winner === "white"
+			? game.player_white_address
+			: game.winner === "black" ? game.player_black_address : null;
+		eventBus.publish("game.ended", {
+			gameId: game.id,
+			gameCode: game.game_code,
+			winner: game.winner,
+			winnerAddress,
+			playerWhiteAddress: game.player_white_address,
+			playerBlackAddress: game.player_black_address,
+			endReason: endReason || game.end_reason || "conclusion",
+		}).catch(() => {});
+	}
+
 	async createGame(req, res) {
 		try {
 			const {
@@ -108,6 +125,7 @@ class GameController {
 			} else {
 				timerService.clearTimer(gameCode);
 				timerService.clearClock(gameCode);
+				this.publishGameEnded(game);
 
 				// If tournament match concluded, advance round
 				if (game.status === "finished") {
@@ -147,6 +165,7 @@ class GameController {
 			const { gameCode } = req.params;
 			const { playerColor } = req.body;
 			const game = await gameModel.resignGame(gameCode, playerColor);
+			this.publishGameEnded(game, "resignation");
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
@@ -190,6 +209,7 @@ class GameController {
 		try {
 			const { gameCode } = req.params;
 			const game = await gameModel.acceptDraw(gameCode);
+			this.publishGameEnded(game, "draw_agreed");
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
@@ -335,6 +355,16 @@ class GameController {
 					endReason: endReason || "conclusion",
 				});
 			}
+
+			eventBus.publish("game.ended", {
+				gameId: game.id,
+				gameCode,
+				winner,
+				winnerAddress: winningAddress,
+				playerWhiteAddress: game.player_white_address,
+				playerBlackAddress: game.player_black_address,
+				endReason: endReason || "conclusion",
+			}).catch(() => {});
 
 			res.json({
 				success: true,

@@ -13,6 +13,7 @@ const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
 const timerService = require("./services/timerService");
 const cronService = require("./services/cronService");
+const eventConsumer = require("./workers/eventConsumer");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
@@ -178,6 +179,7 @@ io.on("connection", (socket) => {
 app.set("io", io);
 timerService.init(io);
 if (require.main === module) {
+	eventConsumer.start().catch((error) => logger.error("Event consumer failed to start", { error: error.message }));
   cronService.start();
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Chesster backend running on port ${PORT}`);

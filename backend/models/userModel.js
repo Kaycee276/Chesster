@@ -1,4 +1,5 @@
 const supabase = require("../config/supabase");
+const eventBus = require("../services/eventBus");
 
 /**
  * UserModel — Supabase-backed storage for player profiles.
@@ -32,6 +33,10 @@ class UserModel {
 			.single();
 
 		if (error) throw error;
+		eventBus.publish("player.registered", {
+			userId: data.id,
+			walletAddress: data.wallet_address,
+		}).catch(() => {});
 		return data;
 	}
 
