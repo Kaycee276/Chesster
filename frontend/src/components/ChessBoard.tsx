@@ -1061,7 +1061,11 @@ function ChessBoardInner() {
 
 				{/* Centre: timer */}
 				{status === "active" && (
-					<TurnTimer secondsLeft={secondsLeft} totalSeconds={timeControlSeconds} />
+					<TurnTimer 
+						secondsLeft={secondsLeft} 
+						totalSeconds={timeControlSeconds}
+						isCurrentTurn={playerColor === currentTurn}
+					/>
 				)}
 
 				{/* Right: escrow badge · sound · game code */}

@@ -35,6 +35,7 @@ interface SoundProfile {
   gameStart: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
   gameEnd: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
   draw: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
+  lowTimeTick: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
 }
 
 /**
@@ -80,6 +81,9 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
       { freq: 440, duration: 0.15, type: "sine", volume: 0.22, delay: 0 },
       { freq: 440, duration: 0.15, type: "sine", volume: 0.22, delay: 0.22 },
     ],
+    lowTimeTick: [
+      { freq: 1200, duration: 0.05, type: "sine", volume: 0.2, delay: 0 },
+    ],
   },
   plastic: {
     // Modern plastic piece sounds - brighter and snappier
@@ -118,6 +122,9 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     draw: [
       { freq: 550, duration: 0.12, type: "triangle", volume: 0.2, delay: 0 },
       { freq: 550, duration: 0.12, type: "triangle", volume: 0.2, delay: 0.2 },
+    ],
+    lowTimeTick: [
+      { freq: 1400, duration: 0.04, type: "triangle", volume: 0.2, delay: 0 },
     ],
   },
   arcade: {
@@ -158,6 +165,9 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
       { freq: 600, duration: 0.1, type: "sawtooth", volume: 0.15, delay: 0 },
       { freq: 600, duration: 0.1, type: "sawtooth", volume: 0.15, delay: 0.2 },
     ],
+    lowTimeTick: [
+      { freq: 1600, duration: 0.04, type: "sawtooth", volume: 0.18, delay: 0 },
+    ],
   },
   retro: {
     // 8-bit chiptune sounds - classic video game vibe
@@ -196,6 +206,9 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     draw: [
       { freq: 800, duration: 0.08, type: "square", volume: 0.15, delay: 0 },
       { freq: 800, duration: 0.08, type: "square", volume: 0.15, delay: 0.18 },
+    ],
+    lowTimeTick: [
+      { freq: 2000, duration: 0.03, type: "square", volume: 0.18, delay: 0 },
     ],
   },
 };
@@ -305,6 +318,11 @@ class SoundService {
   /** Game ended in a draw */
   draw() {
     this.playSoundEffect("draw");
+  }
+
+  /** Low time warning tick (active player under 10 seconds) */
+  lowTimeTick() {
+    this.playSoundEffect("lowTimeTick");
   }
 
   // ── Enable / disable ──────────────────────────────────────────────────────
