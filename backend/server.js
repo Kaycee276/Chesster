@@ -125,6 +125,14 @@ io.on("connection", (socket) => {
     socket.leave(gameCode);
   });
 
+  socket.on("join_tournament_room", (tournamentId) => {
+    if (tournamentId) socket.join(`tournament:${tournamentId}`);
+  });
+
+  socket.on("leave_tournament_room", (tournamentId) => {
+    if (tournamentId) socket.leave(`tournament:${tournamentId}`);
+  });
+
   socket.on("disconnect", () => {
     const { gameCode, playerColor } = socket.data || {};
     if (!gameCode || !playerColor) return;
