@@ -30,6 +30,41 @@ class GameModel {
 		}
 	}
 
+	_scheduleAntiCheatAnalysis(game) {
+		if (!game?.id) return;
+		const antiCheatService = require("../services/antiCheatService");
+		antiCheatService.analyzeGame(game.id).catch((error) => {
+			console.error(`[AntiCheat] analysis failed for ${game.game_code}:`, error.message);
+		});
+	}
+
+	async recordCheatAnalysis(gameId, analysis) {
+		const white = analysis.white;
+		const black = analysis.black;
+		const { error } = await supabase.from("games").update({
+			white_cheat_suspicion: white.score,
+			black_cheat_suspicion: black.score,
+			cheat_flagged: white.flagged || black.flagged,
+			anti_cheat_analyzed_at: new Date().toISOString(),
+		}).eq("id", gameId);
+		if (error) throw error;
+
+		const flags = [white, black]
+			.filter((player) => player.flagged && player.playerAddress)
+			.map((player) => ({
+				game_id: gameId,
+				player_address: player.playerAddress,
+				anomaly_score: player.score,
+				reasons: player.reasons,
+			}));
+		if (flags.length > 0) {
+			const { error: flagError } = await supabase
+				.from("player_flags")
+				.upsert(flags, { onConflict: "game_id,player_address", ignoreDuplicates: true });
+			if (flagError) throw flagError;
+		}
+	}
+
 	async createGame(
 		gameType = "chess",
 		wagerAmount = null,
@@ -261,6 +296,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, winner).catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		console.log(`[GameModel] ${gameCode} ended by time — white ${whiteScore} vs black ${blackScore} → ${winner}`);
 		return data;
@@ -293,6 +329,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, winner).catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		console.log(`[GameModel] ${gameCode} ended by flag fall — ${loserColor} ran out of time, ${winner} wins`);
 		return data;
@@ -325,6 +362,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, winner, "disconnect").catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		console.log(`[GameModel] ${gameCode} auto-forfeited — ${disconnectedColor} failed to reconnect, ${winner} wins`);
 		return data;
@@ -596,6 +634,25 @@ class GameModel {
 			.update({ move_count: game.move_count + 1 })
 			.eq("game_code", gameCode);
 
+		const antiCheatService = require("../services/antiCheatService");
+		antiCheatService.recordMove({
+			gameId: game.id,
+			gameCode,
+			color: game.current_turn,
+			playerAddress: game.current_turn === "white"
+				? game.player_white_address
+				: game.player_black_address,
+			moveNumber: game.move_count + 1,
+			move: { from, to, promotion },
+			boardBefore: game.board_state,
+			boardAfter: newBoard,
+			turnStartedAt: game.turn_started_at,
+		}).then(() => {
+			if (newStatus === "finished") this._scheduleAntiCheatAnalysis(updatedGame);
+		}).catch((error) => {
+			console.error(`[AntiCheat] move telemetry failed for ${gameCode}:`, error.message);
+		});
+
 		return updatedGame;
 	}
 
@@ -620,6 +677,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, winner).catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		return data;
 	}
@@ -658,6 +716,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, "draw").catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		return data;
 	}
