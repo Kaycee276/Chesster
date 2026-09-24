@@ -16,6 +16,7 @@ const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
+const { enforceHttps, enforceSecureSocket } = require("./middleware/enforceHttps");
 const { moderateMessage } = require("./services/chatService");
 
 const app = express();
@@ -31,6 +32,17 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3001;
+
+// Trust the TLS-terminating proxy (Render/Nginx/LB) so req.protocol and the
+// X-Forwarded-Proto header can be used to enforce HTTPS in production.
+app.set("trust proxy", 1);
+
+// Redirect HTTP to HTTPS and emit HSTS in production (Issue #143). Registered
+// first so no downstream handler processes an insecure request.
+app.use(enforceHttps);
+
+// Reject insecure (non-wss) WebSocket handshakes in production (Issue #143).
+io.use(enforceSecureSocket());
 
 // Apply structured logging middleware
 app.use(logger.requestMiddleware());
