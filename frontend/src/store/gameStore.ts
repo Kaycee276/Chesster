@@ -19,7 +19,21 @@ function startLocalTimer() {
   _timerInterval = setInterval(() => {
     useGameStore.setState((s) => {
       if (s.status !== "active") return s;
-      return { secondsLeft: Math.max(0, s.secondsLeft - 1) };
+      
+      const newSecondsLeft = Math.max(0, s.secondsLeft - 1);
+      
+      // Play low-time tick sound: active player with < 10 seconds remaining
+      // Threshold is < 10s (not <=) so tick starts exactly when 10s is reached on next interval
+      const isActivePlayerLowTime = 
+        s.playerColor === s.currentTurn && 
+        newSecondsLeft > 0 && 
+        newSecondsLeft < 10;
+      
+      if (isActivePlayerLowTime && soundService.isEnabled()) {
+        soundService.lowTimeTick();
+      }
+      
+      return { secondsLeft: newSecondsLeft };
     });
   }, 1000);
 }

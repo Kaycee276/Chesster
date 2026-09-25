@@ -23,6 +23,7 @@ import {
 	SkipForward,
 	ChevronLeft,
 	ChevronRight,
+	Download,
 } from "lucide-react";
 
 const NATIVE_XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
@@ -42,6 +43,7 @@ import { squareAriaLabel } from "../utils/boardA11y";
 import { socketService } from "../api/socket";
 import PromotionModal from "./PromotionModal";
 import ConfirmModal from "./ConfirmModal";
+import GameResultModal from "./GameResultModal";
 import TurnTimer from "./TurnTimer";
 import ChatPanel from "./ChatPanel";
 import GameResultModal from "./GameResultModal";
@@ -1054,6 +1056,19 @@ function ChessBoardInner() {
 				</div>
 			)}
 
+			{/* ── Game Result Modal (for sharing board image) ── */}
+			{status === "finished" && (
+				<GameResultModal
+					isOpen={showResultModal}
+					onClose={() => setShowResultModal(false)}
+					board={board}
+					currentTurn={currentTurn}
+					winner={winner}
+					endReason={endReason}
+					whiteUsername={opponentColor === "black" ? gameCode || "White" : "You"}
+					whiteRating={1600}
+					blackUsername={opponentColor === "white" ? gameCode || "Black" : "You"}
+					blackRating={1600}
 			{/* ── Post-Game Result Modal ── */}
 			{showResultModal && status === "finished" && (
 				<GameResultModal
@@ -1452,13 +1467,23 @@ function ChessBoardInner() {
 						</>
 					)}
 					{status === "finished" ? (
-						<button
-							onClick={handleLeaveGame}
-							className="px-3 py-1.5 bg-(--accent-dark) hover:bg-(--accent-primary) text-white rounded-lg flex items-center gap-1.5 text-xs font-semibold transition-colors"
-						>
-							<LogOut size={11} />
-							Leave
-						</button>
+						<div className="flex items-center gap-1.5">
+							<button
+								onClick={() => setShowResultModal(true)}
+								className="px-2.5 py-1 bg-purple-500/15 hover:bg-purple-500 text-purple-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
+								title="Share this game's board position as an image"
+							>
+								<Download size={11} />
+								Share
+							</button>
+							<button
+								onClick={handleLeaveGame}
+								className="px-3 py-1.5 bg-(--accent-dark) hover:bg-(--accent-primary) text-white rounded-lg flex items-center gap-1.5 text-xs font-semibold transition-colors"
+							>
+								<LogOut size={11} />
+								Leave
+							</button>
+						</div>
 					) : status === "active" ? (
 						<>
 							<button
@@ -1492,7 +1517,11 @@ function ChessBoardInner() {
 
 				{/* Centre: timer */}
 				{status === "active" && (
-					<TurnTimer secondsLeft={secondsLeft} totalSeconds={timeControlSeconds} />
+					<TurnTimer 
+						secondsLeft={secondsLeft} 
+						totalSeconds={timeControlSeconds}
+						isCurrentTurn={playerColor === currentTurn}
+					/>
 				)}
 
 				{/* Right: escrow badge · sound · game code */}
