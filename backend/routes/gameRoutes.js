@@ -343,4 +343,39 @@ router.post('/games/:gameCode/end', gameController.endGame);
  */
 router.get('/games/:gameCode/chat', gameController.getChatMessages);
 
+/**
+ * @openapi
+ * /api/games/{id}/stream:
+ *   get:
+ *     summary: Stream a game replay move-by-move over Server-Sent Events
+ *     description: >
+ *       Emits a `start` event, one `move` event per move (paced by the
+ *       original move duration divided by `speed`) and a final `end` event.
+ *       Supports resuming via the Last-Event-ID header.
+ *     tags: [Games]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Game code
+ *       - in: query
+ *         name: speed
+ *         schema:
+ *           type: number
+ *           minimum: 1
+ *           maximum: 10
+ *           default: 1
+ *         description: Playback speed multiplier (e.g. 1, 2, 5)
+ *     responses:
+ *       200:
+ *         description: text/event-stream of start, move and end events
+ *       400:
+ *         description: Invalid speed
+ *       404:
+ *         description: Game not found
+ */
+router.get('/games/:id/stream', gameController.streamGameReplay);
+
 module.exports = router;

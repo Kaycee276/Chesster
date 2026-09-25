@@ -497,6 +497,30 @@
         }
       }
     },
+    "/games/{id}/stream": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "Stream a game replay over Server-Sent Events",
+        "description": "Replays a game's moves as Server-Sent Events (Issue #245). Sends a `start` event with game metadata, one `move` event per move (id = move index; payload includes the move, UCI string, captured piece, check flags, resulting FEN, remaining clocks and original duration), then an `end` event with the result. Each move is delayed by its original duration (capped at 10s) divided by `speed`. Clients can resume with the Last-Event-ID header.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Game code" },
+          { "name": "speed", "in": "query", "schema": { "type": "number", "minimum": 1, "maximum": 10, "default": 1 }, "description": "Playback speed multiplier (e.g. 1, 2, 5)" },
+          { "name": "Last-Event-ID", "in": "header", "schema": { "type": "integer" }, "description": "Resume after this move index" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": { "type": "string", "example": "id: 1\nevent: move\ndata: {\"index\":1,\"uci\":\"e2e4\"}\n\n" }
+              }
+            }
+          },
+          "400": { "description": "Invalid speed" },
+          "404": { "description": "Game not found" }
+        }
+      }
+    },
     "/time-controls": {
       "get": {
         "tags": ["Time Controls"],
