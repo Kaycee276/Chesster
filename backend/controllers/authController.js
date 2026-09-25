@@ -28,6 +28,7 @@ class AuthController {
 
 			authService.verifySignature(address, signature);
 			const user = await userModel.findOrCreateByAddress(address);
+			if (user?.is_deleted) throw new Error("Account has been deleted");
 			const token = authService.issueToken(address);
 
 			res.json({ success: true, data: { token, user } });

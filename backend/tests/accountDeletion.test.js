@@ -9,9 +9,11 @@ const request = require("supertest");
 jest.mock("../services/authService", () => ({
 	createChallenge: jest.fn(),
 	verifySignature: jest.fn(),
+	issueToken: jest.fn(),
 }));
 jest.mock("../models/userModel", () => ({
 	anonymizeUser: jest.fn(),
+	findOrCreateByAddress: jest.fn(),
 }));
 jest.mock("../services/sessionService", () => ({
 	isTokenRevoked: jest.fn().mockResolvedValue(false),
@@ -43,6 +45,21 @@ describe("account deletion", () => {
 
 		expect(response.status).toBe(401);
 		expect(userModel.anonymizeUser).not.toHaveBeenCalled();
+	});
+
+	test("does not issue replacement tokens for a deleted profile", async () => {
+		userModel.findOrCreateByAddress.mockResolvedValue({
+			wallet_address: "GPLAYER",
+			is_deleted: true,
+		});
+
+		const response = await request(buildApp())
+			.post("/api/auth/login")
+			.send({ address: "GPLAYER", signature: "signed-login-challenge" });
+
+		expect(response.status).toBe(401);
+		expect(response.body.error).toBe("Account has been deleted");
+		expect(authService.issueToken).not.toHaveBeenCalled();
 	});
 
 	test("requires a deletion-purpose wallet signature and revokes all sessions", async () => {
