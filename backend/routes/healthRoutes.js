@@ -6,6 +6,7 @@
 const express = require("express");
 const router = express.Router();
 const supabase = require("../config/supabase");
+const { checkDbHealth } = require("../services/dbHealthService");
 const logger = require("../utils/logger");
 const { Keypair, rpc, Networks } = require("@stellar/stellar-sdk");
 
@@ -101,6 +102,15 @@ router.get("/health", (req, res) => {
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || "development",
   });
+});
+
+/**
+ * GET /api/health/db
+ * Database readiness probe with latency and pool diagnostics.
+ */
+router.get("/health/db", async (req, res) => {
+	const health = await checkDbHealth();
+	res.status(health.status === "healthy" ? 200 : 503).json(health);
 });
 
 /**

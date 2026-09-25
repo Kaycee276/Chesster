@@ -140,6 +140,33 @@ class TimerService {
 		};
 	}
 
+	/**
+	 * Get precise remaining clocks for both players, accounting for elapsed time
+	 * since the current turn started. This is used for reconnection state rehydration
+	 * to ensure zero clock discrepancy when a player rejoins.
+	 *
+	 * @param {string} gameCode
+	 * @returns {object|null} { whiteMs, blackMs, turn } with millisecond precision,
+	 *                         or null if no clock is running for this game
+	 */
+	getPreciseClocks(gameCode) {
+		const state = this.clocks.get(gameCode);
+		if (!state) return null;
+
+		const now = Date.now();
+		const activeRemaining = Math.max(0, state.deadline - now);
+		const whiteMs = state.turn === "white" ? activeRemaining : state.whiteMs;
+		const blackMs = state.turn === "black" ? activeRemaining : state.blackMs;
+
+		return {
+			whiteMs,
+			blackMs,
+			turn: state.turn,
+			incrementMs: state.incrementMs,
+			preset: state.preset,
+		};
+	}
+
 	_scheduleFlagFall(gameCode) {
 		const state = this.clocks.get(gameCode);
 		if (!state) return;
@@ -153,6 +180,7 @@ class TimerService {
 			try {
 				const gameModel = require("../models/gameModel");
 				const game = await gameModel.endByFlag(gameCode, loser);
+				await require("../models/userModel").invalidateProfilesForGame(game);
 				if (this.io && game) {
 					this.io.to(gameCode).emit("game-update", game);
 					this.io.to(gameCode).emit("flag-fall", { gameCode, loser, winner: game.winner });
@@ -196,6 +224,7 @@ class TimerService {
 				try {
 					const gameModel = require("../models/gameModel");
 					const game = await gameModel.endByTime(gameCode);
+					await require("../models/userModel").invalidateProfilesForGame(game);
 					if (this.io && game) {
 						this.io.to(gameCode).emit("game-update", game);
 					}
@@ -237,6 +266,7 @@ class TimerService {
 			try {
 				const gameModel = require("../models/gameModel");
 				const game = await gameModel.forfeitByDisconnect(gameCode, color);
+				await require("../models/userModel").invalidateProfilesForGame(game);
 				this.clearClock(gameCode);
 				if (this.io && game) {
 					this.io.to(gameCode).emit("game-update", game);
