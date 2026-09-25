@@ -81,6 +81,20 @@ class UserModel {
 		if (!data) throw new Error("Profile not found");
 		return data;
 	}
+
+	/**
+	 * Redact profile data and purge attributable communications in one database
+	 * transaction. Historical games and their move rows are intentionally kept.
+	 */
+	async anonymizeUser(address) {
+		const { data, error } = await supabase.rpc("anonymize_user_data", {
+			p_wallet_address: address,
+		});
+
+		if (error) throw error;
+		if (!data) throw new Error("Profile not found");
+		return data;
+	}
 }
 
 module.exports = new UserModel();

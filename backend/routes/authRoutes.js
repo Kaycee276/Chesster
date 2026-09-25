@@ -7,5 +7,6 @@ router.post("/auth/challenge", authController.createChallenge);
 router.post("/auth/login", authController.login);
 router.get("/auth/profile", requireAuth, authController.getProfile);
 router.put("/auth/profile", requireAuth, authController.updateProfile);
+router.post("/users/delete-account", requireAuth, authController.deleteAccount);
 
 module.exports = router;
