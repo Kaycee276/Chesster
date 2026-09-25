@@ -1,4 +1,5 @@
 const gameModel = require("../models/gameModel");
+const userModel = require("../models/userModel");
 const timerService = require("../services/timerService");
 const auditService = require("../services/auditService");
 
@@ -111,6 +112,7 @@ class GameController {
 			} else {
 				timerService.clearTimer(gameCode);
 				timerService.clearClock(gameCode);
+				await userModel.invalidateProfilesForGame(game);
 
 				// If tournament match concluded, advance round
 				if (game.status === "finished") {
@@ -153,6 +155,7 @@ class GameController {
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
+			await userModel.invalidateProfilesForGame(game);
 
 			// If tournament match concluded, advance round
 			try {
@@ -196,6 +199,7 @@ class GameController {
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
+			await userModel.invalidateProfilesForGame(game);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
@@ -213,6 +217,7 @@ class GameController {
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
+			await userModel.invalidateProfilesForGame(game);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
@@ -391,6 +396,7 @@ class GameController {
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
+			await userModel.invalidateProfileCache(game.player_white_address, game.player_black_address);
 
 			const io = req.app.get("io");
 			if (io) {
