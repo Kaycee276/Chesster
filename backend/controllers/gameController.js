@@ -1,9 +1,13 @@
 const gameModel = require("../models/gameModel");
+const userModel = require("../models/userModel");
 const timerService = require("../services/timerService");
 const replayService = require("../services/replayService");
 
 // Comment line sent periodically so proxies don't drop an idle replay stream.
 const REPLAY_HEARTBEAT_MS = 15000;
+const auditService = require("../services/auditService");
+
+const AUDIT_FORMATS = new Set(["json", "csv"]);
 
 class GameController {
 	async createGame(req, res) {
@@ -112,6 +116,7 @@ class GameController {
 			} else {
 				timerService.clearTimer(gameCode);
 				timerService.clearClock(gameCode);
+				await userModel.invalidateProfilesForGame(game);
 
 				// If tournament match concluded, advance round
 				if (game.status === "finished") {
@@ -154,6 +159,7 @@ class GameController {
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
+			await userModel.invalidateProfilesForGame(game);
 
 			// If tournament match concluded, advance round
 			try {
@@ -197,6 +203,7 @@ class GameController {
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
+			await userModel.invalidateProfilesForGame(game);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
@@ -214,6 +221,7 @@ class GameController {
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
+			await userModel.invalidateProfilesForGame(game);
 
 			const io = req.app.get("io");
 			io.to(gameCode).emit("game-update", game);
@@ -313,6 +321,49 @@ class GameController {
 				startedAt: game.game_started_at || null,
 			},
 		}, scheduleNext);
+	 * GET /api/games/:id/audit-export?format=json|csv&download=true (Issue #243)
+	 * Forensic audit package for dispute resolution. `:id` is the game UUID or
+	 * game code. Restricted to the match's two players and platform admins.
+	 */
+	async exportMatchAudit(req, res) {
+		try {
+			const { id } = req.params;
+			const format = String(req.query.format || "json").toLowerCase();
+			if (!AUDIT_FORMATS.has(format)) {
+				return res.status(400).json({ success: false, error: "format must be one of: json, csv" });
+			}
+
+			const game = await auditService.getGame(id);
+			if (!game) {
+				return res.status(404).json({ success: false, error: "Game not found" });
+			}
+			if (!auditService.canAccessAudit(req.user, game)) {
+				return res.status(403).json({ success: false, error: "Only match players and admins can export this audit log" });
+			}
+
+			const audit = await auditService.buildAuditPackage(game);
+			const filename = `chesster-audit-${game.game_code || game.id}`;
+
+			res.set({
+				"Cache-Control": "no-store",
+				"X-Audit-Outcome-Hash": audit.integrity.outcomeHash,
+				"X-Audit-Signature": audit.integrity.signature,
+				"Access-Control-Expose-Headers": "Content-Disposition, X-Audit-Outcome-Hash, X-Audit-Signature",
+			});
+
+			if (format === "csv") {
+				res.attachment(`${filename}.csv`);
+				res.type("text/csv; charset=utf-8");
+				return res.send(auditService.toCsv(audit));
+			}
+
+			if (["1", "true"].includes(String(req.query.download).toLowerCase())) {
+				res.attachment(`${filename}.json`);
+			}
+			res.json({ success: true, data: audit });
+		} catch (error) {
+			res.status(500).json({ success: false, error: error.message });
+		}
 	}
 
 	async getChatMessages(req, res) {
@@ -437,6 +488,7 @@ class GameController {
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
+			await userModel.invalidateProfileCache(game.player_white_address, game.player_black_address);
 
 			const io = req.app.get("io");
 			if (io) {
