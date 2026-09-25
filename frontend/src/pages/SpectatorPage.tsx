@@ -1,5 +1,14 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { useParams } from "react-router-dom";
+import { Eye, Users, TrendingUp, TrendingDown, Minus, ArrowUpDown } from "lucide-react";
+import EvaluationBar from "../components/EvaluationBar";
+import { useStockfishEvaluation } from "../hooks/useStockfishEvaluation";
+import { toEngineFen } from "../utils/engineEvaluation";
+import { api } from "../api/gameApi";
+import { socketService } from "../api/socket";
+import type { GameState } from "../types/game";
+
+type Orientation = "white" | "black";
 import { Eye, Users, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { api } from "../api/gameApi";
 import { socketService, type SpectatorReaction } from "../api/socket";
@@ -37,36 +46,10 @@ const INITIAL_BOARD: string[][] = [
 	["R", "N", "B", "Q", "K", "B", "N", "R"],
 ];
 
-function EvaluationBar({ evalScore }: { evalScore: number }) {
-	// evalScore in centipawns: positive = white advantage
-	const clamped = Math.max(-1000, Math.min(1000, evalScore));
-	const whitePercent = 50 + (clamped / 1000) * 45;
-	const blackPercent = 100 - whitePercent;
+function SpectatorBoard({ board, orientation }: { board: string[][]; orientation: Orientation }) {
+	const flipped = orientation === "black";
+	const displayIndices = flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
 
-	const label =
-		Math.abs(evalScore) >= 900
-			? evalScore > 0 ? "M+" : "M-"
-			: (evalScore / 100).toFixed(1);
-
-	return (
-		<div className="flex flex-col items-center gap-1 select-none">
-			<span className="text-xs font-mono text-(--text-secondary)">{evalScore > 0 ? "+" : ""}{evalScore >= 100 ? (evalScore / 100).toFixed(1) : evalScore}</span>
-			<div className="w-6 h-48 rounded-full overflow-hidden border border-(--border) flex flex-col shadow-inner">
-				<div
-					className="bg-white transition-all duration-500"
-					style={{ height: `${whitePercent}%` }}
-				/>
-				<div
-					className="bg-gray-900 transition-all duration-500"
-					style={{ height: `${blackPercent}%` }}
-				/>
-			</div>
-			<span className="text-xs font-mono text-(--text-secondary)">{label}</span>
-		</div>
-	);
-}
-
-function SpectatorBoard({ board }: { board: string[][] }) {
 	return (
 		<div
 			className="rounded-sm overflow-hidden shadow-2xl"
@@ -78,8 +61,9 @@ function SpectatorBoard({ board }: { board: string[][] }) {
 				aspectRatio: "1",
 			}}
 		>
-			{board.map((row, ri) =>
-				row.map((piece, ci) => {
+			{displayIndices.map((ri) =>
+				displayIndices.map((ci) => {
+					const piece = board[ri]?.[ci] ?? ".";
 					const isLight = (ri + ci) % 2 === 0;
 					return (
 						<div
@@ -155,10 +139,16 @@ function FloatingReaction({ reaction }: { reaction: SpectatorReaction }) {
 export default function SpectatorPage() {
 	const { gameCode } = useParams<{ gameCode: string }>();
 	const [board, setBoard] = useState(INITIAL_BOARD);
+	const [turn, setTurn] = useState<"white" | "black">("white");
+	const [gameLoaded, setGameLoaded] = useState(false);
+	const [orientation, setOrientation] = useState<Orientation>("white");
 	const [moveHistory] = useState<string[]>([]);
-	const [evalScore] = useState(0);
 	const [spectatorCount] = useState(1);
 	const [reactions, setReactions] = useState<SpectatorReaction[]>([]);
+
+	const fen = useMemo(() => toEngineFen(board, turn), [board, turn]);
+	const { evaluation, status: engineStatus } = useStockfishEvaluation(fen);
+	const showEvaluation = fen !== null && engineStatus !== "error" && engineStatus !== "unsupported";
 
 	const whiteMaterial = useMemo(() => {
 		let total = 0;
@@ -186,6 +176,34 @@ export default function SpectatorPage() {
 
 	useEffect(() => {
 		if (!gameCode) return;
+		let cancelled = false;
+
+		const applyGameState = (game: GameState | undefined) => {
+			if (cancelled || !game || !Array.isArray(game.board_state)) return;
+			setBoard(game.board_state);
+			if (game.current_turn === "white" || game.current_turn === "black") {
+				setTurn(game.current_turn);
+			}
+			setGameLoaded(true);
+		};
+
+		api
+			.getGame(gameCode)
+			.then((res) => {
+				if (res?.success) applyGameState(res.data);
+			})
+			.catch(() => {
+				// Keep showing the last known position; live updates may still arrive.
+			});
+
+		socketService.connect();
+		socketService.joinGame(gameCode);
+		socketService.onGameUpdate(applyGameState);
+
+		return () => {
+			cancelled = true;
+			socketService.offGameUpdate();
+			socketService.leaveGame(gameCode);
 		let active = true;
 		const socket = socketService.connect();
 		socketService.joinGame(gameCode);
@@ -230,14 +248,40 @@ export default function SpectatorPage() {
 						</span>
 					)}
 				</div>
-				<div className="flex items-center gap-1 text-xs text-(--text-secondary)">
-					<Users size={14} />
-					{spectatorCount}
+				<div className="flex items-center gap-3">
+					<button
+						type="button"
+						onClick={() => setOrientation((o) => (o === "white" ? "black" : "white"))}
+						className="flex items-center gap-1 text-xs text-(--text-secondary) hover:text-(--text) transition-colors"
+						title="Flip board"
+						aria-label="Flip board"
+					>
+						<ArrowUpDown size={14} />
+						<span className="hidden sm:inline">Flip</span>
+					</button>
+					<div className="flex items-center gap-1 text-xs text-(--text-secondary)">
+						<Users size={14} />
+						{spectatorCount}
+					</div>
 				</div>
 			</div>
 
 			{/* Main content */}
 			<div className="flex-1 flex items-center justify-center p-4 gap-4">
+				{/* Eval bar + board */}
+				<div className="w-full max-w-lg flex items-stretch gap-2">
+					{showEvaluation && (
+						<EvaluationBar
+							scoreCp={evaluation?.scoreCp ?? 0}
+							mate={evaluation?.mate ?? null}
+							depth={evaluation?.depth}
+							orientation={orientation}
+							loading={!evaluation}
+						/>
+					)}
+					<div className="flex-1 min-w-0">
+						<SpectatorBoard board={board} orientation={orientation} />
+					</div>
 				{/* Eval bar */}
 				<EvaluationBar evalScore={evalScore} />
 
@@ -283,7 +327,16 @@ export default function SpectatorPage() {
 			<div className="shrink-0 flex items-center justify-center px-4 py-2 bg-(--bg-secondary) border-t border-(--border)">
 				<div className="flex items-center gap-2 text-xs text-(--text-secondary)">
 					<Minus size={12} />
-					<span>Waiting for game updates...</span>
+					<span>
+						{gameLoaded
+							? `${turn === "white" ? "White" : "Black"} to move`
+							: "Waiting for game updates..."}
+					</span>
+					{evaluation && (
+						<span className="font-mono text-(--text-tertiary)">
+							· Stockfish depth {evaluation.depth}
+						</span>
+					)}
 				</div>
 			</div>
 		</div>
