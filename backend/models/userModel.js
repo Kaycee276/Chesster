@@ -95,6 +95,19 @@ class UserModel {
 		if (!data) throw new Error("Profile not found");
 		return data;
 	}
+
+	async recordPuzzleSolve(address, puzzleId, solvedOn, points = 10) {
+		const { data, error } = await supabase.rpc("record_puzzle_solve", {
+			p_wallet_address: address,
+			p_puzzle_id: puzzleId,
+			p_solved_on: solvedOn,
+			p_points: points,
+		});
+
+		if (error) throw error;
+		if (!data) throw new Error("Player profile not found");
+		return data;
+	}
 }
 
 module.exports = new UserModel();
