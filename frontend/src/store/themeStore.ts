@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type BoardThemeKey = "classic" | "wood" | "neon" | "marble";
+export type BoardThemeKey = "classic" | "wood" | "neon" | "marble" | "high-contrast";
 export type PieceSetKey = "standard" | "neo" | "wood" | "pixel";
 
 export interface PieceSet {
@@ -82,6 +82,13 @@ export const BOARD_THEMES: BoardTheme[] = [
 		light: "#eceae3",
 		dark: "#5c6370",
 		preview: "linear-gradient(135deg, #eceae3 50%, #5c6370 50%)",
+	},
+	{
+		key: "high-contrast",
+		name: "High Contrast",
+		light: "#ffffff",
+		dark: "#000000",
+		preview: "linear-gradient(135deg, #ffffff 50%, #000000 50%)",
 	},
 ];
 

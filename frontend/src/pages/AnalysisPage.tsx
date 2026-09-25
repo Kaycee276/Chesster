@@ -391,13 +391,13 @@ export default function AnalysisPage() {
 											onClick={() => handleSquareClick(row, col)}
 											className={`relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 ${
 												isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
-											} ${selected ? "bg-yellow-400/75" : ""}`}
+											} ${selected ? "square-selected bg-yellow-400/75" : ""}`}
 										>
 											{possible && !isCaptureTarget && (
-												<div className="absolute rounded-full bg-black/30 dark:bg-white/25 pointer-events-none w-[28%] h-[28%]" />
+												<div className="legal-move-dot absolute rounded-full bg-black/30 dark:bg-white/25 pointer-events-none w-[28%] h-[28%]" />
 											)}
 											{isCaptureTarget && (
-												<div className="absolute rounded-full border-[3px] border-yellow-400/90 pointer-events-none w-[70%] h-[70%]" />
+												<div className="legal-move-ring absolute rounded-full border-[3px] border-yellow-400/90 pointer-events-none w-[70%] h-[70%]" />
 											)}
 											{piece !== "." && (
 												<span

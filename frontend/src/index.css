@@ -70,6 +70,78 @@
 	--sq-highlight: #94a3b8;
 }
 
+/* High-contrast accessibility theme (#314)
+   Pure white/black squares: 21:1 square-to-square contrast (WCAG AAA needs
+   7:1) and ≥10:1 for every marker color against both square colors. */
+:root[data-theme="high-contrast"] {
+	--sq-light: #ffffff;
+	--sq-dark: #000000;
+	--sq-highlight: #ffff00;
+	--sq-selected: #00ffff;
+	--sq-lastmove: #ffff00;
+	--sq-check: #ff0000;
+}
+
+/* Diagonal crosshatch on dark squares gives them a distinct texture, so a
+   low-vision player can tell square colors apart without relying on color
+   alone. Thin white lines keep the underlying black at full contrast. */
+:root[data-theme="high-contrast"] [class*="bg-(--sq-dark)"] {
+	background-image: repeating-linear-gradient(
+		45deg,
+		rgba(255, 255, 255, 0.16) 0px,
+		rgba(255, 255, 255, 0.16) 2px,
+		transparent 2px,
+		transparent 9px
+	);
+}
+
+/* Legal-move hints: solid yellow reads on both white and black squares,
+   replacing the translucent black/white dots used by other themes. */
+:root[data-theme="high-contrast"] .legal-move-dot {
+	background: #ffff00;
+	opacity: 0.9;
+	box-shadow: 0 0 0 1px #000000;
+}
+
+:root[data-theme="high-contrast"] .legal-move-ring {
+	border-color: #ffff00;
+	box-shadow: 0 0 0 2px #000000, inset 0 0 0 1px #000000;
+}
+
+/* Squares: selected = cyan, last move = yellow, check = red — all solid.
+   These come after Tailwind's utilities so they win at equal specificity.
+   Each gets a hard outline (black, or white for the red check square) so the
+   boundary stays ≥3:1 against both neighbouring square colors (WCAG 1.4.11). */
+:root[data-theme="high-contrast"] .square-selected {
+	background: var(--sq-selected);
+	box-shadow: inset 0 0 0 2px #000000;
+}
+
+:root[data-theme="high-contrast"] .square-last-move {
+	background: var(--sq-lastmove);
+	box-shadow: inset 0 0 0 2px #000000;
+}
+
+:root[data-theme="high-contrast"] .square-check {
+	background: var(--sq-check);
+	box-shadow: inset 0 0 0 2px #ffffff;
+}
+
+/* Pieces: thicken the built-in 4-direction halo to 2–3px so glyph edges stay
+   crisp against both pure white and pure black squares. */
+:root[data-theme="high-contrast"] .board-piece-white {
+	color: #ffffff !important;
+	text-shadow:
+		-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000,
+		0 -3px 0 #000, 0 3px 0 #000, -3px 0 0 #000, 3px 0 0 #000 !important;
+}
+
+:root[data-theme="high-contrast"] .board-piece-black {
+	color: #000000 !important;
+	text-shadow:
+		-2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff, 2px 2px 0 #fff,
+		0 -3px 0 #fff, 0 3px 0 #fff, -3px 0 0 #fff, 3px 0 0 #fff !important;
+}
 
 .dark {
 	--bg: var(--bg-dark);
