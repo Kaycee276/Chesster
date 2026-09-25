@@ -38,6 +38,7 @@ import { useNavigate } from "react-router-dom";
 import type { AnnotationArrow, AnnotationColor, SquareHighlight } from "../types/chess";
 import { getPossibleMoves, getCapturedPieces, materialAdvantage, moveToAlgebraic, movesToPgn } from "../utils/chessUtils";
 import { getGameOutcome } from "../utils/gameResult";
+import { squareAriaLabel } from "../utils/boardA11y";
 import { socketService } from "../api/socket";
 import PromotionModal from "./PromotionModal";
 import ConfirmModal from "./ConfirmModal";
@@ -471,7 +472,11 @@ function ChessBoardInner() {
 		}
 	};
 
-	// ── Keyboard shortcuts: "f" fullscreen (#124), arrows to rewind (#112) ────
+	// ── Keyboard shortcuts ─────────────────────────────────────────────────────
+	// Game actions (#131): Z steps back a move (undo/review), F flips the board,
+	// Space focuses the board for keyboard play. Shift+F toggles fullscreen
+	// (#124), and the arrow keys rewind/advance move review (#112). Shortcuts are
+	// ignored while typing in an input, textarea, or contenteditable field.
 	useEffect(() => {
 		const onKeyDown = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement | null;
@@ -483,8 +488,39 @@ function ChessBoardInner() {
 			)
 				return;
 
-			if (e.key.toLowerCase() === "f") {
-				toggleFullscreen();
+			// Ignore combos we don't own (Ctrl/Cmd/Alt), except Shift+F below.
+			if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+			const key = e.key.toLowerCase();
+
+			if (key === "f") {
+				e.preventDefault();
+				if (e.shiftKey) {
+					toggleFullscreen();
+				} else {
+					setFlipped((prev) => !prev);
+				}
+				return;
+			}
+
+			if (e.shiftKey) return;
+
+			if (key === "z") {
+				// Undo / step one move back through the game's review history.
+				e.preventDefault();
+				if (moveHistory.length === 0) return;
+				setViewingIndex(
+					viewingIndex === null
+						? Math.max(0, moveHistory.length - 2)
+						: Math.max(0, viewingIndex - 1),
+				);
+				return;
+			}
+
+			if (e.key === " " || e.key === "Spacebar") {
+				// Focus the board so arrow keys and square activation work.
+				e.preventDefault();
+				boardGridRef.current?.focus();
 				return;
 			}
 
@@ -504,7 +540,7 @@ function ChessBoardInner() {
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [moveHistory.length, viewingIndex, setViewingIndex]);
+	}, [moveHistory.length, viewingIndex, setViewingIndex, setFlipped]);
 
 	// Load move history once the board is present (#112)
 	useEffect(() => {
@@ -804,7 +840,6 @@ function ChessBoardInner() {
 	}, []);
 
 	// ── Board annotations: right-click highlights & arrows (#252) ────────────
-	const boardGridRef = useRef<HTMLDivElement>(null);
 	const [highlights, setHighlights] = useState<SquareHighlight[]>([]);
 	const [arrows, setArrows] = useState<AnnotationArrow[]>([]);
 	const rightDragRef = useRef<{ row: number; col: number; color: AnnotationColor } | null>(null);
@@ -1081,6 +1116,10 @@ function ChessBoardInner() {
 				<div
 					ref={boardGridRef}
 					className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity ${isMoving ? "opacity-70" : "opacity-100"}`}
+					role="grid"
+					tabIndex={-1}
+					aria-label={`Chess board, ${moveHistory.length} moves played. Use arrow keys to review, Z to step back, F to flip the board.`}
+					className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 ${isMoving ? "opacity-70" : "opacity-100"}`}
 					style={
 						{
 							width: boardPx,
@@ -1137,7 +1176,11 @@ function ChessBoardInner() {
 							<div
 								key={`${rowIndex}-${colIndex}`}
 								data-testid={`square-${actualRow}-${actualCol}`}
-								className={`board-square relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 ${
+								role="gridcell"
+								tabIndex={0}
+								aria-label={squareAriaLabel(piece, actualRow, actualCol)}
+								aria-selected={selected === true}
+								className={`board-square relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:-outline-offset-2 ${
 									isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
 								} ${selected ? "square-selected bg-yellow-400/75" : ""} ${
 									isKingInCheck ? "square-check bg-red-500/80" : ""
@@ -1146,6 +1189,14 @@ function ChessBoardInner() {
 								}`}
 								style={isCaptureSquare ? { animation: "captureFlash 0.4s ease-out forwards" } : undefined}
 								onClick={() => handleSquareClick(actualRow, actualCol)}
+								onKeyDown={(e) => {
+									// Enter/Space activate a square, mirroring a click, so the
+									// board is fully playable from the keyboard (#134).
+									if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+										e.preventDefault();
+										handleSquareClick(actualRow, actualCol);
+									}
+								}}
 								onTouchEnd={(e) => {
 									// Prevent the synthetic click that follows touch so the
 									// handler doesn't fire twice on mobile browsers.

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const gameController = require('../controllers/gameController');
 const { createRateLimiter } = require('../middleware/rateLimiter');
+const { requireAuth } = require('../middleware/authMiddleware');
 
 /**
  * IP Rate limiter for match creation (Issue #151).
@@ -342,5 +343,71 @@ router.post('/games/:gameCode/end', gameController.endGame);
  *         description: Array of chat messages
  */
 router.get('/games/:gameCode/chat', gameController.getChatMessages);
+
+/**
+ * @openapi
+ * /api/games/{id}/stream:
+ *   get:
+ *     summary: Stream a game replay move-by-move over Server-Sent Events
+ *     description: >
+ *       Emits a `start` event, one `move` event per move (paced by the
+ *       original move duration divided by `speed`) and a final `end` event.
+ *       Supports resuming via the Last-Event-ID header.
+ *     tags: [Games]
+ * /api/games/{id}/audit-export:
+ *   get:
+ *     summary: Export a match's forensic audit log for dispute resolution
+ *     description: >
+ *       Returns move timestamps, client latency, hashed client IPs, socket
+ *       disconnect events, FEN snapshots and a signed outcome. Only the
+ *       match's players and admins may access it.
+ *     tags: [Games]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Game code
+ *       - in: query
+ *         name: speed
+ *         schema:
+ *           type: number
+ *           minimum: 1
+ *           maximum: 10
+ *           default: 1
+ *         description: Playback speed multiplier (e.g. 1, 2, 5)
+ *     responses:
+ *       200:
+ *         description: text/event-stream of start, move and end events
+ *       400:
+ *         description: Invalid speed
+ *       404:
+ *         description: Game not found
+ */
+router.get('/games/:id/stream', gameController.streamGameReplay);
+ *         description: Game UUID or game code
+ *       - in: query
+ *         name: format
+ *         schema:
+ *           type: string
+ *           enum: [json, csv]
+ *       - in: query
+ *         name: download
+ *         schema:
+ *           type: boolean
+ *     responses:
+ *       200:
+ *         description: Audit package (JSON) or chronological timeline (CSV)
+ *       401:
+ *         description: Missing or invalid token
+ *       403:
+ *         description: Caller is neither a match player nor an admin
+ *       404:
+ *         description: Game not found
+ */
+router.get('/games/:id/audit-export', requireAuth, gameController.exportMatchAudit);
 
 module.exports = router;

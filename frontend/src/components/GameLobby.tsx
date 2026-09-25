@@ -27,6 +27,9 @@ type Step =
 	| "join-confirming"
 	| "joining";
 
+// Quick-select wager amounts in XLM, offered alongside the custom input (#132).
+const WAGER_PRESETS = [1, 5, 10, 25, 50] as const;
+
 interface WagerInfo {
 	wagerAmount: string;
 }
@@ -714,6 +717,31 @@ export default function GameLobby() {
 									<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-(--text-tertiary) pointer-events-none">
 										XLM
 									</span>
+								</div>
+								{/* Quick-select wager amounts (#132) */}
+								<div
+									className="flex flex-wrap gap-2"
+									role="group"
+									aria-label="Quick wager amounts in XLM"
+								>
+									{WAGER_PRESETS.map((preset) => {
+										const active = wagerAmount === String(preset);
+										return (
+											<button
+												key={preset}
+												type="button"
+												aria-pressed={active}
+												onClick={() => setWagerAmount(String(preset))}
+												className={`px-3 py-1 text-xs font-semibold rounded-full border transition-all active:scale-95 ${
+													active
+														? "bg-(--accent-primary) border-(--accent-primary) text-white"
+														: "bg-(--bg-secondary) border-(--border) text-(--text) hover:border-(--accent-primary)"
+												}`}
+											>
+												{preset} XLM
+											</button>
+										);
+									})}
 								</div>
 								<p className="text-xs text-(--text-tertiary) leading-relaxed">
 									Winner takes the pot &#183; Draws refund both players
