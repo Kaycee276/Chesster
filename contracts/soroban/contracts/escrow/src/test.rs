@@ -1607,6 +1607,44 @@ fn test_coordinator_rotation_multisig() {
 }
 
 #[test]
+fn test_admin_action_multisig_threshold_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let coordinator = Address::generate(&env);
+    let guardian1 = Address::generate(&env);
+    let guardian2 = Address::generate(&env);
+    let guardian3 = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    let guardians = vec![&env, guardian1.clone(), guardian2.clone(), guardian3.clone()];
+    client.set_guardians(&guardians, &2);
+    assert_eq!(client.get_guardians(), guardians);
+    assert_eq!(client.get_admin_threshold(), 2);
+
+    let proposal_id: u64 = 7;
+    let payload_hash = BytesN::from_array(&env, &[11u8; 32]);
+    assert!(client.try_propose_admin_action(&outsider, &proposal_id, &payload_hash).is_err());
+
+    client.propose_admin_action(&guardian1, &proposal_id, &payload_hash);
+    let proposal = client.get_admin_proposal(&proposal_id);
+    assert_eq!(proposal.proposal_id, proposal_id);
+    assert_eq!(proposal.payload_hash, payload_hash);
+    assert_eq!(proposal.confirmations.len(), 1);
+
+    assert!(client.try_execute_admin_action(&proposal_id).is_err());
+
+    client.confirm_admin_action(&guardian2, &proposal_id);
+    assert!(client.execute_admin_action(&proposal_id));
+    assert!(client.get_admin_proposal(&proposal_id).executed);
+
+    // Re-confirming the same guardian is a duplicate and must be rejected.
+    assert!(client.try_confirm_admin_action(&guardian2, &proposal_id).is_err());
+}
+
+#[test]
 fn test_coordinator_rotation_requires_signer() {
     let env = Env::default();
     env.mock_all_auths();

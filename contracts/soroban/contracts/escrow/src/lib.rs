@@ -116,6 +116,14 @@ pub enum EscrowError {
     InvalidPayoutDistribution = 41,
     /// Tournament has reached its maximum player capacity.
     TournamentFull = 42,
+    /// Emergency admin proposal was not found.
+    ProposalNotFound = 43,
+    /// Caller is not a registered emergency guardian.
+    UnauthorizedGuardian = 44,
+    /// Multi-sig threshold must be non-zero and cannot exceed guardian count.
+    InvalidThreshold = 45,
+    /// Emergency admin proposal has already been executed.
+    ProposalAlreadyExecuted = 46,
 }
 
 /// Lifecycle status of a chess match escrow.
@@ -419,6 +427,21 @@ pub struct PendingRotation {
     pub proposed_coordinator: Address,
     /// Ordered list of authorized signers who approved the rotation.
     pub approvals: Vec<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminActionProposal {
+    /// Unique proposal identifier.
+    pub proposal_id: u64,
+    /// Hash of the target admin action payload.
+    pub payload_hash: BytesN<32>,
+    /// Guardian who created the proposal.
+    pub proposer: Address,
+    /// Ordered list of guardians who confirmed the proposal.
+    pub confirmations: Vec<Address>,
+    /// Whether the proposal has already executed.
+    pub executed: bool,
 }
 
 #[contracttype]
@@ -940,6 +963,159 @@ impl ChessterEscrow {
     /// * `Vec<Address>` - Authorized signer addresses.
     pub fn get_admin_signers(env: Env) -> Vec<Address> {
         Self::get_signers(&env)
+    }
+
+    fn guardians_key(env: &Env) -> Symbol {
+        Symbol::new(env, "guardians")
+    }
+
+    fn admin_threshold_key(env: &Env) -> Symbol {
+        Symbol::new(env, "g_thr")
+    }
+
+    fn admin_proposal_key(env: &Env, proposal_id: u64) -> (Symbol, u64) {
+        (Symbol::new(env, "adm_prop"), proposal_id)
+    }
+
+    /// Stores the guardian allowlist and approval threshold for emergency admin actions.
+    pub fn set_guardians(env: Env, guardians: Vec<Address>, threshold: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        if threshold == 0 || threshold > guardians.len() {
+            panic_with_error!(&env, EscrowError::InvalidThreshold);
+        }
+
+        let mut unique = Vec::new(&env);
+        for guardian in guardians.iter() {
+            if !unique.contains(&guardian) {
+                unique.push_back(guardian);
+            }
+        }
+
+        if unique.is_empty() || threshold > unique.len() {
+            panic_with_error!(&env, EscrowError::InvalidThreshold);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Self::guardians_key(&env), &unique);
+        env.storage()
+            .instance()
+            .set(&Self::admin_threshold_key(&env), &threshold);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Returns the configured emergency guardian allowlist.
+    pub fn get_guardians(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&Self::guardians_key(&env))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Returns the required number of guardian confirmations for an emergency admin action.
+    pub fn get_admin_threshold(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&Self::admin_threshold_key(&env))
+            .unwrap_or(0)
+    }
+
+    /// Returns the currently pending emergency admin action proposal, if any.
+    pub fn get_admin_proposal(env: Env, proposal_id: u64) -> AdminActionProposal {
+        let key = Self::admin_proposal_key(&env, proposal_id);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::ProposalNotFound))
+    }
+
+    /// Proposes an emergency admin action requiring M-of-N guardian confirmation.
+    pub fn propose_admin_action(
+        env: Env,
+        guardian: Address,
+        action_id: u64,
+        payload_hash: BytesN<32>,
+    ) {
+        guardian.require_auth();
+
+        let guardians = Self::get_guardians(env.clone());
+        if !guardians.contains(&guardian) {
+            panic_with_error!(&env, EscrowError::UnauthorizedGuardian);
+        }
+
+        let key = Self::admin_proposal_key(&env, action_id);
+        if env.storage().persistent().has(&key) {
+            panic_with_error!(&env, EscrowError::RotationAlreadyProposed);
+        }
+
+        let mut confirmations = Vec::new(&env);
+        confirmations.push_back(guardian.clone());
+
+        let proposal = AdminActionProposal {
+            proposal_id: action_id,
+            payload_hash,
+            proposer: guardian,
+            confirmations,
+            executed: false,
+        };
+
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_entry_ttl(&env, &key);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Confirms a pending emergency admin action with an authorized guardian.
+    pub fn confirm_admin_action(env: Env, proposal_id: u64, guardian: Address) {
+        guardian.require_auth();
+
+        let guardians = Self::get_guardians(env.clone());
+        if !guardians.contains(&guardian) {
+            panic_with_error!(&env, EscrowError::UnauthorizedGuardian);
+        }
+
+        let key = Self::admin_proposal_key(&env, proposal_id);
+        let mut proposal: AdminActionProposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::ProposalNotFound));
+
+        if proposal.executed {
+            panic_with_error!(&env, EscrowError::ProposalAlreadyExecuted);
+        }
+        if proposal.confirmations.contains(&guardian) {
+            panic_with_error!(&env, EscrowError::AlreadyApproved);
+        }
+
+        proposal.confirmations.push_back(guardian);
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_entry_ttl(&env, &key);
+    }
+
+    /// Executes a pending emergency admin action once the guardian threshold is met.
+    pub fn execute_admin_action(env: Env, proposal_id: u64) -> bool {
+        let key = Self::admin_proposal_key(&env, proposal_id);
+        let mut proposal: AdminActionProposal = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::ProposalNotFound));
+
+        if proposal.executed {
+            return false;
+        }
+
+        let threshold = Self::get_admin_threshold(env.clone());
+        if threshold == 0 || proposal.confirmations.len() < threshold {
+            panic_with_error!(&env, EscrowError::UnauthorizedGuardian);
+        }
+
+        proposal.executed = true;
+        env.storage().persistent().set(&key, &proposal);
+        Self::bump_entry_ttl(&env, &key);
+        true
     }
 
     fn pending_rotation_key(env: &Env) -> Symbol {
