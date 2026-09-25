@@ -86,6 +86,7 @@ interface GameStore {
     walletAddress: string,
     wagerAmount?: string,
     timeControlSeconds?: number,
+    timeIncrementSeconds?: number,
   ) => Promise<void>;
   joinGame: (
     code: string,
@@ -150,12 +151,15 @@ export const useGameStore = create<GameStore>()(
         walletAddress: string,
         wagerAmount?: string,
         timeControlSeconds?: number,
+        timeIncrementSeconds?: number,
       ) => {
         const data = await api.createGame(
           "chess",
           walletAddress,
           wagerAmount,
           timeControlSeconds,
+          undefined,
+          timeIncrementSeconds,
         );
         if (data.success) {
           await get().joinGame(data.data.game_code, "white", walletAddress);
@@ -611,6 +615,17 @@ export const useGameNotifications = () => {
       addToast("Opponent offered a draw", "info");
     }
   }, [drawOffer, playerColor, status, addToast]);
+
+  // Notify this player when the opponent requests a rematch (Issue #254).
+  useEffect(() => {
+    if (!gameCode || !playerColor) return;
+    const handler = (data: { gameCode: string; playerColor: string }) => {
+      if (data.gameCode !== gameCode || data.playerColor === playerColor) return;
+      addToast("Opponent wants a rematch!", "info");
+    };
+    socketService.onRematchRequested(handler);
+    return () => socketService.offRematchRequested();
+  }, [gameCode, playerColor, addToast]);
 
   // Poll the DB every 3 s while waiting for the opponent to join.
   // Clears automatically when status leaves "waiting".

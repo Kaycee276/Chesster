@@ -16,7 +16,9 @@ const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
+const { createSocketRateLimiter } = require("./middleware/socketRateLimiter");
 const { moderateMessage } = require("./services/chatService");
+const { csrfProtection } = require("./middleware/csrfMiddleware");
 const swaggerUi = require("swagger-ui-express");
 const swaggerDocument = require("./docs/swagger.json");
 
@@ -24,13 +26,22 @@ const app = express();
 const server = http.createServer(app);
 
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
+const corsOrigin = CORS_ORIGIN === "*" ? true : CORS_ORIGIN;
 
 const io = new Server(server, {
   cors: {
-    origin: CORS_ORIGIN,
-    methods: ["GET", "POST"],
+    origin: corsOrigin,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   },
 });
+
+// Rate limit WebSocket handshake/connection attempts per IP to prevent
+// connection-flooding DoS before a socket is ever allocated (Issue #244).
+const socketHandshakeLimiter = createSocketRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+});
+io.engine.use((req, res, next) => socketHandshakeLimiter(req, res, next));
 
 const PORT = process.env.PORT || 3001;
 
@@ -39,11 +50,17 @@ app.use(logger.requestMiddleware());
 
 app.use(
   cors({
-    origin: CORS_ORIGIN,
-    methods: ["GET", "POST"],
+    origin: corsOrigin,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    credentials: true,
   }),
 );
 app.use(express.json());
+app.use(csrfProtection);
+
+app.get("/api/csrf-token", (req, res) => {
+  res.json({ success: true });
+});
 
 // Swagger API documentation (Issue #152)
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
@@ -130,6 +147,24 @@ io.on("connection", (socket) => {
     socket.leave(gameCode);
   });
 
+  socket.on("spectator:reaction", ({ gameCode, emoji } = {}) => {
+    const allowedEmojis = new Set(["🔥", "👏", "♟️", "🤯", "💀"]);
+    if (!gameCode || !allowedEmojis.has(emoji)) return;
+
+    const now = Date.now();
+    const recentReactions = (socket.data.reactionTimestamps || []).filter(
+      (timestamp) => now - timestamp < 1000,
+    );
+    if (recentReactions.length >= 2) return;
+    socket.data.reactionTimestamps = [...recentReactions, now];
+
+    io.to(gameCode).emit("spectator:reaction", {
+      id: `${socket.id}-${now}`,
+      emoji,
+      xOffset: 10 + Math.floor(Math.random() * 80),
+    });
+  });
+
   socket.on("disconnect", () => {
     const { gameCode, playerColor } = socket.data || {};
     if (!gameCode || !playerColor) return;
@@ -145,6 +180,13 @@ io.on("connection", (socket) => {
     // Give the player a 60-second grace period to reconnect before the
     // match is auto-forfeited on their behalf (see timerService).
     timerService.startReconnectGrace(gameCode, playerColor);
+  });
+
+  // Relay a rematch challenge to the opponent (Issue #254). No persisted
+  // state — purely a transient notification between the two live sockets.
+  socket.on("request-rematch", ({ gameCode, playerColor }) => {
+    if (!gameCode || !["white", "black"].includes(playerColor)) return;
+    socket.to(gameCode).emit("rematch-requested", { gameCode, playerColor });
   });
 
   socket.on("send-chat", async ({ gameCode, playerColor, message }) => {

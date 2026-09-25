@@ -36,12 +36,17 @@ function tokenLabel(addr: string | null | undefined): string {
 }
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { getPossibleMoves, getCapturedPieces, materialAdvantage } from "../utils/chessUtils";
+import type { AnnotationArrow, AnnotationColor, SquareHighlight } from "../types/chess";
+import { getPossibleMoves, getCapturedPieces, materialAdvantage, moveToAlgebraic, movesToPgn } from "../utils/chessUtils";
+import { getGameOutcome } from "../utils/gameResult";
+import { squareAriaLabel } from "../utils/boardA11y";
+import { socketService } from "../api/socket";
 import PromotionModal from "./PromotionModal";
 import ConfirmModal from "./ConfirmModal";
 import GameResultModal from "./GameResultModal";
 import TurnTimer from "./TurnTimer";
 import ChatPanel from "./ChatPanel";
+import GameResultModal from "./GameResultModal";
 
 const PIECE_SYMBOLS: Record<string, string> = {
 	K: "♔",
@@ -71,6 +76,22 @@ const BLACK_PIECE_STYLE: React.CSSProperties = {
 		"-1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff",
 	WebkitTextStroke: "0.5px #fff",
 };
+
+// ── Board annotation colors (#252) ─────────────────────────────────────────────
+// Right-click plain = blue, Shift = green, Alt = red, Ctrl/Cmd = yellow.
+const ANNOTATION_COLORS: Record<AnnotationColor, string> = {
+	blue: "#3689e6",
+	green: "#22ac38",
+	red: "#e0403c",
+	yellow: "#e6c729",
+};
+
+function colorFromModifiers(e: { shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean }): AnnotationColor {
+	if (e.shiftKey) return "green";
+	if (e.altKey) return "red";
+	if (e.ctrlKey || e.metaKey) return "yellow";
+	return "blue";
+}
 
 // ── Skeleton shown while game state loads ─────────────────────────────────────
 function BoardSkeleton() {
@@ -364,6 +385,7 @@ function ChessBoardInner() {
 
 	const inCheck = useGameStore((s) => s.inCheck);
 	const winner = useGameStore((s) => s.winner);
+	const endReason = useGameStore((s) => s.endReason);
 	const drawOffer = useGameStore((s) => s.drawOffer);
 	const secondsLeft = useGameStore((s) => s.secondsLeft);
 	const timeControlSeconds = useGameStore((s) => s.timeControlSeconds);
@@ -383,6 +405,20 @@ function ChessBoardInner() {
 		status === "finished" &&
 		!!wagerAmount &&
 		(winner === playerColor || winner === "draw");
+
+	const gameOutcome = useMemo(
+		() => getGameOutcome(winner, playerColor),
+		[winner, playerColor],
+	);
+
+	const pgn = useMemo(() => {
+		const algebraicMoves = moveHistory.map((m) =>
+			moveToAlgebraic(m.from_position, m.to_position, m.promotion),
+		);
+		const resultTag =
+			winner === "draw" ? "1/2-1/2" : winner === "white" ? "1-0" : winner === "black" ? "0-1" : "*";
+		return movesToPgn(algebraicMoves, resultTag);
+	}, [moveHistory, winner]);
 
 	const capturedByWhite = useMemo(
 		() => getCapturedPieces(board, "white"),
@@ -438,7 +474,11 @@ function ChessBoardInner() {
 		}
 	};
 
-	// ── Keyboard shortcuts: "f" fullscreen (#124), arrows to rewind (#112) ────
+	// ── Keyboard shortcuts ─────────────────────────────────────────────────────
+	// Game actions (#131): Z steps back a move (undo/review), F flips the board,
+	// Space focuses the board for keyboard play. Shift+F toggles fullscreen
+	// (#124), and the arrow keys rewind/advance move review (#112). Shortcuts are
+	// ignored while typing in an input, textarea, or contenteditable field.
 	useEffect(() => {
 		const onKeyDown = (e: KeyboardEvent) => {
 			const target = e.target as HTMLElement | null;
@@ -450,8 +490,39 @@ function ChessBoardInner() {
 			)
 				return;
 
-			if (e.key.toLowerCase() === "f") {
-				toggleFullscreen();
+			// Ignore combos we don't own (Ctrl/Cmd/Alt), except Shift+F below.
+			if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+			const key = e.key.toLowerCase();
+
+			if (key === "f") {
+				e.preventDefault();
+				if (e.shiftKey) {
+					toggleFullscreen();
+				} else {
+					setFlipped((prev) => !prev);
+				}
+				return;
+			}
+
+			if (e.shiftKey) return;
+
+			if (key === "z") {
+				// Undo / step one move back through the game's review history.
+				e.preventDefault();
+				if (moveHistory.length === 0) return;
+				setViewingIndex(
+					viewingIndex === null
+						? Math.max(0, moveHistory.length - 2)
+						: Math.max(0, viewingIndex - 1),
+				);
+				return;
+			}
+
+			if (e.key === " " || e.key === "Spacebar") {
+				// Focus the board so arrow keys and square activation work.
+				e.preventDefault();
+				boardGridRef.current?.focus();
 				return;
 			}
 
@@ -471,7 +542,7 @@ function ChessBoardInner() {
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [moveHistory.length, viewingIndex, setViewingIndex]);
+	}, [moveHistory.length, viewingIndex, setViewingIndex, setFlipped]);
 
 	// Load move history once the board is present (#112)
 	useEffect(() => {
@@ -484,6 +555,17 @@ function ChessBoardInner() {
 	useEffect(() => {
 		if (status === "finished" && willReceiveTokens) {
 			const timer = setTimeout(() => setShowPayoutModal(true), 0);
+			return () => clearTimeout(timer);
+		}
+	}, [status, willReceiveTokens]);
+
+	// Auto-open the post-game result modal (PGN copy, rematch, share) when the
+	// game ends. Deferred to the (rarer) wagered-win case, which already gets
+	// the more detailed PayoutModal above — showing both at once would stack
+	// two full-screen overlays.
+	useEffect(() => {
+		if (status === "finished" && !willReceiveTokens) {
+			const timer = setTimeout(() => setShowResultModal(true), 0);
 			return () => clearTimeout(timer);
 		}
 	}, [status, willReceiveTokens]);
@@ -536,6 +618,12 @@ function ChessBoardInner() {
 		await acceptDraw();
 	};
 
+	const handleRequestRematch = () => {
+		if (!gameCode || !playerColor) return;
+		socketService.requestRematch(gameCode, playerColor);
+		addToast("Rematch request sent", "success");
+	};
+
 	const copyGameCode = async () => {
 		if (!gameCode) return;
 		await navigator.clipboard.writeText(gameCode);
@@ -543,9 +631,39 @@ function ChessBoardInner() {
 		setTimeout(() => setCopied(false), 1200);
 	};
 
+	// Shared by tap-to-move and drag-and-drop: attempts to move the piece on
+	// `from` to `to`, opening the promotion modal if needed and giving a
+	// short haptic tick on supported devices once the move lands (#253).
+	const commitMove = async (from: [number, number], to: [number, number]) => {
+		const piece = board[from[0]][from[1]];
+		const isPromotion = piece.toLowerCase() === "p" && (to[0] === 0 || to[0] === 7);
+
+		if (isPromotion) {
+			setPromotionMove({ from, to });
+			return;
+		}
+
+		setIsMoving(true);
+		const toastId = addToast("Moving...", "loading");
+		try {
+			await makeMove(from, to);
+			if ("vibrate" in navigator) navigator.vibrate(15);
+		} catch (error: unknown) {
+			addToast(friendlyError(error), "error");
+			selectSquare(null);
+		} finally {
+			removeToast(toastId);
+			setIsMoving(false);
+		}
+	};
+
 	const handleSquareClick = async (row: number, col: number) => {
+		// A plain left-click always clears any drawn arrows/highlights (#252).
+		clearAnnotations();
+
 		if (status !== "active" || currentTurn !== playerColor || isMoving) return;
 		if (viewingIndex !== null) return;
+		if (dragPiece) return; // a drag is in progress — its pointerup handles the drop
 
 		if (!selectedSquare) {
 			const piece = board[row][col];
@@ -568,27 +686,120 @@ function ChessBoardInner() {
 				return;
 			}
 
-			const piece = board[selectedSquare[0]][selectedSquare[1]];
-			const isPromotion =
-				piece.toLowerCase() === "p" && (row === 0 || row === 7);
-
-			if (isPromotion) {
-				setPromotionMove({ from: selectedSquare, to: [row, col] });
-				return;
-			}
-
-			setIsMoving(true);
-			const toastId = addToast("Moving...", "loading");
-			try {
-				await makeMove(selectedSquare, [row, col]);
-			} catch (error: unknown) {
-				addToast(friendlyError(error), "error");
-				selectSquare(null);
-			} finally {
-				removeToast(toastId);
-				setIsMoving(false);
-			}
+			await commitMove(selectedSquare, [row, col]);
 		}
+	};
+
+	// ── Touch/mouse drag-and-drop (#253) ──────────────────────────────────────
+	// Pieces can be picked up and dragged to a target square, in addition to
+	// the tap-to-select / tap-to-move flow above. Pointer Events give us a
+	// single API that covers mouse, touch and pen.
+	const DRAG_THRESHOLD_PX = 6;
+	const boardGridRef = useRef<HTMLDivElement>(null);
+	const [dragPiece, setDragPiece] = useState<{
+		row: number;
+		col: number;
+		piece: string;
+		pointerId: number;
+		pointerType: string;
+		x: number;
+		y: number;
+	} | null>(null);
+	const pendingDragRef = useRef<{
+		row: number;
+		col: number;
+		piece: string;
+		pointerId: number;
+		pointerType: string;
+		startX: number;
+		startY: number;
+	} | null>(null);
+
+	const squareFromPoint = (clientX: number, clientY: number): [number, number] | null => {
+		const el = boardGridRef.current;
+		if (!el) return null;
+		const rect = el.getBoundingClientRect();
+		const x = clientX - rect.left;
+		const y = clientY - rect.top;
+		if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null;
+		const colIndex = Math.min(7, Math.floor((x / rect.width) * 8));
+		const rowIndex = Math.min(7, Math.floor((y / rect.height) * 8));
+		const actualRow = playerColor === "black" ? 7 - rowIndex : rowIndex;
+		const actualCol = playerColor === "black" ? 7 - colIndex : colIndex;
+		return [actualRow, actualCol];
+	};
+
+	const handlePiecePointerDown = (e: React.PointerEvent, row: number, col: number) => {
+		if (e.pointerType === "mouse" && e.button !== 0) return;
+		if (status !== "active" || currentTurn !== playerColor || isMoving) return;
+		if (viewingIndex !== null) return;
+		const piece = board[row][col];
+		if (piece === "." || !isPlayerPiece(piece)) return;
+
+		pendingDragRef.current = {
+			row,
+			col,
+			piece,
+			pointerId: e.pointerId,
+			pointerType: e.pointerType,
+			startX: e.clientX,
+			startY: e.clientY,
+		};
+	};
+
+	const handleBoardPointerMove = (e: React.PointerEvent) => {
+		const pending = pendingDragRef.current;
+		if (pending && pending.pointerId === e.pointerId && !dragPiece) {
+			const dx = e.clientX - pending.startX;
+			const dy = e.clientY - pending.startY;
+			if (Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
+				(e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+				if (pending.pointerType === "touch" && "vibrate" in navigator) navigator.vibrate(10);
+				selectSquare([pending.row, pending.col]);
+				setDragPiece({
+					row: pending.row,
+					col: pending.col,
+					piece: pending.piece,
+					pointerId: pending.pointerId,
+					pointerType: pending.pointerType,
+					x: e.clientX,
+					y: e.clientY,
+				});
+			}
+			return;
+		}
+		if (dragPiece && dragPiece.pointerId === e.pointerId) {
+			setDragPiece((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
+		}
+	};
+
+	const endDrag = async (e: React.PointerEvent) => {
+		const pending = pendingDragRef.current;
+		if (pending && pending.pointerId === e.pointerId) {
+			pendingDragRef.current = null;
+		}
+		if (!dragPiece || dragPiece.pointerId !== e.pointerId) return;
+
+		const from: [number, number] = [dragPiece.row, dragPiece.col];
+		const target = squareFromPoint(e.clientX, e.clientY);
+		setDragPiece(null);
+
+		if (!target) return;
+		const [toRow, toCol] = target;
+		if (toRow === from[0] && toCol === from[1]) return;
+
+		const targetPiece = board[toRow][toCol];
+		if (targetPiece !== "." && isPlayerPiece(targetPiece)) {
+			selectSquare([toRow, toCol]);
+			return;
+		}
+
+		await commitMove(from, [toRow, toCol]);
+	};
+
+	const handlePointerCancel = (e: React.PointerEvent) => {
+		if (pendingDragRef.current?.pointerId === e.pointerId) pendingDragRef.current = null;
+		if (dragPiece?.pointerId === e.pointerId) setDragPiece(null);
 	};
 
 	const handlePromotion = async (piece: string) => {
@@ -630,6 +841,90 @@ function ChessBoardInner() {
 		update();
 		return () => obs.disconnect();
 	}, []);
+
+	// ── Board annotations: right-click highlights & arrows (#252) ────────────
+	const [highlights, setHighlights] = useState<SquareHighlight[]>([]);
+	const [arrows, setArrows] = useState<AnnotationArrow[]>([]);
+	const rightDragRef = useRef<{ row: number; col: number; color: AnnotationColor } | null>(null);
+
+	const squareFromClientPoint = (clientX: number, clientY: number): [number, number] | null => {
+		const el = boardGridRef.current;
+		if (!el) return null;
+		const rect = el.getBoundingClientRect();
+		const x = clientX - rect.left;
+		const y = clientY - rect.top;
+		if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null;
+		const colIndex = Math.min(7, Math.floor((x / rect.width) * 8));
+		const rowIndex = Math.min(7, Math.floor((y / rect.height) * 8));
+		const row = playerColor === "black" ? 7 - rowIndex : rowIndex;
+		const col = playerColor === "black" ? 7 - colIndex : colIndex;
+		return [row, col];
+	};
+
+	const clearAnnotations = () => {
+		setHighlights((prev) => (prev.length ? [] : prev));
+		setArrows((prev) => (prev.length ? [] : prev));
+	};
+
+	const toggleHighlight = (row: number, col: number, color: AnnotationColor) => {
+		setHighlights((prev) => {
+			const idx = prev.findIndex((h) => h.row === row && h.col === col);
+			if (idx === -1) return [...prev, { row, col, color }];
+			if (prev[idx].color === color) return prev.filter((_, i) => i !== idx);
+			const next = [...prev];
+			next[idx] = { row, col, color };
+			return next;
+		});
+	};
+
+	const toggleArrow = (
+		fromRow: number,
+		fromCol: number,
+		toRow: number,
+		toCol: number,
+		color: AnnotationColor,
+	) => {
+		setArrows((prev) => {
+			const idx = prev.findIndex(
+				(a) => a.from[0] === fromRow && a.from[1] === fromCol && a.to[0] === toRow && a.to[1] === toCol,
+			);
+			if (idx === -1) return [...prev, { from: [fromRow, fromCol], to: [toRow, toCol], color }];
+			if (prev[idx].color === color) return prev.filter((_, i) => i !== idx);
+			const next = [...prev];
+			next[idx] = { from: [fromRow, fromCol], to: [toRow, toCol], color };
+			return next;
+		});
+	};
+
+	const handleSquareMouseDown = (e: React.MouseEvent, row: number, col: number) => {
+		if (e.button !== 2) return; // only the right mouse button draws annotations
+		e.preventDefault();
+		rightDragRef.current = { row, col, color: colorFromModifiers(e) };
+	};
+
+	const handleBoardMouseUp = (e: React.MouseEvent) => {
+		if (e.button !== 2) return;
+		const start = rightDragRef.current;
+		rightDragRef.current = null;
+		if (!start) return;
+		const target = squareFromClientPoint(e.clientX, e.clientY);
+		if (!target) return;
+		const [row, col] = target;
+		if (row === start.row && col === start.col) {
+			toggleHighlight(row, col, start.color);
+		} else {
+			toggleArrow(start.row, start.col, row, col, start.color);
+		}
+	};
+
+	// Square center in on-screen pixels, respecting the board's flip state,
+	// for positioning the SVG annotation overlay.
+	const squareCenterPx = (row: number, col: number) => {
+		const rowIndex = playerColor === "black" ? 7 - row : row;
+		const colIndex = playerColor === "black" ? 7 - col : col;
+		const squareSize = boardPx / 8;
+		return { x: colIndex * squareSize + squareSize / 2, y: rowIndex * squareSize + squareSize / 2 };
+	};
 
 	const displayBoard =
 		(playerColor === "black") !== flipped
@@ -775,6 +1070,16 @@ function ChessBoardInner() {
 					whiteRating={1600}
 					blackUsername={opponentColor === "white" ? gameCode || "Black" : "You"}
 					blackRating={1600}
+			{/* ── Post-Game Result Modal ── */}
+			{showResultModal && status === "finished" && (
+				<GameResultModal
+					outcome={gameOutcome}
+					endReason={endReason}
+					gameCode={gameCode}
+					pgn={pgn}
+					txHash={escrowResolveTx}
+					onRematch={handleRequestRematch}
+					onClose={() => setShowResultModal(false)}
 				/>
 			)}
 
@@ -825,7 +1130,11 @@ function ChessBoardInner() {
 				)}
 				{boardPx > 0 && (
 				<div
-					className={`rounded-sm overflow-hidden shadow-2xl transition-opacity ${isMoving ? "opacity-70" : "opacity-100"}`}
+					ref={boardGridRef}
+					role="grid"
+					tabIndex={-1}
+					aria-label={`Chess board, ${moveHistory.length} moves played. Use arrow keys to review, Z to step back, F to flip the board.`}
+					className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 ${isMoving ? "opacity-70" : "opacity-100"}`}
 					style={
 						{
 							width: boardPx,
@@ -834,8 +1143,17 @@ function ChessBoardInner() {
 							gridTemplateColumns: "repeat(8, 1fr)",
 							gridTemplateRows: "repeat(8, 1fr)",
 							"--board-size": `${boardPx}px`,
+							touchAction: "none",
 						} as React.CSSProperties
 					}
+					onContextMenu={(e) => e.preventDefault()}
+					onMouseUp={handleBoardMouseUp}
+					onMouseLeave={() => {
+						rightDragRef.current = null;
+					}}
+					onPointerMove={handleBoardPointerMove}
+					onPointerUp={endDrag}
+					onPointerCancel={handlePointerCancel}
 				>
 				{displayBoard.map((row, rowIndex) =>
 					row.map((piece, colIndex) => {
@@ -866,12 +1184,18 @@ function ChessBoardInner() {
 								(actualRow === lastMoveForView.to[0] && actualCol === lastMoveForView.to[1]));
 						const isPieceAnimating = animKey === `${actualRow}-${actualCol}`;
 						const isCaptureSquare = captureKey === `${actualRow}-${actualCol}`;
+						const isDragSource =
+							dragPiece !== null && dragPiece.row === actualRow && dragPiece.col === actualCol;
 
 						return (
 							<div
 								key={`${rowIndex}-${colIndex}`}
 								data-testid={`square-${actualRow}-${actualCol}`}
-								className={`relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 ${
+								role="gridcell"
+								tabIndex={0}
+								aria-label={squareAriaLabel(piece, actualRow, actualCol)}
+								aria-selected={selected === true}
+								className={`board-square relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:-outline-offset-2 ${
 									isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
 								} ${selected ? "bg-yellow-400/75" : ""} ${
 									isKingInCheck ? "bg-red-500/80" : ""
@@ -880,12 +1204,22 @@ function ChessBoardInner() {
 								}`}
 								style={isCaptureSquare ? { animation: "captureFlash 0.4s ease-out forwards" } : undefined}
 								onClick={() => handleSquareClick(actualRow, actualCol)}
+								onKeyDown={(e) => {
+									// Enter/Space activate a square, mirroring a click, so the
+									// board is fully playable from the keyboard (#134).
+									if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+										e.preventDefault();
+										handleSquareClick(actualRow, actualCol);
+									}
+								}}
 								onTouchEnd={(e) => {
 									// Prevent the synthetic click that follows touch so the
 									// handler doesn't fire twice on mobile browsers.
 									e.preventDefault();
 									handleSquareClick(actualRow, actualCol);
 								}}
+								onMouseDown={(e) => handleSquareMouseDown(e, actualRow, actualCol)}
+								onPointerDown={(e) => handlePiecePointerDown(e, actualRow, actualCol)}
 							>
 								{/* Legal-move marker: dot on empty squares, ring on captures (#123) */}
 								{possible && !capture && (
@@ -913,6 +1247,7 @@ function ChessBoardInner() {
 										className="leading-none pointer-events-none"
 										style={{
 											fontSize: "calc(var(--board-size) / 8 * 0.72)",
+											opacity: isDragSource ? 0.35 : 1,
 											...(piece === piece.toUpperCase()
 												? WHITE_PIECE_STYLE
 												: BLACK_PIECE_STYLE),
@@ -930,7 +1265,97 @@ function ChessBoardInner() {
 						);
 					}),
 				)}
+				{/* Right-click annotation overlay: arrows & square highlights (#252) */}
+				{(arrows.length > 0 || highlights.length > 0) && (
+					<svg
+						className="absolute inset-0 pointer-events-none"
+						width={boardPx}
+						height={boardPx}
+						style={{ zIndex: 5 }}
+					>
+						<defs>
+							{(Object.keys(ANNOTATION_COLORS) as AnnotationColor[]).map((color) => (
+								<marker
+									key={color}
+									id={`board-arrowhead-${color}`}
+									markerWidth="4"
+									markerHeight="4"
+									refX="2"
+									refY="2"
+									orient="auto-start-reverse"
+									markerUnits="strokeWidth"
+								>
+									<path d="M0,0 L4,2 L0,4 Z" fill={ANNOTATION_COLORS[color]} />
+								</marker>
+							))}
+						</defs>
+						{highlights.map((h, i) => {
+							const c = squareCenterPx(h.row, h.col);
+							const squareSize = boardPx / 8;
+							return (
+								<circle
+									key={`h-${i}`}
+									cx={c.x}
+									cy={c.y}
+									r={squareSize * 0.44}
+									fill="none"
+									stroke={ANNOTATION_COLORS[h.color]}
+									strokeWidth={squareSize * 0.08}
+									opacity={0.85}
+								/>
+							);
+						})}
+						{arrows.map((a, i) => {
+							const from = squareCenterPx(a.from[0], a.from[1]);
+							const to = squareCenterPx(a.to[0], a.to[1]);
+							const squareSize = boardPx / 8;
+							// Pull the line end back so the arrowhead doesn't sit under the piece.
+							const dx = to.x - from.x;
+							const dy = to.y - from.y;
+							const len = Math.hypot(dx, dy) || 1;
+							const shorten = squareSize * 0.4;
+							const endX = to.x - (dx / len) * shorten;
+							const endY = to.y - (dy / len) * shorten;
+							return (
+								<line
+									key={`a-${i}`}
+									x1={from.x}
+									y1={from.y}
+									x2={endX}
+									y2={endY}
+									stroke={ANNOTATION_COLORS[a.color]}
+									strokeWidth={squareSize * 0.14}
+									strokeLinecap="round"
+									opacity={0.85}
+									markerEnd={`url(#board-arrowhead-${a.color})`}
+								/>
+							);
+						})}
+					</svg>
+				)}
 				</div>
+				)}
+				{/* Dragged piece follows the pointer, elevated above the board (#253) */}
+				{dragPiece && boardPx > 0 && (
+					<span
+						className="fixed leading-none pointer-events-none z-50"
+						style={{
+							left: dragPiece.x,
+							top: dragPiece.y,
+							fontSize: `calc(${boardPx}px / 8 * 0.72)`,
+							transform:
+								dragPiece.pointerType === "touch"
+									? "translate(-50%, -50%) scale(1.2) translateY(-10px)"
+									: "translate(-50%, -50%) scale(1.1)",
+							filter: "drop-shadow(0 6px 8px rgb(0 0 0 / 0.45))",
+							transition: "transform 0.1s ease-out",
+							...(dragPiece.piece === dragPiece.piece.toUpperCase()
+								? WHITE_PIECE_STYLE
+								: BLACK_PIECE_STYLE),
+						} as React.CSSProperties}
+					>
+						{PIECE_SYMBOLS[dragPiece.piece]}
+					</span>
 				)}
 			</div>
 

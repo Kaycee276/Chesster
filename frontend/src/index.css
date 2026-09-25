@@ -46,6 +46,30 @@
 	--sq-dark: #b58863;
 }
 
+:root[data-theme="classic"] {
+	--sq-light: #f0d9b5;
+	--sq-dark: #b58863;
+	--sq-highlight: #829769;
+}
+
+:root[data-theme="wood"] {
+	--sq-light: #f1d7a8;
+	--sq-dark: #a9743a;
+	--sq-highlight: #d8a15d;
+}
+
+:root[data-theme="neon"] {
+	--sq-light: #15c2b8;
+	--sq-dark: #0b1020;
+	--sq-highlight: #38bdf8;
+}
+
+:root[data-theme="marble"] {
+	--sq-light: #eceae3;
+	--sq-dark: #5c6370;
+	--sq-highlight: #94a3b8;
+}
+
 .dark {
 	--bg: var(--bg-dark);
 	--bg-secondary: var(--bg-dark-secondary);
@@ -66,6 +90,11 @@ body {
 		color 0.3s ease;
 }
 
+.bg-\(--sq-light\),
+.bg-\(--sq-dark\) {
+	transition: background-color 200ms ease;
+}
+
 html,
 body {
 	height: 100%;
@@ -80,6 +109,15 @@ html {
 #root {
 	height: 100%;
 	overflow: hidden;
+}
+
+/* Chessboard squares/pieces are drag targets on touch devices — disable
+   the browser's native pan/zoom/pull-to-refresh gestures over them so a
+   piece drag never scrolls the page. */
+.board-square {
+	touch-action: none;
+	-webkit-touch-callout: none;
+	user-select: none;
 }
 
 /* Custom scrollbar */
@@ -154,6 +192,16 @@ button:disabled {
 @keyframes slideIn {
 	from { transform: translateX(100%); opacity: 0; }
 	to   { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes reactionFloatUp {
+	0% { transform: translateY(0) scale(0.8); opacity: 0; }
+	15% { transform: translateY(-8px) scale(1); opacity: 1; }
+	100% { transform: translateY(-180px) scale(1.15); opacity: 0; }
+}
+
+.reaction-float-up {
+	animation: reactionFloatUp 2s ease-out forwards;
 }
 
 .animate-slide-in {

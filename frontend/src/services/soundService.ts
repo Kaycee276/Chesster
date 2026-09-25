@@ -325,6 +325,29 @@ class SoundService {
     this.playSoundEffect("lowTimeTick");
   }
 
+  /** Clock has dropped into the "urgent" low-time zone */
+  lowTime() {
+    this.tone(660, 0.06, "triangle", 0.20);
+  }
+
+  // ── Autoplay unlock ───────────────────────────────────────────────────────
+
+  /**
+   * Browsers only allow an AudioContext to start (or resume) inside a
+   * user-gesture handler. Call this once from app start-up so the very
+   * first click/keypress/touch silently warms up the context — later
+   * sound calls then play instantly instead of being swallowed.
+   */
+  unlockOnFirstInteraction() {
+    if (typeof window === "undefined") return;
+    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart"];
+    const unlock = () => {
+      this.getCtx();
+      events.forEach((evt) => window.removeEventListener(evt, unlock));
+    };
+    events.forEach((evt) => window.addEventListener(evt, unlock, { once: true, passive: true }));
+  }
+
   // ── Enable / disable ──────────────────────────────────────────────────────
 
   setEnabled(value: boolean) {

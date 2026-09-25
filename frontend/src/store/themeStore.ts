@@ -112,6 +112,7 @@ export function applyColorMode(mode: ColorMode) {
 function applyBoardTheme(key: BoardThemeKey) {
 	if (typeof document === "undefined") return;
 	const theme = BOARD_THEMES.find((t) => t.key === key) ?? BOARD_THEMES[0];
+	document.documentElement.dataset.theme = theme.key;
 	document.documentElement.style.setProperty("--sq-light", theme.light);
 	document.documentElement.style.setProperty("--sq-dark", theme.dark);
 }
@@ -142,7 +143,7 @@ export const useThemeStore = create<ThemeState>()(
 			},
 		}),
 		{
-			name: "chesster-theme",
+			name: "chesster_theme",
 			partialize: (state) => ({
 				boardTheme: state.boardTheme,
 				pieceSet: state.pieceSet,
@@ -155,4 +156,3 @@ export const useThemeStore = create<ThemeState>()(
 // Apply the persisted (or default) board theme and color mode as soon as the module loads.
 applyBoardTheme(useThemeStore.getState().boardTheme);
 applyColorMode(useThemeStore.getState().colorMode);
-
