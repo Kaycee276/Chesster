@@ -4,6 +4,7 @@ import GameLobby from "./components/GameLobby";
 import GamePage from "./pages/GamePage";
 import SpectatorPage from "./pages/SpectatorPage";
 import TournamentPage from "./pages/TournamentPage";
+import ProfilePage from "./pages/ProfilePage";
 import TournamentBracketPage from "./pages/TournamentBracketPage";
 import AnalysisPage from "./pages/AnalysisPage";
 import Toast from "./components/Toast";
@@ -40,6 +41,7 @@ const App = () => {
 			<Routes>
 				<Route path="/" element={<GameLobby />} />
 				<Route path="/tournaments" element={<TournamentPage />} />
+				<Route path="/profile/:address" element={<ProfilePage />} />
 				<Route
 					path="/tournaments/:tournamentId/bracket"
 					element={<TournamentBracketPage />}
