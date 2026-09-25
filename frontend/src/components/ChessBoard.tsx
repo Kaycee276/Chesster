@@ -35,7 +35,6 @@ function tokenLabel(addr: string | null | undefined): string {
 }
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { getPossibleMoves, getCapturedPieces, materialAdvantage } from "../utils/chessUtils";
 import type { AnnotationArrow, AnnotationColor, SquareHighlight } from "../types/chess";
 import { getPossibleMoves, getCapturedPieces, materialAdvantage, moveToAlgebraic, movesToPgn } from "../utils/chessUtils";
 import { getGameOutcome } from "../utils/gameResult";
@@ -658,7 +657,6 @@ function ChessBoardInner() {
 	// the tap-to-select / tap-to-move flow above. Pointer Events give us a
 	// single API that covers mouse, touch and pen.
 	const DRAG_THRESHOLD_PX = 6;
-	const boardGridRef = useRef<HTMLDivElement>(null);
 	const [dragPiece, setDragPiece] = useState<{
 		row: number;
 		col: number;
@@ -1083,7 +1081,6 @@ function ChessBoardInner() {
 				<div
 					ref={boardGridRef}
 					className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity ${isMoving ? "opacity-70" : "opacity-100"}`}
-					className={`rounded-sm overflow-hidden shadow-2xl transition-opacity ${isMoving ? "opacity-70" : "opacity-100"}`}
 					style={
 						{
 							width: boardPx,
