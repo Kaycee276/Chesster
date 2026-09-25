@@ -1,4 +1,5 @@
 const authService = require("../services/authService");
+const sessionService = require("../services/sessionService");
 const userModel = require("../models/userModel");
 
 class AuthController {
@@ -8,8 +9,8 @@ class AuthController {
 	 */
 	async createChallenge(req, res) {
 		try {
-			const { address } = req.body;
-			const message = authService.createChallenge(address);
+			const { address, purpose = "login" } = req.body;
+			const message = authService.createChallenge(address, purpose);
 			res.json({ success: true, data: { message } });
 		} catch (error) {
 			res.status(400).json({ success: false, error: error.message });
@@ -56,6 +57,30 @@ class AuthController {
 			res.json({ success: true, data: user });
 		} catch (error) {
 			res.status(400).json({ success: false, error: error.message });
+		}
+	}
+
+	/**
+	 * POST /api/users/delete-account (protected) { signature }
+	 * Requires a fresh deletion-purpose wallet signature before redacting PII.
+	 */
+	async deleteAccount(req, res) {
+		try {
+			const { signature } = req.body || {};
+			const address = req.user.address;
+			authService.verifySignature(address, signature, "delete-account");
+
+			const result = await userModel.anonymizeUser(address);
+			await sessionService.revokeAll(address);
+
+			res.json({
+				success: true,
+				message: "Account data has been redacted",
+				data: result,
+			});
+		} catch (error) {
+			const status = /signature|challenge/i.test(error.message) ? 401 : 500;
+			res.status(status).json({ success: false, error: error.message });
 		}
 	}
 }
