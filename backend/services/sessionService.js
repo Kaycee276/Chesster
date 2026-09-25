@@ -1,7 +1,5 @@
 const { createClient } = require("redis");
 
-const REVOCATION_TTL_SECONDS = 8 * 24 * 60 * 60;
-
 class SessionService {
 	constructor() {
 		this.revokedAfter = new Map();
@@ -40,7 +38,9 @@ class SessionService {
 		this.revokedAfter.set(address, revokedAt);
 		const client = await this.getClient();
 		if (client) {
-			await client.set(this.key(address), String(revokedAt), { EX: REVOCATION_TTL_SECONDS });
+			// Account deletion is permanent, and JWT lifetime is configurable. Keep
+			// the cutoff until an explicit account-restoration flow removes it.
+			await client.set(this.key(address), String(revokedAt));
 		}
 		return revokedAt;
 	}
