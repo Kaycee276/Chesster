@@ -41,6 +41,30 @@ function getRedisClient() {
 	return client.status === "ready" ? client : null;
 }
 
+/** Wait briefly for the shared connection when Redis-backed state is required. */
+async function getRedisConnection(timeoutMs = 2000) {
+	if (!process.env.REDIS_URL) return null;
+	if (!client) client = createClient(process.env.REDIS_URL);
+	if (client.status === "ready") return client;
+
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = (value) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			client.off("ready", onReady);
+			client.off("error", onUnavailable);
+			resolve(value);
+		};
+		const onReady = () => finish(client);
+		const onUnavailable = () => finish(null);
+		const timer = setTimeout(onUnavailable, timeoutMs);
+		client.once("ready", onReady);
+		client.once("error", onUnavailable);
+	});
+}
+
 /** Close the connection (graceful shutdown / tests). */
 async function closeRedis() {
 	if (!client) return;
@@ -53,4 +77,4 @@ async function closeRedis() {
 	}
 }
 
-module.exports = { getRedisClient, closeRedis };
+module.exports = { getRedisClient, getRedisConnection, closeRedis };

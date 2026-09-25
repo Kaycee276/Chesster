@@ -33,6 +33,7 @@ jest.mock("../config/supabase", () => {
 	};
 	return {
 		from,
+		rpc: jest.fn(),
 		__tables: tables,
 		__reads: reads,
 	};
@@ -221,6 +222,25 @@ describe("userModel profile cache", () => {
 
 			expect(redis.del).toHaveBeenCalledWith(`cache:profile:${ME}`);
 			expect((await userModel.getUserProfile(ME)).username).toBe("alice2");
+		});
+
+		it("invalidates PII cached before account redaction", async () => {
+			supabase.rpc.mockResolvedValue({ data: { preservedGames: 3 }, error: null });
+
+			await userModel.anonymizeUser(ME);
+
+			expect(supabase.rpc).toHaveBeenCalledWith("anonymize_user_data", {
+				p_wallet_address: ME,
+			});
+			expect(redis.del).toHaveBeenCalledWith(`cache:profile:${ME}`);
+		});
+
+		it("invalidates cached profile totals after a puzzle reward", async () => {
+			supabase.rpc.mockResolvedValue({ data: { awarded: true, points: 10 }, error: null });
+
+			await userModel.recordPuzzleSolve(ME, "puzzle-id", "2026-09-25", 10);
+
+			expect(redis.del).toHaveBeenCalledWith(`cache:profile:${ME}`);
 		});
 	});
 });

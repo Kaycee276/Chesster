@@ -1,4 +1,5 @@
 const supabase = require("../config/supabase");
+const archivalService = require("./archivalService");
 
 class CronService {
   constructor() {
@@ -6,6 +7,19 @@ class CronService {
     this.cronIntervalMs = 60 * 60 * 1000;
     this.cleanupThresholdHours = 24;
     this.cronHandle = null;
+    this.archivalIntervalMs = 7 * 24 * 60 * 60 * 1000;
+    this.archivalAgeDays = 90;
+    this.archivalHandle = null;
+  }
+
+  async archiveCompletedGames() {
+    const cutoffDate = new Date(Date.now() - this.archivalAgeDays * 24 * 60 * 60 * 1000);
+    try {
+      return await archivalService.archiveOldGames(cutoffDate);
+    } catch (error) {
+      console.error("[CronService] Game archival failed:", error.message);
+      return { success: false, error: error.message };
+    }
   }
 
   async cleanupAbandonedLobbies() {
@@ -58,10 +72,14 @@ class CronService {
     console.log(`[CronService] Starting automated cleanup cron (interval: ${this.cronIntervalMs / 1000 / 60} minutes)`);
 
     this.cleanupAbandonedLobbies();
+    this.archiveCompletedGames();
 
     this.cronHandle = setInterval(() => {
       this.cleanupAbandonedLobbies();
     }, this.cronIntervalMs);
+    this.archivalHandle = setInterval(() => {
+      this.archiveCompletedGames();
+    }, this.archivalIntervalMs);
   }
 
   stop() {
@@ -74,6 +92,10 @@ class CronService {
       clearInterval(this.cronHandle);
       this.cronHandle = null;
     }
+    if (this.archivalHandle) {
+      clearInterval(this.archivalHandle);
+      this.archivalHandle = null;
+    }
 
     this.isRunning = false;
     console.log("[CronService] Stopped automated cleanup cron");
@@ -84,6 +106,8 @@ class CronService {
       isRunning: this.isRunning,
       intervalMs: this.cronIntervalMs,
       cleanupThresholdHours: this.cleanupThresholdHours,
+      archivalIntervalMs: this.archivalIntervalMs,
+      archivalAgeDays: this.archivalAgeDays,
     };
   }
 

@@ -216,6 +216,35 @@ class UserModel {
 		await this.invalidateProfileCache(address);
 		return data;
 	}
+
+	/**
+	 * Redact profile data and purge attributable communications in one database
+	 * transaction. Historical games and their move rows are intentionally kept.
+	 */
+	async anonymizeUser(address) {
+		const { data, error } = await supabase.rpc("anonymize_user_data", {
+			p_wallet_address: address,
+		});
+
+		if (error) throw error;
+		if (!data) throw new Error("Profile not found");
+		await this.invalidateProfileCache(address);
+		return data;
+	}
+
+	async recordPuzzleSolve(address, puzzleId, solvedOn, points = 10) {
+		const { data, error } = await supabase.rpc("record_puzzle_solve", {
+			p_wallet_address: address,
+			p_puzzle_id: puzzleId,
+			p_solved_on: solvedOn,
+			p_points: points,
+		});
+
+		if (error) throw error;
+		if (!data) throw new Error("Player profile not found");
+		await this.invalidateProfileCache(address);
+		return data;
+	}
 }
 
 module.exports = new UserModel();

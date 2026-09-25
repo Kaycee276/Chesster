@@ -2,6 +2,10 @@ const express = require('express');
 const router = express.Router();
 const gameController = require('../controllers/gameController');
 const { createRateLimiter } = require('../middleware/rateLimiter');
+const {
+	enforceGeoCompliance,
+	enforceExistingGameGeoCompliance,
+} = require('../middleware/geoIpMiddleware');
 const { requireAuth } = require('../middleware/authMiddleware');
 
 /**
@@ -39,7 +43,7 @@ router.matchCreationLimiter = matchCreationLimiter;
  *       429:
  *         description: Rate limit exceeded
  */
-router.post('/games', matchCreationLimiter, gameController.createGame);
+router.post('/games', enforceGeoCompliance, matchCreationLimiter, gameController.createGame);
 
 /**
  * @openapi
@@ -114,7 +118,7 @@ router.get('/games', gameController.getGameHistory);
  *       400:
  *         description: Cannot join own game or game full
  */
-router.post('/games/:gameCode/join', gameController.joinGame);
+router.post('/games/:gameCode/join', enforceExistingGameGeoCompliance, gameController.joinGame);
 
 /**
  * @openapi
