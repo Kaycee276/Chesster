@@ -17,7 +17,7 @@ const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
-const { moderateMessage } = require("./services/chatService");
+const { moderateMessage, checkSlowMode } = require("./services/chatService");
 const { JWT_SECRET } = require("./middleware/authMiddleware");
 const swaggerUi = require("swagger-ui-express");
 const swaggerDocument = require("./docs/swagger.json");
@@ -116,6 +116,11 @@ io.on("connection", (socket) => {
       if (wasReconnecting) {
         socket.to(gameCode).emit("player-reconnected", { gameCode, color: playerColor });
       }
+    } else {
+      // Spectator: join the spectator_chat room, never the player game room
+      socket.join(`spectator_chat:${gameCode}`);
+      socket.data.isSpectator = true;
+      socket.data.gameCode = gameCode;
     }
 
     // Let everyone in the room (including the joiner) know the current
@@ -314,6 +319,53 @@ io.on("connection", (socket) => {
         createdAt: data.created_at,
       });
     }
+  });
+
+  /**
+   * Spectator chat message handler (Issue #304).
+   * 
+   * Enforces 5-second per-IP slow-mode cooldown to prevent spectator chat floods
+   * that could distract players or leak move suggestions. Messages are sanitized
+   * using the same moderation filter as player chat for consistency.
+   * 
+   * Critical isolation: spectator messages are broadcast ONLY to the spectator_chat room,
+   * never to the player game room. This ensures active players are shielded from
+   * spectator chatter.
+   */
+  socket.on("spectator_message", ({ gameCode, message }) => {
+    if (!gameCode || !message) return;
+
+    // Extract IP from socket.io handshake (matches HTTP rate-limiter convention)
+    const clientIp = socket.handshake.address || socket.ip || "unknown";
+
+    // Check slow-mode cooldown (5 seconds per IP, per issue #304)
+    const slowModeCheck = checkSlowMode(clientIp, 5000);
+    if (!slowModeCheck.allowed) {
+      return socket.emit("chat_error", {
+        gameCode,
+        message: `Slow mode active. Please wait ${slowModeCheck.nextAvailableIn}s before sending another message.`,
+        error: "slow_mode_active",
+        nextAvailableInSeconds: slowModeCheck.nextAvailableIn,
+      });
+    }
+
+    // Sanitize message using the existing moderation filter
+    const moderation = moderateMessage(message);
+    if (!moderation.accepted) {
+      return socket.emit("chat_error", {
+        gameCode,
+        message: "Message rejected by content filter",
+        error: "content_filter_rejected",
+      });
+    }
+
+    // Broadcast ONLY to spectator_chat room, never to player game room
+    // This is the core isolation guarantee (Issue #304 acceptance criteria)
+    io.to(`spectator_chat:${gameCode}`).emit("new_spectator_message", {
+      gameCode,
+      message: moderation.message,
+      createdAt: new Date().toISOString(),
+    });
   });
 });
 
