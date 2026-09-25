@@ -654,7 +654,7 @@ impl ChessterEscrow {
             .unwrap_or(false)
     }
 
-    /// Sets governance token address for calculating fee discounts (Issue #36).
+    /// Sets governance token address for calculating fee discounts (Issue #36 & Issue #283).
     ///
     /// # Arguments
     /// * `env` - Environment reference.
@@ -665,6 +665,15 @@ impl ChessterEscrow {
         env.storage()
             .instance()
             .set(&Symbol::new(&env, "gov_tok"), &gov_token);
+        env.storage()
+            .persistent()
+            .set(&Symbol::new(&env, "gov_tok"), &gov_token);
+    }
+
+    /// Sets governance token address for calculating fee discounts (Issue #283).
+    /// Restricted to coordinator admin authority.
+    pub fn set_gov_token_address(env: Env, token_address: Address) {
+        Self::set_gov_token(env, token_address);
     }
 
     /// Retrieves governance token address if configured.
@@ -675,7 +684,12 @@ impl ChessterEscrow {
     /// # Returns
     /// * `Option<Address>` - Governance token address if set.
     pub fn get_gov_token(env: Env) -> Option<Address> {
-        env.storage().instance().get(&Symbol::new(&env, "gov_tok"))
+        if let Some(addr) = env.storage().instance().get(&Symbol::new(&env, "gov_tok")) {
+            return Some(addr);
+        }
+        env.storage()
+            .persistent()
+            .get(&Symbol::new(&env, "gov_tok"))
     }
 
     /// Adds a supported token for wagers (Coordinator only).
@@ -718,7 +732,9 @@ impl ChessterEscrow {
         true
     }
 
-    /// Calculates effective fee basis points for a player based on governance token balance (Issue #36).
+    /// Calculates effective fee basis points for a player based on governance token balance (Issue #283).
+    /// Tier 1: 1,000 tokens (or 1_000_0000000 stroops) -> 25% discount off base fee
+    /// Tier 2: 5,000 tokens (or 5_000_0000000 stroops) -> 50% discount off base fee
     ///
     /// # Arguments
     /// * `env` - Environment reference.
@@ -732,18 +748,33 @@ impl ChessterEscrow {
             let token_client = token::Client::new(&env, &gov_token);
             let balance = token_client.balance(&player);
 
-            if balance >= 10_000 {
-                base_fee / 2
-            } else if balance >= 1_000 {
-                (base_fee * 80) / 100
-            } else if balance >= 100 {
-                (base_fee * 90) / 100
+            if balance >= 5_000_0000000 || (balance >= 5_000 && balance < 1_000_0000000) {
+                base_fee / 2 // 50% discount
+            } else if balance >= 1_000_0000000 || (balance >= 1_000 && balance < 5_000) {
+                (base_fee * 3) / 4 // 25% discount
             } else {
                 base_fee
             }
         } else {
             base_fee
         }
+    }
+
+    /// Calculates net payout and discounted fee for a total match pool based on winner holdings (Issue #283).
+    /// Uses checked arithmetic with zero precision truncation loss: net + fee == total_pool.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `total_pool` - Total escrow pool amount.
+    /// * `winner` - Winner address.
+    ///
+    /// # Returns
+    /// * `(i128, i128)` - (net payout to winner, protocol fee to treasury).
+    pub fn calculate_discounted_fee(env: Env, total_pool: i128, winner: Address) -> (i128, i128) {
+        let effective_bps = Self::get_effective_fee_bps(env, winner);
+        let fee = (total_pool * (effective_bps as i128)) / 10_000;
+        let net = total_pool - fee;
+        (net, fee)
     }
 
     /// Retrieves current match creation nonce counter (Issue #34).
@@ -2235,14 +2266,16 @@ impl ChessterEscrow {
                 panic_with_error!(env, EscrowError::InvalidWinner);
             }
 
-            let admin_bps = Self::get_effective_fee_bps(env.clone(), w.clone());
-            admin_fee = (m.total_staked * (admin_bps as i128)) / 10000;
-            let winner_pay = m.total_staked - admin_fee;
+            let (winner_pay, admin_fee_calc) =
+                Self::calculate_discounted_fee(env.clone(), m.total_staked, w.clone());
+            admin_fee = admin_fee_calc;
 
             token_client.transfer(&env.current_contract_address(), &w, &winner_pay);
             let fee_recipient =
                 Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
-            token_client.transfer(&env.current_contract_address(), &fee_recipient, &admin_fee);
+            if admin_fee > 0 {
+                token_client.transfer(&env.current_contract_address(), &fee_recipient, &admin_fee);
+            }
         } else {
             token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
             if let Some(p2) = m.player2.clone() {
@@ -2946,8 +2979,20 @@ impl ChessterEscrow {
         let fee_recipient =
             Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
 
-        // Calculate and deduct tournament rake fee (Issue #221)
-        let fee_bps = Self::get_tournament_fee_bps(env.clone());
+        // Calculate and deduct tournament rake fee (Issue #221 & Issue #283)
+        let base_fee_bps = Self::get_tournament_fee_bps(env.clone());
+        let mut fee_bps = base_fee_bps;
+        if let Some(top_winner) = winners.get(0) {
+            if let Some(gov_token) = Self::get_gov_token(env.clone()) {
+                let token_client = token::Client::new(&env, &gov_token);
+                let balance = token_client.balance(&top_winner);
+                if balance >= 5_000_0000000 || (balance >= 5_000 && balance < 1_000_0000000) {
+                    fee_bps = base_fee_bps / 2;
+                } else if balance >= 1_000_0000000 || (balance >= 1_000 && balance < 5_000) {
+                    fee_bps = (base_fee_bps * 3) / 4;
+                }
+            }
+        }
         let (net_pool, rake) = Self::calculate_tournament_rake(tournament.total_pool, fee_bps);
 
         let token_client = token::Client::new(&env, &tournament.token);
