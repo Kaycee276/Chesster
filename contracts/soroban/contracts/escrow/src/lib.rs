@@ -514,6 +514,37 @@ pub struct MatchResolutionPayload {
     pub nonce: u64,
 }
 
+/// Persistent on-chain proof-of-skill rating record for a player.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlayerRatingRecord {
+    pub rating: u32,
+    pub games_played: u32,
+    pub updated_at: u64,
+}
+
+impl PlayerRatingRecord {
+    pub fn last_updated(&self) -> u64 {
+        self.updated_at
+    }
+}
+
+/// Payload for committing player rating via Ed25519 signature.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RatingCommitmentPayload {
+    pub player: Address,
+    pub rating: u32,
+    pub games_played: u32,
+}
+
+/// Storage keys for rating and escrow extensions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    PlayerRating(Address),
+}
+
 /// Chesster Escrow Smart Contract instance.
 #[contract]
 pub struct ChessterEscrow;
@@ -2036,7 +2067,6 @@ impl ChessterEscrow {
                 game_code: payload.match_id,
                 winner: payload.winner,
                 admin_fee,
-                timestamp: env.ledger().timestamp(),
             },
         );
     }
@@ -3125,6 +3155,64 @@ impl ChessterEscrow {
             );
         }
         elo
+    }
+
+    /// Commits an official Elo rating record for a player to on-chain storage.
+    /// Requires authorization from the contract coordinator.
+    pub fn commit_player_rating(env: Env, player: Address, rating: u32, games: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let record = PlayerRatingRecord {
+            rating,
+            games_played: games,
+            updated_at: env.ledger().timestamp(),
+        };
+        let key = DataKey::PlayerRating(player.clone());
+        env.storage().persistent().set(&key, &record);
+        Self::bump_entry_ttl(&env, &key);
+
+        env.events().publish((symbol_short!("rating_up"), player), rating);
+    }
+
+    /// Commits an official Elo rating record using an Ed25519 signature from the coordinator.
+    pub fn commit_player_rating_with_sig(
+        env: Env,
+        player: Address,
+        rating: u32,
+        games: u32,
+        signature: BytesN<64>,
+    ) {
+        let coordinator_pubkey = Self::get_coordinator_pubkey(env.clone());
+        let payload = RatingCommitmentPayload {
+            player: player.clone(),
+            rating,
+            games_played: games,
+        };
+        let payload_bytes = payload.to_xdr(&env);
+        env.crypto()
+            .ed25519_verify(&coordinator_pubkey, &payload_bytes, &signature);
+
+        let record = PlayerRatingRecord {
+            rating,
+            games_played: games,
+            updated_at: env.ledger().timestamp(),
+        };
+        let key = DataKey::PlayerRating(player.clone());
+        env.storage().persistent().set(&key, &record);
+        Self::bump_entry_ttl(&env, &key);
+
+        env.events().publish((symbol_short!("rating_up"), player), rating);
+    }
+
+    /// Queries the committed on-chain rating record for a player, if one exists.
+    pub fn get_player_rating(env: Env, player: Address) -> Option<PlayerRatingRecord> {
+        let key = DataKey::PlayerRating(player);
+        let record: Option<PlayerRatingRecord> = env.storage().persistent().get(&key);
+        if record.is_some() {
+            Self::bump_entry_ttl(&env, &key);
+        }
+        record
     }
 }
 

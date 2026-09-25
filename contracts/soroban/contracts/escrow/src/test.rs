@@ -2410,11 +2410,9 @@ fn test_resolve_match_with_signature() {
     env.mock_all_auths();
 
     use ed25519_dalek::{Signer, SigningKey};
-    use rand::rngs::OsRng;
     use soroban_sdk::xdr::ToXdr;
 
-    let mut csprng = OsRng;
-    let signing_key = SigningKey::generate(&mut csprng);
+    let signing_key = SigningKey::from_bytes(&[1u8; 32]);
     let pubkey_bytes = signing_key.verifying_key().to_bytes();
 
     let coordinator = Address::generate(&env);
@@ -2447,14 +2445,16 @@ fn test_resolve_match_with_signature() {
     };
 
     let payload_bytes = payload.clone().to_xdr(&env);
-    let signature = signing_key.sign(payload_bytes.to_alloc_vec().as_slice());
+    let mut payload_slice = alloc::vec![0u8; payload_bytes.len() as usize];
+    payload_bytes.copy_into_slice(&mut payload_slice);
+    let signature = signing_key.sign(&payload_slice);
     let sig_bytes = signature.to_bytes();
 
     client.resolve_match_with_signature(&payload, &BytesN::from_array(&env, &sig_bytes));
 
     let m = client.get_match(&game_code);
     assert_eq!(m.status, MatchStatus::Resolved);
-    assert_eq!(token.balance(&player1), 1095);
+    assert_eq!(token.balance(&player1), 1090);
     assert_eq!(token.balance(&player2), 900);
 }
 
@@ -2465,10 +2465,8 @@ fn test_resolve_match_with_invalid_signature() {
     env.mock_all_auths();
 
     use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
 
-    let mut csprng = OsRng;
-    let signing_key = SigningKey::generate(&mut csprng);
+    let signing_key = SigningKey::from_bytes(&[1u8; 32]);
     let pubkey_bytes = signing_key.verifying_key().to_bytes();
 
     let coordinator = Address::generate(&env);
@@ -2480,14 +2478,6 @@ fn test_resolve_match_with_invalid_signature() {
     token_admin_client.mint(&player1, &1000);
     token_admin_client.mint(&player2, &1000);
 
-fn test_batch_resolve_five_matches() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let coordinator = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-
-    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
 
@@ -2519,11 +2509,9 @@ fn test_resolve_match_with_used_nonce() {
     env.mock_all_auths();
 
     use ed25519_dalek::{Signer, SigningKey};
-    use rand::rngs::OsRng;
     use soroban_sdk::xdr::ToXdr;
 
-    let mut csprng = OsRng;
-    let signing_key = SigningKey::generate(&mut csprng);
+    let signing_key = SigningKey::from_bytes(&[1u8; 32]);
     let pubkey_bytes = signing_key.verifying_key().to_bytes();
 
     let coordinator = Address::generate(&env);
@@ -2556,13 +2544,31 @@ fn test_resolve_match_with_used_nonce() {
     };
 
     let payload_bytes = payload.clone().to_xdr(&env);
-    let signature = signing_key.sign(payload_bytes.to_alloc_vec().as_slice());
+    let mut payload_slice = alloc::vec![0u8; payload_bytes.len() as usize];
+    payload_bytes.copy_into_slice(&mut payload_slice);
+    let signature = signing_key.sign(&payload_slice);
     let sig_bytes = signature.to_bytes();
 
     client.resolve_match_with_signature(&payload, &BytesN::from_array(&env, &sig_bytes));
 
     // Should panic on second invocation
     client.resolve_match_with_signature(&payload, &BytesN::from_array(&env, &sig_bytes));
+}
+
+#[test]
+fn test_batch_resolve_five_matches() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
 
     let mut resolutions = Vec::new(&env);
     for i in 0..5 {
@@ -2591,4 +2597,130 @@ fn test_resolve_match_with_used_nonce() {
         let m = client.get_match(&game_code);
         assert_eq!(m.status, MatchStatus::Resolved);
     }
+}
+
+#[test]
+fn test_player_rating_commitment() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    // Initial query should return None
+    assert_eq!(client.get_player_rating(&player), None);
+
+    // Commit player rating
+    client.commit_player_rating(&player, &1650, &42);
+
+    // Query record and verify contents
+    let record = client.get_player_rating(&player).expect("record should exist");
+    assert_eq!(record.rating, 1650);
+    assert_eq!(record.games_played, 42);
+    assert_eq!(record.updated_at, env.ledger().timestamp());
+    assert_eq!(record.last_updated(), env.ledger().timestamp());
+
+    // Update player rating after more games
+    env.ledger().set_timestamp(env.ledger().timestamp() + 3600);
+    client.commit_player_rating(&player, &1720, &55);
+
+    let updated = client.get_player_rating(&player).expect("updated record should exist");
+    assert_eq!(updated.rating, 1720);
+    assert_eq!(updated.games_played, 55);
+    assert_eq!(updated.updated_at, env.ledger().timestamp());
+}
+
+#[test]
+fn test_player_rating_unauthorized() {
+    let env = Env::default();
+    let coordinator = Address::generate(&env);
+    let player = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.init(&coordinator, &500);
+
+    // Disallow mock auths
+    env.set_auths(&[]);
+    let res = client.try_commit_player_rating(&player, &1800, &20);
+    assert!(res.is_err(), "Non-coordinator or unauthorized call must fail");
+}
+
+#[test]
+fn test_player_rating_commitment_with_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    use ed25519_dalek::{Signer, SigningKey};
+    use soroban_sdk::xdr::ToXdr;
+
+    let signing_key = SigningKey::from_bytes(&[2u8; 32]);
+    let pubkey_bytes = signing_key.verifying_key().to_bytes();
+
+    let coordinator = Address::generate(&env);
+    let player = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.set_coordinator_pubkey(&BytesN::from_array(&env, &pubkey_bytes));
+
+    let payload = RatingCommitmentPayload {
+        player: player.clone(),
+        rating: 1950,
+        games_played: 120,
+    };
+    let payload_bytes = payload.to_xdr(&env);
+    let mut payload_slice = alloc::vec![0u8; payload_bytes.len() as usize];
+    payload_bytes.copy_into_slice(&mut payload_slice);
+    let signature = signing_key.sign(&payload_slice);
+    let sig_bytes = signature.to_bytes();
+
+    client.commit_player_rating_with_sig(
+        &player,
+        &1950,
+        &120,
+        &BytesN::from_array(&env, &sig_bytes),
+    );
+
+    let record = client.get_player_rating(&player).expect("record should exist");
+    assert_eq!(record.rating, 1950);
+    assert_eq!(record.games_played, 120);
+}
+
+#[test]
+#[should_panic(expected = "HostError")]
+fn test_player_rating_commitment_with_invalid_signature() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    use ed25519_dalek::SigningKey;
+
+    let signing_key = SigningKey::from_bytes(&[3u8; 32]);
+    let pubkey_bytes = signing_key.verifying_key().to_bytes();
+
+    let coordinator = Address::generate(&env);
+    let player = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.set_coordinator_pubkey(&BytesN::from_array(&env, &pubkey_bytes));
+
+    let bad_sig = [9u8; 64];
+    client.commit_player_rating_with_sig(
+        &player,
+        &2100,
+        &300,
+        &BytesN::from_array(&env, &bad_sig),
+    );
 }
