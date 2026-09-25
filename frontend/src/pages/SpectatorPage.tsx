@@ -5,13 +5,10 @@ import EvaluationBar from "../components/EvaluationBar";
 import { useStockfishEvaluation } from "../hooks/useStockfishEvaluation";
 import { toEngineFen } from "../utils/engineEvaluation";
 import { api } from "../api/gameApi";
-import { socketService } from "../api/socket";
+import { socketService, type SpectatorReaction } from "../api/socket";
 import type { GameState } from "../types/game";
 
 type Orientation = "white" | "black";
-import { Eye, Users, TrendingUp, TrendingDown, Minus } from "lucide-react";
-import { api } from "../api/gameApi";
-import { socketService, type SpectatorReaction } from "../api/socket";
 
 const PIECE_SYMBOLS: Record<string, string> = {
 	K: "\u2654", Q: "\u2655", R: "\u2656", B: "\u2657", N: "\u2658", P: "\u2659",
@@ -176,10 +173,12 @@ export default function SpectatorPage() {
 
 	useEffect(() => {
 		if (!gameCode) return;
-		let cancelled = false;
+		let active = true;
+		const socket = socketService.connect();
+		socketService.joinGame(gameCode);
 
 		const applyGameState = (game: GameState | undefined) => {
-			if (cancelled || !game || !Array.isArray(game.board_state)) return;
+			if (!active || !game || !Array.isArray(game.board_state)) return;
 			setBoard(game.board_state);
 			if (game.current_turn === "white" || game.current_turn === "black") {
 				setTurn(game.current_turn);
@@ -187,32 +186,7 @@ export default function SpectatorPage() {
 			setGameLoaded(true);
 		};
 
-		api
-			.getGame(gameCode)
-			.then((res) => {
-				if (res?.success) applyGameState(res.data);
-			})
-			.catch(() => {
-				// Keep showing the last known position; live updates may still arrive.
-			});
-
-		socketService.connect();
-		socketService.joinGame(gameCode);
 		socketService.onGameUpdate(applyGameState);
-
-		return () => {
-			cancelled = true;
-			socketService.offGameUpdate();
-			socketService.leaveGame(gameCode);
-		let active = true;
-		const socket = socketService.connect();
-		socketService.joinGame(gameCode);
-		socketService.onGameUpdate((game) => {
-			if (active && game.board_state) {
-				// The API uses snake_case for persisted game fields.
-				setBoard(game.board_state);
-			}
-		});
 		socketService.onReaction((reaction) => {
 			if (!active) return;
 			setReactions((current) => [...current, reaction]);
@@ -221,16 +195,18 @@ export default function SpectatorPage() {
 			}, 2000);
 		});
 
-		api.getGame(gameCode).then((response) => {
-			if (active && response.success && response.data.board_state) {
-				setBoard(response.data.board_state);
-			}
-		}).catch(() => undefined);
+		// The API uses snake_case for persisted game fields.
+		api.getGame(gameCode).then((res) => {
+			if (active && res?.success) applyGameState(res.data);
+		}).catch(() => {
+			// Keep showing the last known position; live updates may still arrive.
+		});
 
 		return () => {
 			active = false;
 			socketService.offGameUpdate();
 			socketService.offReaction();
+			socketService.leaveGame(gameCode);
 			socket.disconnect();
 		};
 	}, [gameCode]);
@@ -267,7 +243,7 @@ export default function SpectatorPage() {
 			</div>
 
 			{/* Main content */}
-			<div className="flex-1 flex items-center justify-center p-4 gap-4">
+			<div className="flex-1 flex flex-col lg:flex-row items-center justify-center p-4 gap-4">
 				{/* Eval bar + board */}
 				<div className="w-full max-w-lg flex items-stretch gap-2">
 					{showEvaluation && (
@@ -279,19 +255,13 @@ export default function SpectatorPage() {
 							loading={!evaluation}
 						/>
 					)}
-					<div className="flex-1 min-w-0">
+					<div className="relative flex-1 min-w-0">
 						<SpectatorBoard board={board} orientation={orientation} />
+						{reactions.map((reaction) => (
+							<FloatingReaction key={reaction.id} reaction={reaction} />
+						))}
+						{gameCode && <ReactionFloatingBar gameCode={gameCode} />}
 					</div>
-				{/* Eval bar */}
-				<EvaluationBar evalScore={evalScore} />
-
-				{/* Board */}
-				<div className="relative w-full max-w-lg">
-					<SpectatorBoard board={board} />
-					{reactions.map((reaction) => (
-						<FloatingReaction key={reaction.id} reaction={reaction} />
-					))}
-					{gameCode && <ReactionFloatingBar gameCode={gameCode} />}
 				</div>
 
 				{/* Move list */}
@@ -301,7 +271,7 @@ export default function SpectatorPage() {
 					</h3>
 					<div className="flex-1 overflow-y-auto text-xs font-mono text-(--text-secondary) space-y-0.5">
 						{moveHistory.length === 0 && (
-							<p className="text-(text-tertiary) italic">No moves yet</p>
+							<p className="text-(--text-tertiary) italic">No moves yet</p>
 						)}
 						{moveHistory.map((move, i) => (
 							<div key={i} className={i % 2 === 0 ? "text-(--text)" : "text-(--text-secondary)"}>

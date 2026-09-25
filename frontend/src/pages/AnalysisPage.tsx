@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch } from "lucide-react";
+import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge } from "lucide-react";
 import MoveNavigator from "../components/MoveNavigator";
 import PromotionModal from "../components/PromotionModal";
 import { useToastStore } from "../store/toastStore";
 import { api } from "../api/gameApi";
 import type { MoveRecord } from "../types/game";
+import { useMoveAccuracyAnalysis } from "../hooks/useMoveAccuracyAnalysis";
+import {
+	formatAccuracy,
+	MOVE_QUALITY_META,
+	type AccuracySummary,
+	type MoveQuality,
+} from "../utils/moveAccuracy";
 import {
 	INITIAL_BOARD,
 	getPossibleMoves,
@@ -67,6 +74,68 @@ export default function AnalysisPage() {
 	const [pgnInput, setPgnInput] = useState("");
 	const [matchIdInput, setMatchIdInput] = useState("");
 	const [loadingMatch, setLoadingMatch] = useState(false);
+
+	// ── Move accuracy analysis (#313) ────────────────────────────────────────
+	// Evaluates every mainline position with Stockfish and classifies each
+	// move by centipawn loss. Branch moves are excluded: they are exploratory.
+	const accuracy = useMoveAccuracyAnalysis(moves);
+	const classifiedMoves = accuracy.result?.moves;
+
+	const classificationFor = (moveIndex: number) => classifiedMoves?.[moveIndex];
+
+	const qualityBadge = (moveIndex: number) => {
+		const classification = classificationFor(moveIndex);
+		if (!classification) return null;
+		const meta = MOVE_QUALITY_META[classification.quality];
+		const cp = Math.round(classification.cpl);
+		return (
+			<span
+				className={`acc-badge ${meta.className}`}
+				title={`${meta.label}${cp > 0 ? ` (−${cp} cp)` : ""}`}
+			>
+				{meta.glyph}
+			</span>
+		);
+	};
+
+	const QUALITY_ORDER: MoveQuality[] = ["best", "good", "inaccuracy", "mistake", "blunder"];
+
+	const accuracyRow = (label: string, summary: AccuracySummary) => {
+		if (summary.total === 0) return null;
+		return (
+			<div className="flex-1 min-w-0 flex flex-col gap-1">
+				<div className="flex items-baseline justify-between gap-2">
+					<span className="text-[10px] font-semibold uppercase tracking-wide text-(--text-tertiary)">
+						{label}
+					</span>
+					<span className="text-base font-bold font-mono">{formatAccuracy(summary.accuracy)}%</span>
+				</div>
+				<div
+					className="h-1.5 rounded-full bg-(--bg) overflow-hidden"
+					role="meter"
+					aria-label={`${label} accuracy`}
+					aria-valuemin={0}
+					aria-valuemax={100}
+					aria-valuenow={Math.round(summary.accuracy)}
+				>
+					<div
+						className={`h-full rounded-full ${summary.accuracy >= 80 ? "acc-meter-strong" : "acc-meter-weak"}`}
+						style={{ width: `${summary.accuracy}%` }}
+					/>
+				</div>
+				<div className="flex flex-wrap gap-x-2 gap-y-0.5">
+					{QUALITY_ORDER.map((q) =>
+						summary.counts[q] > 0 ? (
+							<span key={q} className="text-[10px] text-(--text-tertiary)">
+								<span className={`acc-badge ${MOVE_QUALITY_META[q].className}`}>{MOVE_QUALITY_META[q].glyph}</span>{" "}
+								{summary.counts[q]}
+							</span>
+						) : null,
+					)}
+				</div>
+			</div>
+		);
+	};
 
 	const goToMove = (index: number) => {
 		setIsPlaying(false);
@@ -322,17 +391,19 @@ export default function AnalysisPage() {
 											onClick={() => handleSquareClick(row, col)}
 											className={`relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 ${
 												isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
-											} ${selected ? "bg-yellow-400/75" : ""}`}
+											} ${selected ? "square-selected bg-yellow-400/75" : ""}`}
 										>
 											{possible && !isCaptureTarget && (
-												<div className="absolute rounded-full bg-black/30 dark:bg-white/25 pointer-events-none w-[28%] h-[28%]" />
+												<div className="legal-move-dot absolute rounded-full bg-black/30 dark:bg-white/25 pointer-events-none w-[28%] h-[28%]" />
 											)}
 											{isCaptureTarget && (
-												<div className="absolute rounded-full border-[3px] border-yellow-400/90 pointer-events-none w-[70%] h-[70%]" />
+												<div className="legal-move-ring absolute rounded-full border-[3px] border-yellow-400/90 pointer-events-none w-[70%] h-[70%]" />
 											)}
 											{piece !== "." && (
 												<span
-													className="leading-none pointer-events-none text-[7vw] sm:text-4xl"
+													className={`leading-none pointer-events-none text-[7vw] sm:text-4xl ${
+													piece === piece.toUpperCase() ? "board-piece-white" : "board-piece-black"
+												}`}
 													style={piece === piece.toUpperCase() ? WHITE_PIECE_STYLE : BLACK_PIECE_STYLE}
 												>
 													{PIECE_SYMBOLS[piece]}
@@ -355,6 +426,32 @@ export default function AnalysisPage() {
 						onTogglePlay={() => setIsPlaying((p) => !p)}
 					/>
 
+					{/* Accuracy summary (#313) */}
+					{moves.length > 0 && (
+						<div className="shrink-0 rounded-xl bg-(--bg-secondary) border border-(--border) p-2.5 flex flex-col gap-2">
+							<div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-(--accent-primary)">
+								<Gauge size={11} /> Accuracy
+								{accuracy.progress === "running" && (
+									<span className="ml-auto font-mono normal-case text-(--text-tertiary)" aria-live="polite">
+										{accuracy.evaluated}/{accuracy.total}
+									</span>
+								)}
+							</div>
+							{accuracy.result ? (
+								<div className="flex gap-4">
+									{accuracyRow("White", accuracy.result.white)}
+									{accuracyRow("Black", accuracy.result.black)}
+								</div>
+							) : (
+								<p className="text-[10px] text-(--text-tertiary)">
+									{accuracy.progress === "running"
+										? "Evaluating positions with Stockfish…"
+										: "Engine analysis unavailable."}
+								</p>
+							)}
+						</div>
+					)}
+
 					<div className="flex-1 min-h-0 overflow-y-auto rounded-xl bg-(--bg-secondary) border border-(--border)">
 						{moves.length === 0 ? (
 							<p className="text-xs text-(--text-tertiary) text-center p-4">
@@ -371,17 +468,17 @@ export default function AnalysisPage() {
 												className={`px-2 py-1 cursor-pointer hover:bg-(--bg)/60 ${
 													!branch && currentIndex === r.whiteIndex ? "bg-(--accent-dark)/40 font-bold" : ""
 												}`}
-											>
-												{r.white?.san}
-											</td>
+											>													{r.white?.san}
+													{qualityBadge(r.whiteIndex)}
+												</td>
 											<td
 												onClick={() => r.black && goToMove(r.blackIndex)}
 												className={`px-2 py-1 cursor-pointer hover:bg-(--bg)/60 ${
 													!branch && r.black && currentIndex === r.blackIndex ? "bg-(--accent-dark)/40 font-bold" : ""
 												}`}
-											>
-												{r.black?.san ?? ""}
-											</td>
+											>													{r.black?.san ?? ""}
+													{r.black && qualityBadge(r.blackIndex)}
+												</td>
 										</tr>
 									))}
 								</tbody>

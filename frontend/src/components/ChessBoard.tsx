@@ -693,7 +693,6 @@ function ChessBoardInner() {
 	// the tap-to-select / tap-to-move flow above. Pointer Events give us a
 	// single API that covers mouse, touch and pen.
 	const DRAG_THRESHOLD_PX = 6;
-	const boardGridRef = useRef<HTMLDivElement>(null);
 	const [dragPiece, setDragPiece] = useState<{
 		row: number;
 		col: number;
@@ -1116,6 +1115,7 @@ function ChessBoardInner() {
 				{boardPx > 0 && (
 				<div
 					ref={boardGridRef}
+					className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity ${isMoving ? "opacity-70" : "opacity-100"}`}
 					role="grid"
 					tabIndex={-1}
 					aria-label={`Chess board, ${moveHistory.length} moves played. Use arrow keys to review, Z to step back, F to flip the board.`}
@@ -1182,9 +1182,9 @@ function ChessBoardInner() {
 								aria-selected={selected === true}
 								className={`board-square relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:-outline-offset-2 ${
 									isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
-								} ${selected ? "bg-yellow-400/75" : ""} ${
-									isKingInCheck ? "bg-red-500/80" : ""
-								} ${isLastMoveSquare ? "bg-yellow-300/45" : ""} ${
+								} ${selected ? "square-selected bg-yellow-400/75" : ""} ${
+									isKingInCheck ? "square-check bg-red-500/80" : ""
+								} ${isLastMoveSquare ? "square-last-move bg-yellow-300/45" : ""} ${
 									highlight ? " outline-2 outline-yellow-300/60 -outline-offset-2" : ""
 								}`}
 								style={isCaptureSquare ? { animation: "captureFlash 0.4s ease-out forwards" } : undefined}
@@ -1209,7 +1209,7 @@ function ChessBoardInner() {
 								{/* Legal-move marker: dot on empty squares, ring on captures (#123) */}
 								{possible && !capture && (
 									<div
-										className="absolute rounded-full bg-black/30 dark:bg-white/25 pointer-events-none"
+										className="legal-move-dot absolute rounded-full bg-black/30 dark:bg-white/25 pointer-events-none"
 										style={{
 											width: "calc(var(--board-size) / 8 * 0.32)",
 											height: "calc(var(--board-size) / 8 * 0.32)",
@@ -1218,7 +1218,7 @@ function ChessBoardInner() {
 								)}
 								{capture && (
 									<div
-										className="absolute rounded-full border-[3px] border-yellow-400/90 pointer-events-none"
+										className="legal-move-ring absolute rounded-full border-[3px] border-yellow-400/90 pointer-events-none"
 										style={{
 											width: "calc(var(--board-size) / 8 * 0.72)",
 											height: "calc(var(--board-size) / 8 * 0.72)",
@@ -1229,7 +1229,9 @@ function ChessBoardInner() {
 								{piece !== "." && (
 									<span
 										key={isPieceAnimating ? "anim" : "static"}
-										className="leading-none pointer-events-none"
+										className={`leading-none pointer-events-none ${
+											piece === piece.toUpperCase() ? "board-piece-white" : "board-piece-black"
+										}`}
 										style={{
 											fontSize: "calc(var(--board-size) / 8 * 0.72)",
 											opacity: isDragSource ? 0.35 : 1,
