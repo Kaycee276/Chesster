@@ -70,6 +70,7 @@
 	--sq-highlight: #94a3b8;
 }
 
+
 .dark {
 	--bg: var(--bg-dark);
 	--bg-secondary: var(--bg-dark-secondary);
@@ -186,6 +187,55 @@ button:disabled {
 @keyframes captureFlash {
 	0%   { background-color: rgba(239, 68, 68, 0.55); }
 	100% { background-color: transparent; }
+}
+
+/* Move accuracy badges (#313) — pill glyph rendered next to each move in the
+   analysis notation table. Solid fills with white (or near-black on amber)
+   text keep every pair at ≥ 4.5:1. */
+.acc-badge {
+	display: inline-block;
+	margin-left: 4px;
+	padding: 0 4px;
+	border-radius: 9999px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 9px;
+	line-height: 14px;
+	font-weight: 700;
+	vertical-align: 1px;
+}
+
+.acc-best {
+	background: #15803d;
+	color: #ffffff;
+}
+
+.acc-good {
+	background: #0f766e;
+	color: #ffffff;
+}
+
+.acc-inaccuracy {
+	background: #fbbf24;
+	color: #451a03;
+}
+
+.acc-mistake {
+	background: #c2410c;
+	color: #ffffff;
+}
+
+.acc-blunder {
+	background: #dc2626;
+	color: #ffffff;
+}
+
+/* Accuracy summary card meters */
+.acc-meter-strong {
+	background: #16a34a;
+}
+
+.acc-meter-weak {
+	background: #f59e0b;
 }
 
 /* Toast slide-in from the right */
