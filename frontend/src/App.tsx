@@ -4,6 +4,8 @@ import GameLobby from "./components/GameLobby";
 import GamePage from "./pages/GamePage";
 import SpectatorPage from "./pages/SpectatorPage";
 import TournamentPage from "./pages/TournamentPage";
+import PuzzlePage from "./pages/PuzzlePage";
+import GameSettings from "./components/GameSettings";
 import ReferralPage from "./pages/ReferralPage";
 import ProfilePage from "./pages/ProfilePage";
 import TournamentBracketPage from "./pages/TournamentBracketPage";
@@ -48,6 +50,7 @@ const App = () => {
 			<Routes>
 				<Route path="/" element={<GameLobby />} />
 				<Route path="/tournaments" element={<TournamentPage />} />
+				<Route path="/puzzles" element={<PuzzlePage />} />
 				<Route path="/referrals" element={<PrivateRoute element={<ReferralPage />} />} />
 				<Route path="/profile/:address" element={<ProfilePage />} />
 				<Route
@@ -60,6 +63,7 @@ const App = () => {
 				<Route path="/spectate/:gameCode" element={<SpectatorPage />} />
 			</Routes>
 			<ThemeSelector />
+			<GameSettings />
 		</BrowserRouter>
 	);
 };

@@ -81,6 +81,9 @@ interface GameStore {
   chatMessages: ChatMessage[];
   unreadCount: number;
   chatOpen: boolean;
+  // Blindfold mode for training calculation skills
+  isBlindfoldMode: boolean;
+  toggleBlindfoldMode: () => void;
 
   createGame: (
     walletAddress: string,
@@ -146,6 +149,10 @@ export const useGameStore = create<GameStore>()(
       chatMessages: [],
       unreadCount: 0,
       chatOpen: false,
+      isBlindfoldMode: false,
+
+      toggleBlindfoldMode: () =>
+        set((s) => ({ isBlindfoldMode: !s.isBlindfoldMode })),
 
       createGame: async (
         walletAddress: string,
@@ -537,6 +544,7 @@ export const useGameStore = create<GameStore>()(
       partialize: (state) => ({
         gameCode: state.gameCode,
         playerColor: state.playerColor,
+        isBlindfoldMode: state.isBlindfoldMode,
       }),
     },
   ),
