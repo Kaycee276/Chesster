@@ -20,6 +20,7 @@
 	},
 	"type": "commonjs",
 	"dependencies": {
+		"@aws-sdk/client-s3": "^3.1140.0",
 		"@stellar/stellar-sdk": "^16.2.0",
 		"@supabase/supabase-js": "^2.95.3",
 		"axios": "^1.6.0",
