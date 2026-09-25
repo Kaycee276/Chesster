@@ -25,6 +25,10 @@ class TournamentModel {
 		entry_fee = 0,
 		coordinatorAddress = null,
 		coordinator_address = null,
+		startsAt = null,
+		starts_at = null,
+		prizePool = 0,
+		prize_pool = 0,
 		status = "open",
 	}) {
 		if (!name) throw new Error("Tournament name is required");
@@ -40,6 +44,8 @@ class TournamentModel {
 			max_players: effectiveMax,
 			entry_fee: entryFee || entry_fee || 0,
 			coordinator_address: coordinatorAddress || coordinator_address,
+			starts_at: startsAt || starts_at,
+			prize_pool: prizePool || prize_pool || 0,
 			status,
 			current_round: 0,
 		};

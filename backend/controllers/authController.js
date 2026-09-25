@@ -23,7 +23,7 @@ class AuthController {
 	 */
 	async login(req, res) {
 		try {
-			const { address, signature } = req.body;
+			const { address, signature, referralCode } = req.body;
 			if (!address) throw new Error("Wallet address is required");
 
 			authService.verifySignature(address, signature);

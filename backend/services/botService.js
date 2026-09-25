@@ -301,7 +301,68 @@ class BotWorkerPool {
 	}
 }
 
+/** Analyze a FEN at a fixed depth and return Stockfish's top move and score. */
+function analyzeFen(fen, depth = 16) {
+	return new Promise((resolve, reject) => {
+		let engine;
+		try {
+			engine = spawn(STOCKFISH_PATH, [], { stdio: ["pipe", "pipe", "pipe"] });
+		} catch (error) {
+			return reject(error);
+		}
+
+		let buffer = "";
+		let settled = false;
+		let scoreCp = null;
+		const finish = (error, result) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeout);
+			try {
+				engine.stdin.end();
+				engine.kill();
+			} catch (_) { /* process already exited */ }
+			if (error) reject(error);
+			else resolve(result);
+		};
+		const timeout = setTimeout(
+			() => finish(new Error("Stockfish analysis timed out")),
+			Number(process.env.STOCKFISH_ANALYSIS_TIMEOUT_MS) || 15000,
+		);
+
+		engine.on("error", (error) => finish(error));
+		engine.on("exit", (code) => {
+			if (!settled && code !== 0) finish(new Error(`Stockfish exited with code ${code}`));
+		});
+		engine.stdout.on("data", (chunk) => {
+			buffer += chunk.toString();
+			const lines = buffer.split("\n");
+			buffer = lines.pop();
+			for (const line of lines) {
+				const score = line.match(/\bscore\s+(cp|mate)\s+(-?\d+)/);
+				if (score) {
+					scoreCp = score[1] === "mate"
+						? Math.sign(Number(score[2])) * 100000
+						: Number(score[2]);
+				}
+				if (line.startsWith("bestmove")) {
+					finish(null, { bestMove: line.trim().split(/\s+/)[1], scoreCp });
+				}
+			}
+		});
+
+		engine.stdin.write("uci\n");
+		engine.stdin.write("setoption name Skill Level value 20\n");
+		engine.stdin.write("isready\n");
+		engine.stdin.write(`position fen ${fen}\n`);
+		engine.stdin.write(`go depth ${Math.max(1, Math.floor(depth))}\n`);
+	});
+}
+
 class BotService {
+	analyzeFen(fen, depth = 16) {
+		return analyzeFen(fen, depth);
+	}
 	constructor(pool) {
 		this._pool = pool || null;
 	}
@@ -372,3 +433,4 @@ module.exports.parseUciMove = parseUciMove;
 module.exports.getLegalMoves = getLegalMoves;
 module.exports.resolveDifficulty = resolveDifficulty;
 module.exports.resolveSkillLevel = resolveSkillLevel;
+module.exports.analyzeFen = analyzeFen;

@@ -31,6 +31,10 @@ jest.mock("../services/escrowService", () => ({
   resolveAsDraw: jest.fn().mockResolvedValue({}),
 }));
 
+jest.mock("../services/referralService", () => ({
+  creditReferralCommission: jest.fn().mockResolvedValue({ credited: true, amount: "20" }),
+}));
+
 jest.mock("../services/chessEngine", () => {
   const emptyBoard = Array(8).fill(Array(8).fill("."));
   return {

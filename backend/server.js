@@ -12,9 +12,11 @@ const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
 const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
+const referralRoutes = require("./routes/referralRoutes");
 const puzzleRoutes = require("./routes/puzzleRoutes");
 const timerService = require("./services/timerService");
 const cronService = require("./services/cronService");
+const eventConsumer = require("./workers/eventConsumer");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
@@ -74,6 +76,7 @@ app.use("/api/escrow", escrowRoutes);
 app.use("/api", authRoutes);
 app.use("/api", botRoutes);
 app.use("/api", healthRoutes);
+app.use("/api/referrals", referralRoutes);
 app.use("/api/puzzles", puzzleRoutes);
 
 // Legacy health endpoint
@@ -414,6 +417,7 @@ io.on("connection", (socket) => {
 app.set("io", io);
 timerService.init(io);
 if (require.main === module) {
+	eventConsumer.start().catch((error) => logger.error("Event consumer failed to start", { error: error.message }));
   cronService.start();
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Chesster backend running on port ${PORT}`);

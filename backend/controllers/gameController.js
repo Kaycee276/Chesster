@@ -1,6 +1,7 @@
 const gameModel = require("../models/gameModel");
 const userModel = require("../models/userModel");
 const timerService = require("../services/timerService");
+const eventBus = require("../services/eventBus");
 const replayService = require("../services/replayService");
 
 // Comment line sent periodically so proxies don't drop an idle replay stream.
@@ -10,6 +11,22 @@ const auditService = require("../services/auditService");
 const AUDIT_FORMATS = new Set(["json", "csv"]);
 
 class GameController {
+	publishGameEnded(game, endReason) {
+		if (!game || game.status !== "finished") return;
+		const winnerAddress = game.winner === "white"
+			? game.player_white_address
+			: game.winner === "black" ? game.player_black_address : null;
+		eventBus.publish("game.ended", {
+			gameId: game.id,
+			gameCode: game.game_code,
+			winner: game.winner,
+			winnerAddress,
+			playerWhiteAddress: game.player_white_address,
+			playerBlackAddress: game.player_black_address,
+			endReason: endReason || game.end_reason || "conclusion",
+		}).catch(() => {});
+	}
+
 	async createGame(req, res) {
 		try {
 			const {
@@ -45,7 +62,11 @@ class GameController {
 	async joinGame(req, res) {
 		try {
 			const { gameCode } = req.params;
-			const { playerColor, playerAddress } = req.body;
+			const { playerColor, playerAddress, referralCode } = req.body;
+			if (playerAddress && referralCode) {
+				const userModel = require("../models/userModel");
+				await userModel.findOrCreateByAddress(playerAddress, referralCode);
+			}
 			const game = await gameModel.joinGame(
 				gameCode,
 				playerColor,
@@ -99,23 +120,13 @@ class GameController {
 			const moverColor = (await gameModel.getGame(gameCode)).current_turn;
 			const game = await gameModel.makeMove(gameCode, from, to, promotion);
 
-			// Record timing for anti-cheat analysis (non-blocking — never fails the move)
-			try {
-				const antiCheat = require("../services/antiCheatService");
-				const { flagged, reasons } = antiCheat.recordMove(gameCode, moverColor);
-				if (flagged) {
-					const logger = require("../utils/logger");
-					logger.warn("Anti-cheat flag", { gameCode, color: moverColor, reasons });
-				}
-				if (game.status !== "active") antiCheat.clearGame(gameCode);
-			} catch { /* non-critical */ }
-
 			let clock = null;
 			if (game.status === "active") {
 				clock = timerService.applyMove(gameCode, moverColor);
 			} else {
 				timerService.clearTimer(gameCode);
 				timerService.clearClock(gameCode);
+				this.publishGameEnded(game);
 				await userModel.invalidateProfilesForGame(game);
 
 				// If tournament match concluded, advance round
@@ -156,6 +167,7 @@ class GameController {
 			const { gameCode } = req.params;
 			const { playerColor } = req.body;
 			const game = await gameModel.resignGame(gameCode, playerColor);
+			this.publishGameEnded(game, "resignation");
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
@@ -200,6 +212,7 @@ class GameController {
 		try {
 			const { gameCode } = req.params;
 			const game = await gameModel.acceptDraw(gameCode);
+			this.publishGameEnded(game, "draw_agreed");
 
 			timerService.clearTimer(gameCode);
 			timerService.clearClock(gameCode);
@@ -499,6 +512,16 @@ class GameController {
 					endReason: endReason || "conclusion",
 				});
 			}
+
+			eventBus.publish("game.ended", {
+				gameId: game.id,
+				gameCode,
+				winner,
+				winnerAddress: winningAddress,
+				playerWhiteAddress: game.player_white_address,
+				playerBlackAddress: game.player_black_address,
+				endReason: endReason || "conclusion",
+			}).catch(() => {});
 
 			res.json({
 				success: true,
