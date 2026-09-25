@@ -7,6 +7,7 @@ import TournamentPage from "./pages/TournamentPage";
 import ProfilePage from "./pages/ProfilePage";
 import TournamentBracketPage from "./pages/TournamentBracketPage";
 import AnalysisPage from "./pages/AnalysisPage";
+import LeaderboardPage from "./pages/LeaderboardPage";
 import Toast from "./components/Toast";
 import ThemeSelector from "./components/ThemeSelector";
 import NetworkBanner from "./components/NetworkBanner";
@@ -47,6 +48,7 @@ const App = () => {
 					element={<TournamentBracketPage />}
 				/>
 				<Route path="/analysis" element={<AnalysisPage />} />
+				<Route path="/leaderboard" element={<LeaderboardPage />} />
 				<Route path="/:gameCode" element={<GamePage />} />
 				<Route path="/spectate/:gameCode" element={<SpectatorPage />} />
 			</Routes>

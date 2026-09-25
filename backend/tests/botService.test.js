@@ -1,7 +1,12 @@
+const path = require("path");
 const chessEngine = require("../services/chessEngine");
 const botService = require("../services/botService");
 
+const { BotService, BotWorkerPool } = botService;
+const FAKE_ENGINE = path.join(__dirname, "fixtures", "fakeUciEngine.js");
+
 describe("BotService", () => {
+	afterAll(() => botService.shutdown());
 	describe("boardToFEN", () => {
 		it("converts the initial board to the standard starting FEN placement", () => {
 			const board = chessEngine.initBoard();
@@ -64,6 +69,28 @@ describe("BotService", () => {
 		});
 	});
 
+	describe("resolveDifficulty", () => {
+		it("maps the Beginner / Intermediate / Master tiers to skill levels and search depths", () => {
+			expect(botService.resolveDifficulty("beginner")).toEqual({ skillLevel: 1, depth: 3 });
+			expect(botService.resolveDifficulty("intermediate")).toEqual({ skillLevel: 8, depth: 8 });
+			expect(botService.resolveDifficulty("master")).toEqual({ skillLevel: 20, depth: 20 });
+		});
+
+		it("accepts tier names case-insensitively", () => {
+			expect(botService.resolveDifficulty(" Master ")).toEqual(botService.resolveDifficulty("master"));
+		});
+
+		it("increases search depth with difficulty", () => {
+			const depths = ["beginner", "intermediate", "master"].map((d) => botService.resolveDifficulty(d).depth);
+			expect(depths).toEqual([...depths].sort((a, b) => a - b));
+		});
+
+		it("derives a bounded depth for numeric skill levels", () => {
+			expect(botService.resolveDifficulty(0)).toEqual({ skillLevel: 0, depth: 3 });
+			expect(botService.resolveDifficulty(20).depth).toBeLessThanOrEqual(22);
+		});
+	});
+
 	describe("getBestMove", () => {
 		it("falls back to a legal heuristic move when Stockfish is unavailable", async () => {
 			// No STOCKFISH_PATH binary exists in the test environment, so this
@@ -73,6 +100,7 @@ describe("BotService", () => {
 
 			expect(move).not.toBeNull();
 			expect(move.engine).toBe("heuristic");
+			expect(move.uci).toMatch(/^[a-h][1-8][a-h][1-8][qrbn]?$/);
 			const result = chessEngine.isValidMove(board, move.from, move.to, "white", null);
 			expect(result.valid).toBe(true);
 		});
@@ -87,6 +115,50 @@ describe("BotService", () => {
 
 			const move = await botService.getBestMove(board, "black", null, "easy", 0);
 			expect(move).toBeNull();
+		});
+	});
+
+	describe("getBestMove via the worker pool and a UCI engine", () => {
+		let bot;
+
+		afterEach(() => bot.shutdown());
+
+		it("returns the engine's UCI move, computed in a worker thread", async () => {
+			bot = new BotService(new BotWorkerPool({
+				size: 1,
+				workerData: { enginePath: process.execPath, engineArgs: [FAKE_ENGINE, "ok"] },
+			}));
+
+			const move = await bot.getBestMove(chessEngine.initBoard(), "white", null, "master", 0);
+
+			expect(move).toEqual({
+				from: [6, 4],
+				to: [4, 4],
+				promotion: null,
+				uci: "e2e4",
+				engine: "stockfish",
+				skillLevel: 20,
+				depth: 20,
+			});
+		});
+
+		it("falls back to a legal move when the engine query hangs past the timeout budget", async () => {
+			bot = new BotService(new BotWorkerPool({
+				size: 1,
+				taskTimeoutMs: 800,
+				workerData: { enginePath: process.execPath, engineArgs: [FAKE_ENGINE, "hang"] },
+			}));
+			const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+
+			const board = chessEngine.initBoard();
+			const startedAt = Date.now();
+			const move = await bot.getBestMove(board, "white", null, "intermediate", 0);
+
+			expect(Date.now() - startedAt).toBeLessThan(800);
+			expect(move.engine).toBe("heuristic");
+			expect(chessEngine.isValidMove(board, move.from, move.to, "white", null).valid).toBe(true);
+			expect(warn).toHaveBeenCalledWith(expect.stringMatching(/timed out/));
+			warn.mockRestore();
 		});
 	});
 });

@@ -39,13 +39,30 @@ class AuthController {
 
 	/**
 	 * GET /api/auth/profile (protected)
+	 * The caller's profile plus match stats and recent matches (cached).
 	 */
 	async getProfile(req, res) {
 		try {
-			const user = await userModel.getByAddress(req.user.address);
-			res.json({ success: true, data: user });
+			const profile = await userModel.getUserProfile(req.user.address);
+			if (!profile) return res.status(404).json({ success: false, error: "Profile not found" });
+			res.json({ success: true, data: profile });
 		} catch (error) {
-			res.status(404).json({ success: false, error: error.message });
+			res.status(500).json({ success: false, error: error.message });
+		}
+	}
+
+	/**
+	 * GET /api/users/:address/profile (public)
+	 * Any player's profile, stats and recent matches, for profile pages and
+	 * leaderboards. Served from the Redis profile cache when available.
+	 */
+	async getPublicProfile(req, res) {
+		try {
+			const profile = await userModel.getUserProfile(req.params.address);
+			if (!profile) return res.status(404).json({ success: false, error: "Profile not found" });
+			res.json({ success: true, data: profile });
+		} catch (error) {
+			res.status(500).json({ success: false, error: error.message });
 		}
 	}
 
