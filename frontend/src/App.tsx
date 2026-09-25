@@ -6,6 +6,7 @@ import SpectatorPage from "./pages/SpectatorPage";
 import TournamentPage from "./pages/TournamentPage";
 import Toast from "./components/Toast";
 import ThemeSelector from "./components/ThemeSelector";
+import GameSettings from "./components/GameSettings";
 import { useWalletStore } from "./store/walletStore";
 import { useThemeStore, applyColorMode } from "./store/themeStore";
 
@@ -40,6 +41,7 @@ const App = () => {
 				<Route path="/spectate/:gameCode" element={<SpectatorPage />} />
 			</Routes>
 			<ThemeSelector />
+			<GameSettings />
 		</BrowserRouter>
 	);
 };

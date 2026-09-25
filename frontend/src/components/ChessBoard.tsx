@@ -23,6 +23,7 @@ import {
 	SkipForward,
 	ChevronLeft,
 	ChevronRight,
+	Eye,
 } from "lucide-react";
 
 const NATIVE_XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
@@ -288,6 +289,7 @@ function ChessBoardInner() {
 		viewingIndex,
 		setViewingIndex,
 		loadMoveHistory,
+		isBlindfoldMode,
 	} = useGameStore();
 	const { addToast, removeToast } = useToastStore();
 	const navigate = useNavigate();
@@ -304,6 +306,8 @@ function ChessBoardInner() {
 	const [volume, setVolume] = useState(() => soundService.getVolume());
 	const [showVolumeSlider, setShowVolumeSlider] = useState(false);
 	const [flipped, setFlipped] = useState(false);
+	const [isPeeking, setIsPeeking] = useState(false);
+	const peekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	// ── Piece move animation ───────────────────────────────────────────────────
 	const lastMove = useGameStore((s) => s.lastMove);
@@ -358,6 +362,35 @@ function ChessBoardInner() {
 	useEffect(() => {
 		prevBoardRef.current = board;
 	}, [board]);
+
+	// ── Peek timer cleanup: cancel previous timer if peek is triggered again ────
+	useEffect(() => {
+		if (!isPeeking) {
+			if (peekTimerRef.current !== null) {
+				clearTimeout(peekTimerRef.current);
+				peekTimerRef.current = null;
+			}
+			return;
+		}
+
+		// isPeeking is true: start/restart the 2-second timer
+		peekTimerRef.current = setTimeout(() => {
+			setIsPeeking(false);
+			peekTimerRef.current = null;
+		}, 2000);
+
+		// Cleanup on unmount or if isPeeking becomes false
+		return () => {
+			if (peekTimerRef.current !== null) {
+				clearTimeout(peekTimerRef.current);
+				peekTimerRef.current = null;
+			}
+		};
+	}, [isPeeking]);
+
+	const handlePeekClick = () => {
+		setIsPeeking(true);
+	};
 
 	const inCheck = useGameStore((s) => s.inCheck);
 	const winner = useGameStore((s) => s.winner);
@@ -889,23 +922,37 @@ function ChessBoardInner() {
 								)}
 								{/* Piece */}
 								{piece !== "." && (
-									<span
-										key={isPieceAnimating ? "anim" : "static"}
-										className="leading-none pointer-events-none"
-										style={{
-											fontSize: "calc(var(--board-size) / 8 * 0.72)",
-											...(piece === piece.toUpperCase()
-												? WHITE_PIECE_STYLE
-												: BLACK_PIECE_STYLE),
-											...(isPieceAnimating && {
-												animation: "pieceSlide 0.38s cubic-bezier(0.22,1,0.36,1) forwards",
-												"--piece-dx": `calc(${animOffset.dx} * var(--board-size) / 8)`,
-												"--piece-dy": `calc(${animOffset.dy} * var(--board-size) / 8)`,
-											}),
-										} as React.CSSProperties}
-									>
-										{PIECE_SYMBOLS[piece]}
-									</span>
+									<>
+										{isBlindfoldMode && !isPeeking ? (
+											// Blindfold mode: render subtle dot instead of piece
+											<div
+												className="absolute rounded-full bg-black/40 dark:bg-white/30 pointer-events-none"
+												style={{
+													width: "calc(var(--board-size) / 8 * 0.18)",
+													height: "calc(var(--board-size) / 8 * 0.18)",
+												}}
+											/>
+										) : (
+											// Normal mode or peeking: render piece SVG
+											<span
+												key={isPieceAnimating ? "anim" : "static"}
+												className="leading-none pointer-events-none"
+												style={{
+													fontSize: "calc(var(--board-size) / 8 * 0.72)",
+													...(piece === piece.toUpperCase()
+														? WHITE_PIECE_STYLE
+														: BLACK_PIECE_STYLE),
+													...(isPieceAnimating && {
+														animation: "pieceSlide 0.38s cubic-bezier(0.22,1,0.36,1) forwards",
+														"--piece-dx": `calc(${animOffset.dx} * var(--board-size) / 8)`,
+														"--piece-dy": `calc(${animOffset.dy} * var(--board-size) / 8)`,
+													}),
+												} as React.CSSProperties}
+											>
+												{PIECE_SYMBOLS[piece]}
+											</span>
+										)}
+									</>
 								)}
 							</div>
 						);
@@ -1134,6 +1181,21 @@ function ChessBoardInner() {
 							</div>
 						)}
 					</div>
+					{/* Peek button - only show when blindfold mode is active */}
+					{isBlindfoldMode && (
+						<button
+							onClick={handlePeekClick}
+							disabled={isPeeking}
+							title={isPeeking ? "Peeking... (2 seconds)" : "Peek at pieces (2 seconds)"}
+							className={`p-1.5 rounded-lg transition-colors ${
+								isPeeking
+									? "bg-(--accent-primary) text-white"
+									: "text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary)"
+							}`}
+						>
+							<Eye size={13} />
+						</button>
+					)}
 					<button
 						onClick={copyGameCode}
 						disabled={!gameCode}
