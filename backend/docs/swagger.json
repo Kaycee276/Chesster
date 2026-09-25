@@ -497,6 +497,82 @@
         }
       }
     },
+    "/games/{id}/stream": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "Stream a game replay over Server-Sent Events",
+        "description": "Replays a game's moves as Server-Sent Events (Issue #245). Sends a `start` event with game metadata, one `move` event per move (id = move index; payload includes the move, UCI string, captured piece, check flags, resulting FEN, remaining clocks and original duration), then an `end` event with the result. Each move is delayed by its original duration (capped at 10s) divided by `speed`. Clients can resume with the Last-Event-ID header.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Game code" },
+          { "name": "speed", "in": "query", "schema": { "type": "number", "minimum": 1, "maximum": 10, "default": 1 }, "description": "Playback speed multiplier (e.g. 1, 2, 5)" },
+          { "name": "Last-Event-ID", "in": "header", "schema": { "type": "integer" }, "description": "Resume after this move index" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": { "type": "string", "example": "id: 1\nevent: move\ndata: {\"index\":1,\"uci\":\"e2e4\"}\n\n" }
+              }
+            }
+          },
+          "400": { "description": "Invalid speed" },
+    "/games/{id}/audit-export": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "Export a match's forensic audit log",
+        "description": "Compiles move timestamps (server receive time, client timestamp, latency), hashed client IPs, socket disconnect events, FEN snapshots and an HMAC-SHA256 signature over the match outcome for arbitrated dispute resolution (Issue #243). Restricted to the match's players and admins. The outcome hash and signature are also returned in the X-Audit-Outcome-Hash and X-Audit-Signature headers.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Game UUID or game code" },
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["json", "csv"], "default": "json" } },
+          { "name": "download", "in": "query", "schema": { "type": "boolean" }, "description": "Serve the JSON package as a file attachment" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit package (JSON) or chronological timeline (CSV)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "schemaVersion": { "type": "integer", "example": 1 },
+                        "generatedAt": { "type": "string", "format": "date-time" },
+                        "match": { "type": "object" },
+                        "escrow": { "type": "object" },
+                        "summary": { "type": "object" },
+                        "moves": { "type": "array", "items": { "type": "object" } },
+                        "events": { "type": "array", "items": { "type": "object" } },
+                        "integrity": {
+                          "type": "object",
+                          "properties": {
+                            "algorithm": { "type": "string", "example": "HMAC-SHA256" },
+                            "outcome": { "type": "object" },
+                            "outcomeHash": { "type": "string" },
+                            "signature": { "type": "string" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "text/csv": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "400": { "description": "Unsupported format" },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Caller is neither a match player nor an admin" },
+          "404": { "description": "Game not found" }
+        }
+      }
+    },
     "/time-controls": {
       "get": {
         "tags": ["Time Controls"],
@@ -526,6 +602,14 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT issued by POST /api/auth/login"
+      }
+    },
     "schemas": {
       "CreateGameRequest": {
         "type": "object",

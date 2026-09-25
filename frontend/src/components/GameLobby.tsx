@@ -7,6 +7,7 @@ import { api } from "../api/gameApi";
 import { Clock, Users, ChevronRight, Trophy } from "lucide-react";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "./WalletDropdown";
+import { getTimeCategory, isValidTimeControl } from "../utils/timeControl";
 
 // ── Time control options ───────────────────────────────────────────────────────
 const TIME_CONTROLS = [
@@ -25,6 +26,9 @@ type Step =
 	| "fetching"
 	| "join-confirming"
 	| "joining";
+
+// Quick-select wager amounts in XLM, offered alongside the custom input (#132).
+const WAGER_PRESETS = [1, 5, 10, 25, 50] as const;
 
 interface WagerInfo {
 	wagerAmount: string;
@@ -319,6 +323,11 @@ export default function GameLobby() {
 	const [selectedTimeControl, setSelectedTimeControl] = useState(
 		TIME_CONTROLS[3],
 	); // 10 min default
+	const [customTimeControl, setCustomTimeControl] = useState({
+		baseMinutes: 10,
+		incrementSeconds: 0,
+	});
+	const [isCustomTimeControl, setIsCustomTimeControl] = useState(false);
 	const [step, setStep] = useState<Step>("idle");
 	const [pendingWager, setPendingWager] = useState<WagerInfo | null>(null);
 
@@ -329,6 +338,15 @@ export default function GameLobby() {
 
 	const isLoading = step !== "idle";
     const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
+	const effectiveTimeControl = isCustomTimeControl
+		? {
+				seconds: customTimeControl.baseMinutes * 60,
+				tag: getTimeCategory(
+					customTimeControl.baseMinutes,
+					customTimeControl.incrementSeconds,
+				),
+			}
+		: selectedTimeControl;
 
 	// ── Create game ───────────────────────────────────────────────────────────
 	const handleCreateGame = async () => {
@@ -369,8 +387,9 @@ export default function GameLobby() {
 					"chess",
 					address,
 					wagerAmount,
-					selectedTimeControl.seconds,
+					effectiveTimeControl.seconds,
 					preGeneratedCode,
+					isCustomTimeControl ? customTimeControl.incrementSeconds : 0,
 				);
 				if (!data.success)
 					throw new Error(data.error || "Failed to create game");
@@ -394,7 +413,12 @@ export default function GameLobby() {
 		} else {
 			setStep("creating");
 			try {
-				await createGame(address, undefined, selectedTimeControl.seconds);
+				await createGame(
+					address,
+					undefined,
+					effectiveTimeControl.seconds,
+					isCustomTimeControl ? customTimeControl.incrementSeconds : 0,
+				);
 				const code = useGameStore.getState().gameCode;
 				if (code) navigate(`/${code}`);
 			} catch (err: unknown) {
@@ -557,10 +581,13 @@ export default function GameLobby() {
 									Game duration
 								</div>
 								<div className="grid grid-cols-3 gap-1.5">
-									{TIME_CONTROLS.map((tc) => (
-										<button
-											key={tc.seconds}
-											onClick={() => setSelectedTimeControl(tc)}
+					{TIME_CONTROLS.map((tc) => (
+						<button
+							key={tc.seconds}
+							onClick={() => {
+								setSelectedTimeControl(tc);
+								setIsCustomTimeControl(false);
+							}}
 											className={`flex flex-col items-center py-2 px-1 rounded-lg border text-xs transition-all ${
 												selectedTimeControl.seconds === tc.seconds
 													? "border-(--accent-primary) bg-(--accent-dark)/20 text-white font-semibold"
@@ -577,9 +604,74 @@ export default function GameLobby() {
 											>
 												{tc.tag}
 											</span>
-										</button>
-									))}
-								</div>
+						</button>
+					))}
+					<button
+						type="button"
+						onClick={() => setIsCustomTimeControl(true)}
+						className={`col-span-3 flex items-center justify-center gap-2 py-2 px-1 rounded-lg border text-xs transition-all ${
+							isCustomTimeControl
+								? "border-(--accent-primary) bg-(--accent-dark)/20 text-white font-semibold"
+								: "border-(--border) bg-(--bg-secondary) text-(--text-secondary) hover:border-(--accent-primary)/50"
+						}`}
+					>
+						Custom
+						{isCustomTimeControl && (
+							<span className="text-(--accent-primary)">
+								{getTimeCategory(
+									customTimeControl.baseMinutes,
+									customTimeControl.incrementSeconds,
+								)}
+							</span>
+						)}
+					</button>
+				</div>
+				{isCustomTimeControl && (
+					<div className="flex flex-col gap-3 pt-2">
+						<label className="flex flex-col gap-1 text-xs text-(--text-secondary)">
+							<span className="flex justify-between">
+								<span>Base time</span>
+								<strong>{customTimeControl.baseMinutes} min</strong>
+							</span>
+							<input
+								type="range"
+								min="1"
+								max="60"
+								value={customTimeControl.baseMinutes}
+								onChange={(e) =>
+									setCustomTimeControl((current) => ({
+										...current,
+										baseMinutes: Number(e.target.value),
+									}))
+								}
+							/>
+						</label>
+						<label className="flex flex-col gap-1 text-xs text-(--text-secondary)">
+							<span className="flex justify-between">
+								<span>Increment</span>
+								<strong>{customTimeControl.incrementSeconds} sec</strong>
+							</span>
+							<input
+								type="range"
+								min="0"
+								max="30"
+								value={customTimeControl.incrementSeconds}
+								onChange={(e) =>
+									setCustomTimeControl((current) => ({
+										...current,
+										incrementSeconds: Number(e.target.value),
+									}))
+								}
+							/>
+						</label>
+						<p className="text-[10px] text-(--text-tertiary)">
+							{customTimeControl.baseMinutes} min + {customTimeControl.incrementSeconds} sec increment · {effectiveTimeControl.tag}
+						</p>
+						{!isValidTimeControl(customTimeControl.baseMinutes, customTimeControl.incrementSeconds) && (
+							<p className="text-[10px] text-red-400">Choose a valid time control.</p>
+						)}
+					</div>
+				)}
 							</div>
 						)}
 
@@ -625,6 +717,31 @@ export default function GameLobby() {
 									<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-(--text-tertiary) pointer-events-none">
 										XLM
 									</span>
+								</div>
+								{/* Quick-select wager amounts (#132) */}
+								<div
+									className="flex flex-wrap gap-2"
+									role="group"
+									aria-label="Quick wager amounts in XLM"
+								>
+									{WAGER_PRESETS.map((preset) => {
+										const active = wagerAmount === String(preset);
+										return (
+											<button
+												key={preset}
+												type="button"
+												aria-pressed={active}
+												onClick={() => setWagerAmount(String(preset))}
+												className={`px-3 py-1 text-xs font-semibold rounded-full border transition-all active:scale-95 ${
+													active
+														? "bg-(--accent-primary) border-(--accent-primary) text-white"
+														: "bg-(--bg-secondary) border-(--border) text-(--text) hover:border-(--accent-primary)"
+												}`}
+											>
+												{preset} XLM
+											</button>
+										);
+									})}
 								</div>
 								<p className="text-xs text-(--text-tertiary) leading-relaxed">
 									Winner takes the pot &#183; Draws refund both players

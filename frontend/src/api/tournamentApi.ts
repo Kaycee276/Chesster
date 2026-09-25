@@ -1,3 +1,5 @@
+import { csrfFetch } from "./gameApi";
+
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
 const API_URL = `${BACKEND_URL}api`;
 
@@ -30,6 +32,19 @@ export interface TournamentParticipant {
   status?: string | null;
 }
 
+export type TournamentMatchStatus = "pending" | "ready" | "live" | "completed";
+
+export interface TournamentBracketMatch {
+  id: string;
+  round: 1 | 2 | 3;
+  position: number;
+  player_one?: string | null;
+  player_two?: string | null;
+  winner?: string | null;
+  status: TournamentMatchStatus;
+  game_code?: string | null;
+}
+
 /** Standard backend JSON envelope, shared with gameApi responses. */
 interface ApiResponse<T> {
   success: boolean;
@@ -55,10 +70,19 @@ export const fetchTournaments = async (
 /** Fetch a single tournament with its registered participants. */
 export const fetchTournamentById = async (
   tournamentId: string | number,
-): Promise<Tournament & { participants?: TournamentParticipant[] }> => {
+): Promise<
+  Tournament & {
+    participants?: TournamentParticipant[];
+    bracket_matches?: TournamentBracketMatch[];
+  }
+> => {
   const res = await fetch(`${API_URL}/tournaments/${tournamentId}`);
-  const json: ApiResponse<Tournament & { participants?: TournamentParticipant[] }> =
-    await res.json();
+  const json: ApiResponse<
+    Tournament & {
+      participants?: TournamentParticipant[];
+      bracket_matches?: TournamentBracketMatch[];
+    }
+  > = await res.json();
   if (!json.success) throw new Error(json.error || "Failed to fetch tournament");
   return json.data;
 };
@@ -71,7 +95,7 @@ export const joinTournament = async (
   tournamentId: string | number,
   walletAddress: string,
 ): Promise<TournamentParticipant> => {
-  const res = await fetch(`${API_URL}/tournaments/${tournamentId}/register`, {
+  const res = await csrfFetch(`${API_URL}/tournaments/${tournamentId}/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ walletAddress }),

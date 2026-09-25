@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { MessageCircle, X, Send, Smile, Download, Check } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 import { boardToFen, moveToAlgebraic } from "../utils/chessUtils";
+import { sanitizeHtml } from "../utils/sanitize";
 
 const MAX_CHARS = 50;
 const QUICK_REACTIONS = ["Good luck!", "Nice move", "Well played", "Good game"];
@@ -176,7 +177,7 @@ export default function ChatPanel() {
 													{msg.playerColor}
 												</span>
 											)}
-											{msg.message}
+											<span dangerouslySetInnerHTML={{ __html: sanitizeHtml(msg.message) }} />
 										</div>
 									</div>
 								);

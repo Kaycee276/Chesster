@@ -40,6 +40,8 @@ jest.mock("../services/chessEngine", () => {
     isKingInCheck: jest.fn().mockReturnValue(false),
     isCheckmate: jest.fn().mockReturnValue(false),
     isStalemate: jest.fn().mockReturnValue(false),
+    getPositionKey: jest.fn().mockReturnValue("position-key"),
+    checkDrawConditions: jest.fn().mockReturnValue({ isDraw: false, canClaimDraw: false, reason: null }),
   };
 });
 

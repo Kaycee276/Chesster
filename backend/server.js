@@ -12,6 +12,7 @@ const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
 const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
+const puzzleRoutes = require("./routes/puzzleRoutes");
 const timerService = require("./services/timerService");
 const cronService = require("./services/cronService");
 const supabase = require("./config/supabase");
@@ -19,6 +20,8 @@ const logger = require("./utils/logger");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
 const { moderateMessage, checkSlowMode } = require("./services/chatService");
 const { JWT_SECRET } = require("./middleware/authMiddleware");
+const { createSocketRateLimiter } = require("./middleware/socketRateLimiter");
+const { csrfProtection } = require("./middleware/csrfMiddleware");
 const swaggerUi = require("swagger-ui-express");
 const swaggerDocument = require("./docs/swagger.json");
 
@@ -26,13 +29,22 @@ const app = express();
 const server = http.createServer(app);
 
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
+const corsOrigin = CORS_ORIGIN === "*" ? true : CORS_ORIGIN;
 
 const io = new Server(server, {
   cors: {
-    origin: CORS_ORIGIN,
-    methods: ["GET", "POST"],
+    origin: corsOrigin,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   },
 });
+
+// Rate limit WebSocket handshake/connection attempts per IP to prevent
+// connection-flooding DoS before a socket is ever allocated (Issue #244).
+const socketHandshakeLimiter = createSocketRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+});
+io.engine.use((req, res, next) => socketHandshakeLimiter(req, res, next));
 
 const PORT = process.env.PORT || 3001;
 
@@ -41,11 +53,17 @@ app.use(logger.requestMiddleware());
 
 app.use(
   cors({
-    origin: CORS_ORIGIN,
-    methods: ["GET", "POST"],
+    origin: corsOrigin,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    credentials: true,
   }),
 );
 app.use(express.json());
+app.use(csrfProtection);
+
+app.get("/api/csrf-token", (req, res) => {
+  res.json({ success: true });
+});
 
 // Swagger API documentation (Issue #152)
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
@@ -56,6 +74,7 @@ app.use("/api/escrow", escrowRoutes);
 app.use("/api", authRoutes);
 app.use("/api", botRoutes);
 app.use("/api", healthRoutes);
+app.use("/api/puzzles", puzzleRoutes);
 
 // Legacy health endpoint
 app.get("/health", (req, res) => {
@@ -135,6 +154,24 @@ io.on("connection", (socket) => {
 
   socket.on("leave-game", (gameCode) => {
     socket.leave(gameCode);
+  });
+
+  socket.on("spectator:reaction", ({ gameCode, emoji } = {}) => {
+    const allowedEmojis = new Set(["🔥", "👏", "♟️", "🤯", "💀"]);
+    if (!gameCode || !allowedEmojis.has(emoji)) return;
+
+    const now = Date.now();
+    const recentReactions = (socket.data.reactionTimestamps || []).filter(
+      (timestamp) => now - timestamp < 1000,
+    );
+    if (recentReactions.length >= 2) return;
+    socket.data.reactionTimestamps = [...recentReactions, now];
+
+    io.to(gameCode).emit("spectator:reaction", {
+      id: `${socket.id}-${now}`,
+      emoji,
+      xOffset: 10 + Math.floor(Math.random() * 80),
+    });
   });
 
   socket.on("disconnect", () => {
@@ -292,6 +329,11 @@ io.on("connection", (socket) => {
       logger.error("reconnect_game handler error", { error: err.message, stack: err.stack });
       sendAck(err.message || "Reconnection failed");
     }
+  // Relay a rematch challenge to the opponent (Issue #254). No persisted
+  // state — purely a transient notification between the two live sockets.
+  socket.on("request-rematch", ({ gameCode, playerColor }) => {
+    if (!gameCode || !["white", "black"].includes(playerColor)) return;
+    socket.to(gameCode).emit("rematch-requested", { gameCode, playerColor });
   });
 
   socket.on("send-chat", async ({ gameCode, playerColor, message }) => {

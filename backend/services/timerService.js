@@ -180,6 +180,7 @@ class TimerService {
 			try {
 				const gameModel = require("../models/gameModel");
 				const game = await gameModel.endByFlag(gameCode, loser);
+				await require("../models/userModel").invalidateProfilesForGame(game);
 				if (this.io && game) {
 					this.io.to(gameCode).emit("game-update", game);
 					this.io.to(gameCode).emit("flag-fall", { gameCode, loser, winner: game.winner });
@@ -223,6 +224,7 @@ class TimerService {
 				try {
 					const gameModel = require("../models/gameModel");
 					const game = await gameModel.endByTime(gameCode);
+					await require("../models/userModel").invalidateProfilesForGame(game);
 					if (this.io && game) {
 						this.io.to(gameCode).emit("game-update", game);
 					}
@@ -264,6 +266,7 @@ class TimerService {
 			try {
 				const gameModel = require("../models/gameModel");
 				const game = await gameModel.forfeitByDisconnect(gameCode, color);
+				await require("../models/userModel").invalidateProfilesForGame(game);
 				this.clearClock(gameCode);
 				if (this.io && game) {
 					this.io.to(gameCode).emit("game-update", game);

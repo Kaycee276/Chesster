@@ -1,3 +1,43 @@
+# [1.21.0](https://github.com/Kaycee276/Chesster/compare/v1.20.0...v1.21.0) (2026-09-25)
+
+
+### Features
+
+* **frontend:** add right-click arrows and square highlights to the board ([23482a5](https://github.com/Kaycee276/Chesster/commit/23482a524797106a324bb80caca97d7ba830b6bc))
+
+# [1.20.0](https://github.com/Kaycee276/Chesster/compare/v1.19.0...v1.20.0) (2026-09-25)
+
+
+### Features
+
+* harden chat and add tournament health coverage ([86b8634](https://github.com/Kaycee276/Chesster/commit/86b86341165a8f15b1bf09767ee1544daadf0abb))
+
+# [1.19.0](https://github.com/Kaycee276/Chesster/compare/v1.18.0...v1.19.0) (2026-09-25)
+
+
+### Features
+
+* **frontend:** add network/offline connection alert banner ([86ea021](https://github.com/Kaycee276/Chesster/commit/86ea021c0077610379ee5a1666be91bffc59f52c)), closes [#256](https://github.com/Kaycee276/Chesster/issues/256)
+
+# [1.18.0](https://github.com/Kaycee276/Chesster/compare/v1.17.0...v1.18.0) (2026-09-25)
+
+
+### Features
+
+* **backend:** add IP rate limiting for WebSocket handshakes ([25cd6c8](https://github.com/Kaycee276/Chesster/commit/25cd6c83383f2fc300031c6ba54722f7fdd7d240)), closes [#244](https://github.com/Kaycee276/Chesster/issues/244)
+* **backend:** implement threefold repetition and 50-move draw detection ([8f87590](https://github.com/Kaycee276/Chesster/commit/8f87590b2c8c67956b62949eaf3396ab6d0dbb32)), closes [#242](https://github.com/Kaycee276/Chesster/issues/242)
+* **frontend:** add PGN import and visual move replay analyzer ([9335a83](https://github.com/Kaycee276/Chesster/commit/9335a8358869e051ee92d8416de0e0323ddf1788))
+* **frontend:** add post-game result modal with PGN copy, rematch and share ([47dfa08](https://github.com/Kaycee276/Chesster/commit/47dfa0862f640d1e747de2e4835d49e3918a38ae)), closes [#254](https://github.com/Kaycee276/Chesster/issues/254)
+
+# [1.17.0](https://github.com/Kaycee276/Chesster/compare/v1.16.0...v1.17.0) (2026-09-25)
+
+
+### Features
+
+* add spectator reactions, themes, controls, and csrf ([7dd4527](https://github.com/Kaycee276/Chesster/commit/7dd4527b58147e74d21a8c680e287bdcc588af22))
+* **frontend:** add low-time cue, autoplay unlock, and sound service tests ([7bfeda1](https://github.com/Kaycee276/Chesster/commit/7bfeda1f0fbd0c56183e6323d62972f793fe4996))
+* **frontend:** add touch drag-and-drop piece movement with haptic feedback ([fb8db99](https://github.com/Kaycee276/Chesster/commit/fb8db997b82c67bb21562aa4627a487ac7d64896))
+
 # [1.16.0](https://github.com/Kaycee276/Chesster/compare/v1.15.0...v1.16.0) (2026-09-24)
 
 
