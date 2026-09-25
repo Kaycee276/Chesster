@@ -44,7 +44,7 @@ describe("ArchivalService", () => {
 
     expect(repository.fetchBatch).toHaveBeenCalledWith(cutoff, ARCHIVE_BATCH_SIZE);
     expect(events).toEqual(["upload", "purge"]);
-    expect(repository.purge).toHaveBeenCalledWith([game.id]);
+    expect(repository.purge).toHaveBeenCalledWith([game.id], cutoff);
     const input = s3Client.send.mock.calls[0][0].input;
     expect(input).toMatchObject({
       Bucket: "chesster-archives",

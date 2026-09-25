@@ -1,6 +1,9 @@
 -- Purge an uploaded archive batch atomically. Deleting games cascades to
 -- moves and match_audit_logs; chat uses game_code and is removed explicitly.
-CREATE OR REPLACE FUNCTION purge_archived_games(p_game_ids UUID[])
+CREATE OR REPLACE FUNCTION purge_archived_games(
+  p_game_ids UUID[],
+  p_cutoff_date TIMESTAMPTZ
+)
 RETURNS INTEGER
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -18,22 +21,27 @@ BEGIN
   PERFORM id
   FROM games
   WHERE id = ANY(p_game_ids)
+    AND created_at < p_cutoff_date
     AND status IN ('finished', 'completed')
   FOR UPDATE;
 
   IF (SELECT COUNT(*) FROM games
       WHERE id = ANY(p_game_ids)
+        AND created_at < p_cutoff_date
         AND status IN ('finished', 'completed')) <> cardinality(p_game_ids) THEN
     RAISE EXCEPTION 'archival batch changed before purge';
   END IF;
 
   DELETE FROM chat_messages
   WHERE game_code IN (
-    SELECT game_code FROM games WHERE id = ANY(p_game_ids)
+    SELECT game_code FROM games
+    WHERE id = ANY(p_game_ids)
+      AND created_at < p_cutoff_date
   );
 
   DELETE FROM games
   WHERE id = ANY(p_game_ids)
+    AND created_at < p_cutoff_date
     AND status IN ('finished', 'completed');
   GET DIAGNOSTICS purged_count = ROW_COUNT;
 
@@ -46,4 +54,4 @@ END;
 $$;
 
 -- DOWN
-DROP FUNCTION IF EXISTS purge_archived_games(UUID[]);
+DROP FUNCTION IF EXISTS purge_archived_games(UUID[], TIMESTAMPTZ);

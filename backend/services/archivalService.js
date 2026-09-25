@@ -53,9 +53,10 @@ class SupabaseArchiveRepository {
     }));
   }
 
-  async purge(gameIds) {
+  async purge(gameIds, cutoffDate) {
     const { data, error } = await this.client.rpc("purge_archived_games", {
       p_game_ids: gameIds,
+      p_cutoff_date: cutoffDate.toISOString(),
     });
     if (error) throw error;
     return data;
@@ -115,7 +116,10 @@ class ArchivalService {
         ContentEncoding: "gzip",
       }));
 
-      const purged = await this.repository.purge(games.map((game) => game.id));
+      const purged = await this.repository.purge(
+        games.map((game) => game.id),
+        cutoffDate,
+      );
       if (purged !== games.length) {
         throw new Error(`Archived ${games.length} games but purged ${purged}`);
       }
