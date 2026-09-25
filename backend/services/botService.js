@@ -1,5 +1,7 @@
-const { spawn } = require("child_process");
-const chessEngine = require("./chessEngine");
+const os = require("os");
+const path = require("path");
+const { Worker } = require("worker_threads");
+const { parseUciMove, getLegalMoves } = require("./botHeuristics");
 
 // Path to a UCI-speaking Stockfish binary. Not bundled with this repo (the
 // official `stockfish` npm package ships 100MB+ of prebuilt WASM binaries
@@ -10,17 +12,71 @@ const chessEngine = require("./chessEngine");
 const STOCKFISH_PATH = process.env.STOCKFISH_PATH || "stockfish";
 const ENGINE_MOVE_TIME_MS = parseInt(process.env.STOCKFISH_MOVE_TIME_MS || "800", 10);
 
-// Difficulty presets map to the UCI "Skill Level" option (0-20).
-const DIFFICULTY_SKILL = { easy: 2, medium: 10, hard: 18, maximum: 20 };
+// Hard ceiling for a single bot move, including engine start-up. A worker
+// that hasn't answered by then is terminated (along with its engine) and
+// replaced, so a hanging engine query can never pile up requests.
+const BOT_MOVE_TIMEOUT_MS = parseInt(process.env.BOT_MOVE_TIMEOUT_MS || "3000", 10);
+// Requests waiting for a free worker beyond this are rejected (HTTP 503)
+// instead of queueing unbounded work behind a saturated pool.
+const BOT_MAX_QUEUE_SIZE = parseInt(process.env.BOT_MAX_QUEUE_SIZE || "100", 10);
+
+// After this many worker crashes in a row (e.g. a broken worker script) the
+// pool stops respawning and fails queued work instead of crash-looping.
+const MAX_CONSECUTIVE_CRASHES = 5;
+
+const WORKER_SCRIPT = path.join(__dirname, "..", "workers", "stockfishWorker.js");
+
+function cpuCount() {
+	return typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
+}
+
+/** Default pool size: up to 4 workers, leaving one core for the main event loop. */
+function defaultPoolSize() {
+	return Math.max(1, Math.min(4, cpuCount() - 1));
+}
+
+// Expected, steady-state fallback reasons that shouldn't be logged per move.
+const QUIET_FALLBACK_REASONS = new Set(["engine unavailable", "no engine configured"]);
+
+/**
+ * Difficulty presets -> UCI "Skill Level" (0-20) and search depth.
+ * Beginner / Intermediate / Master are the single-player bot tiers; the
+ * older easy/medium/hard/maximum names are kept for existing clients.
+ */
+const DIFFICULTY_PRESETS = {
+	beginner: { skillLevel: 1, depth: 3 },
+	easy: { skillLevel: 2, depth: 5 },
+	intermediate: { skillLevel: 8, depth: 8 },
+	medium: { skillLevel: 10, depth: 10 },
+	hard: { skillLevel: 18, depth: 16 },
+	master: { skillLevel: 20, depth: 20 },
+	maximum: { skillLevel: 20, depth: 22 },
+};
+
+/** Map a 0-20 skill level onto a search depth consistent with the presets. */
+function depthForSkill(skillLevel) {
+	return Math.max(1, Math.min(22, Math.round(3 + skillLevel * 0.9)));
+}
+
+/**
+ * Resolve a difficulty (preset name, case-insensitive, or 0-20 skill level)
+ * into the engine parameters used for the search.
+ * @returns {{ skillLevel: number, depth: number }}
+ */
+function resolveDifficulty(difficulty) {
+	if (typeof difficulty === "number" && Number.isFinite(difficulty)) {
+		const skillLevel = Math.max(0, Math.min(20, Math.round(difficulty)));
+		return { skillLevel, depth: depthForSkill(skillLevel) };
+	}
+	if (typeof difficulty === "string") {
+		const preset = DIFFICULTY_PRESETS[difficulty.trim().toLowerCase()];
+		if (preset) return { ...preset };
+	}
+	return { ...DIFFICULTY_PRESETS.medium };
+}
 
 function resolveSkillLevel(difficulty) {
-	if (typeof difficulty === "number") {
-		return Math.max(0, Math.min(20, Math.round(difficulty)));
-	}
-	if (typeof difficulty === "string" && DIFFICULTY_SKILL[difficulty] !== undefined) {
-		return DIFFICULTY_SKILL[difficulty];
-	}
-	return DIFFICULTY_SKILL.medium;
+	return resolveDifficulty(difficulty).skillLevel;
 }
 
 /**
@@ -58,166 +114,261 @@ function boardToFEN(board, turn, moveCount = 0) {
 	return `${placement} ${active} - - 0 ${fullmove}`;
 }
 
-/** square like "e2" -> [row, col] in this project's board coordinates. */
-function squareToCoords(square) {
-	const file = square.charCodeAt(0) - "a".charCodeAt(0);
-	const rank = parseInt(square[1], 10);
-	return [8 - rank, file];
+function botError(message, code) {
+	const err = new Error(message);
+	err.code = code;
+	return err;
 }
 
-/** Parse a UCI move string ("e2e4", "e7e8q") into { from, to, promotion }. */
-function parseUciMove(uci) {
-	if (!uci || uci.length < 4) return null;
-	const from = squareToCoords(uci.slice(0, 2));
-	const to = squareToCoords(uci.slice(2, 4));
-	const promotion = uci.length > 4 ? uci[4] : null;
-	return { from, to, promotion };
-}
+/**
+ * Fixed-size pool of worker threads running backend/workers/stockfishWorker.js
+ * (Issue #241). Move requests are queued FIFO and dispatched to idle workers,
+ * so engine searches never run on the main HTTP/WebSocket event loop.
+ *
+ * Workers are spawned lazily on first use and are unref'd while idle, so an
+ * unused pool costs nothing and never keeps the process alive.
+ */
+class BotWorkerPool {
+	constructor({
+		size = defaultPoolSize(),
+		workerScript = WORKER_SCRIPT,
+		workerData = {},
+		taskTimeoutMs = BOT_MOVE_TIMEOUT_MS,
+		maxQueueSize = BOT_MAX_QUEUE_SIZE,
+	} = {}) {
+		// Never run more engine threads than there are cores to run them.
+		this.size = Math.max(1, Math.min(Math.floor(size) || 1, cpuCount()));
+		this.workerScript = workerScript;
+		this.workerData = workerData;
+		this.taskTimeoutMs = taskTimeoutMs;
+		this.maxQueueSize = maxQueueSize;
 
-/** Enumerate all legal moves for `color` on `board` using the existing rules engine. */
-function getLegalMoves(board, color, lastMove) {
-	const moves = [];
-	for (let r = 0; r < 8; r++) {
-		for (let c = 0; c < 8; c++) {
-			const piece = board[r][c];
-			if (piece === ".") continue;
-			const isOwn = color === "white" ? piece === piece.toUpperCase() : piece === piece.toLowerCase();
-			if (!isOwn) continue;
+		this.workers = [];
+		this.queue = [];
+		this.nextTaskId = 1;
+		this.consecutiveCrashes = 0;
+		this.destroyed = false;
+	}
 
-			for (let tr = 0; tr < 8; tr++) {
-				for (let tc = 0; tc < 8; tc++) {
-					const result = chessEngine.isValidMove(board, [r, c], [tr, tc], color, lastMove);
-					if (result.valid) {
-						const isPromotion = piece.toLowerCase() === "p" && (tr === 0 || tr === 7);
-						moves.push({ from: [r, c], to: [tr, tc], promotion: isPromotion ? "q" : null, piece });
-					}
-				}
+	/** Spawn every worker up front instead of on the first request. */
+	warmup() {
+		this._ensureWorkers();
+	}
+
+	/**
+	 * Queue a move calculation.
+	 * @param {object} payload - { fen, board, turn, lastMove, skillLevel, depth, moveTimeMs }
+	 * @returns {Promise<{ move, uci, engine, fallbackReason?, elapsedMs }>}
+	 */
+	executeMove(payload) {
+		return new Promise((resolve, reject) => {
+			if (this.destroyed) {
+				return reject(botError("Bot worker pool has been shut down", "BOT_POOL_CLOSED"));
 			}
-		}
-	}
-	return moves;
-}
+			if (this.queue.length >= this.maxQueueSize) {
+				return reject(botError("Bot engine is busy, please retry shortly", "BOT_QUEUE_FULL"));
+			}
 
-const PIECE_VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
-
-/**
- * Heuristic fallback move picker, used when no Stockfish binary is
- * reachable. Not engine-strength, but never illegal and scales roughly
- * with skillLevel: higher skill prefers capturing the most valuable piece,
- * lower skill picks uniformly at random among legal moves.
- */
-function pickHeuristicMove(board, color, lastMove, skillLevel) {
-	const moves = getLegalMoves(board, color, lastMove);
-	if (moves.length === 0) return null;
-
-	const randomness = Math.max(0, 1 - skillLevel / 20); // 1 = fully random, 0 = always best capture
-	if (Math.random() < randomness) {
-		return moves[Math.floor(Math.random() * moves.length)];
+			this.queue.push({ id: this.nextTaskId++, payload, resolve, reject, timer: null });
+			this._ensureWorkers();
+			this._drain();
+		});
 	}
 
-	let best = moves[0];
-	let bestValue = -1;
-	for (const move of moves) {
-		const target = board[move.to[0]][move.to[1]];
-		const value = target === "." ? 0 : (PIECE_VALUE[target.toLowerCase()] || 0);
-		if (value > bestValue) {
-			bestValue = value;
-			best = move;
+	stats() {
+		const busy = this.workers.filter((slot) => slot.task).length;
+		return { size: this.size, workers: this.workers.length, busy, idle: this.workers.length - busy, queued: this.queue.length };
+	}
+
+	/** Reject all pending work and terminate every worker (and its engine). */
+	async destroy() {
+		this.destroyed = true;
+		const closed = botError("Bot worker pool has been shut down", "BOT_POOL_CLOSED");
+		for (const task of this.queue.splice(0)) task.reject(closed);
+		await Promise.all([...this.workers].map((slot) => this._retire(slot, closed)));
+	}
+
+	_ensureWorkers() {
+		while (!this.destroyed && this.workers.length < this.size) {
+			this._spawnWorker();
 		}
 	}
-	return best;
-}
 
-/**
- * Ask a locally installed Stockfish binary (UCI protocol over stdio) for
- * its best move in the given position. Resolves to a UCI move string
- * (e.g. "e2e4") or rejects if the engine isn't available / times out.
- */
-function askStockfish(fen, skillLevel) {
-	return new Promise((resolve, reject) => {
-		let engine;
-		try {
-			engine = spawn(STOCKFISH_PATH, [], { stdio: ["pipe", "pipe", "pipe"] });
-		} catch (err) {
-			return reject(err);
+	_spawnWorker() {
+		const worker = new Worker(this.workerScript, { workerData: this.workerData });
+		const slot = { worker, task: null, enginePid: null, retired: false };
+
+		worker.on("message", (message) => this._onMessage(slot, message));
+		worker.on("error", (err) => this._replace(slot, err));
+		worker.on("exit", (code) => {
+			this._replace(slot, botError(`Bot worker exited unexpectedly (code ${code})`, "BOT_WORKER_EXITED"));
+		});
+		// Must come after the listeners: adding a "message" listener re-refs.
+		worker.unref();
+
+		this.workers.push(slot);
+		return slot;
+	}
+
+	_drain() {
+		for (const slot of this.workers) {
+			if (this.queue.length === 0) return;
+			if (!slot.task && !slot.retired) this._dispatch(slot, this.queue.shift());
+		}
+	}
+
+	_dispatch(slot, task) {
+		slot.task = task;
+		slot.worker.ref();
+		task.timer = setTimeout(() => {
+			this._replace(slot, botError(`Bot move exceeded ${this.taskTimeoutMs}ms`, "BOT_TIMEOUT"));
+		}, this.taskTimeoutMs);
+
+		slot.worker.postMessage({
+			type: "task",
+			id: task.id,
+			payload: { ...task.payload, deadline: Date.now() + this.taskTimeoutMs },
+		});
+	}
+
+	_onMessage(slot, message) {
+		if (!message) return;
+		if (message.type === "engine-pid") {
+			slot.enginePid = message.pid || null;
+			return;
+		}
+		if (message.type !== "result" || !slot.task || slot.task.id !== message.id) return;
+
+		const task = slot.task;
+		this._release(slot);
+		this.consecutiveCrashes = 0;
+		if (message.error) {
+			task.reject(botError(message.error.message, message.error.code || "BOT_WORKER_ERROR"));
+		} else {
+			task.resolve(message.result);
+		}
+		this._drain();
+	}
+
+	_release(slot) {
+		clearTimeout(slot.task.timer);
+		slot.task = null;
+		slot.worker.unref();
+	}
+
+	/** Tear a worker down, failing its in-flight task, and start a fresh one. */
+	_replace(slot, err) {
+		if (slot.retired) return;
+		this._retire(slot, err);
+
+		if (err.code !== "BOT_TIMEOUT") this.consecutiveCrashes += 1;
+		if (this.consecutiveCrashes >= MAX_CONSECUTIVE_CRASHES) {
+			// Stop the crash loop; the next executeMove() tries fresh workers.
+			this.consecutiveCrashes = 0;
+			if (this.workers.length === 0) {
+				for (const task of this.queue.splice(0)) task.reject(err);
+			}
+			return;
 		}
 
-		let buffer = "";
-		let settled = false;
+		this._ensureWorkers();
+		this._drain();
+	}
 
-		const finish = (err, result) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timeout);
+	_retire(slot, err) {
+		if (slot.retired) return Promise.resolve();
+		slot.retired = true;
+		this.workers = this.workers.filter((s) => s !== slot);
+
+		if (slot.task) {
+			const task = slot.task;
+			this._release(slot);
+			task.reject(err);
+		}
+
+		// The engine is a child process of this Node process, not of the
+		// worker thread, so terminating the worker alone would orphan it.
+		if (slot.enginePid) {
 			try {
-				engine.stdin.end();
-				engine.kill();
-			} catch (_) { /* already exited */ }
-			if (err) reject(err);
-			else resolve(result);
-		};
+				process.kill(slot.enginePid, "SIGKILL");
+			} catch (_) { /* already gone */ }
+			slot.enginePid = null;
+		}
 
-		const timeout = setTimeout(() => finish(new Error("Stockfish timed out")), ENGINE_MOVE_TIME_MS + 5000);
-
-		engine.on("error", (err) => finish(err));
-		engine.on("exit", (code) => {
-			if (!settled && code !== 0) finish(new Error(`Stockfish exited with code ${code}`));
-		});
-
-		engine.stdout.on("data", (chunk) => {
-			buffer += chunk.toString();
-			const lines = buffer.split("\n");
-			buffer = lines.pop();
-
-			for (const line of lines) {
-				if (line.startsWith("bestmove")) {
-					const parts = line.trim().split(/\s+/);
-					finish(null, parts[1]);
-					return;
-				}
-			}
-		});
-
-		engine.stdin.write("uci\n");
-		engine.stdin.write(`setoption name Skill Level value ${skillLevel}\n`);
-		engine.stdin.write("isready\n");
-		engine.stdin.write(`position fen ${fen}\n`);
-		engine.stdin.write(`go movetime ${ENGINE_MOVE_TIME_MS}\n`);
-	});
+		slot.worker.removeAllListeners();
+		slot.worker.on("error", () => {});
+		return slot.worker.terminate().catch(() => {});
+	}
 }
 
 class BotService {
+	constructor(pool) {
+		this._pool = pool || null;
+	}
+
+	/** The shared worker pool, created on first use. */
+	get pool() {
+		if (!this._pool) {
+			this._pool = new BotWorkerPool({
+				size: parseInt(process.env.BOT_WORKER_POOL_SIZE || "", 10) || defaultPoolSize(),
+				workerData: { enginePath: STOCKFISH_PATH },
+			});
+		}
+		return this._pool;
+	}
+
 	/**
-	 * Compute the bot's move for a single-player game.
+	 * Compute the bot's move for a single-player game. The search runs in a
+	 * pooled worker thread (Stockfish when available, otherwise a heuristic
+	 * picker) and is capped at BOT_MOVE_TIMEOUT_MS.
 	 * @param {string[][]} board - internal board representation
 	 * @param {"white"|"black"} turn - color the bot is playing
 	 * @param {object|null} lastMove - { from, to, piece } of the last move (for en passant)
-	 * @param {string|number} difficulty - "easy"|"medium"|"hard"|"maximum" or a 0-20 skill level
+	 * @param {string|number} difficulty - "beginner"|"intermediate"|"master" (or legacy
+	 *   "easy"|"medium"|"hard"|"maximum"), or a 0-20 skill level
 	 * @param {number} moveCount
-	 * @returns {Promise<{ from:number[], to:number[], promotion:string|null, engine:"stockfish"|"heuristic" }|null>}
+	 * @returns {Promise<{ from:number[], to:number[], promotion:string|null, uci:string,
+	 *   engine:"stockfish"|"heuristic", skillLevel:number, depth:number }|null>}
+	 * @throws {Error} with code BOT_TIMEOUT or BOT_QUEUE_FULL when the pool can't answer in time
 	 */
 	async getBestMove(board, turn, lastMove = null, difficulty = "medium", moveCount = 0) {
-		const skillLevel = resolveSkillLevel(difficulty);
+		const { skillLevel, depth } = resolveDifficulty(difficulty);
 		const fen = boardToFEN(board, turn, moveCount);
 
-		try {
-			const uciMove = await askStockfish(fen, skillLevel);
-			if (uciMove && uciMove !== "(none)") {
-				const parsed = parseUciMove(uciMove);
-				if (parsed) return { ...parsed, engine: "stockfish", skillLevel };
-			}
-		} catch (err) {
-			console.warn(`[BotService] Stockfish unavailable (${err.message}), falling back to heuristic engine`);
+		const result = await this.pool.executeMove({
+			fen,
+			board,
+			turn,
+			lastMove,
+			skillLevel,
+			depth,
+			moveTimeMs: ENGINE_MOVE_TIME_MS,
+		});
+
+		if (result.fallbackReason && !QUIET_FALLBACK_REASONS.has(result.fallbackReason)) {
+			console.warn(`[BotService] Stockfish unavailable (${result.fallbackReason}), falling back to heuristic engine`);
 		}
 
-		const heuristicMove = pickHeuristicMove(board, turn, lastMove, skillLevel);
-		if (!heuristicMove) return null;
-		return { ...heuristicMove, engine: "heuristic", skillLevel };
+		if (!result.move) return null;
+		return { ...result.move, uci: result.uci, engine: result.engine, skillLevel, depth };
+	}
+
+	/** Terminate the worker pool (graceful shutdown / tests). */
+	async shutdown() {
+		if (this._pool) {
+			const pool = this._pool;
+			this._pool = null;
+			await pool.destroy();
+		}
 	}
 }
 
 module.exports = new BotService();
+module.exports.BotService = BotService;
+module.exports.BotWorkerPool = BotWorkerPool;
+module.exports.DIFFICULTY_PRESETS = DIFFICULTY_PRESETS;
 module.exports.boardToFEN = boardToFEN;
 module.exports.parseUciMove = parseUciMove;
 module.exports.getLegalMoves = getLegalMoves;
+module.exports.resolveDifficulty = resolveDifficulty;
 module.exports.resolveSkillLevel = resolveSkillLevel;
