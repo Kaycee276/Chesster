@@ -1,6 +1,10 @@
 const gameModel = require("../models/gameModel");
 const userModel = require("../models/userModel");
 const timerService = require("../services/timerService");
+const replayService = require("../services/replayService");
+
+// Comment line sent periodically so proxies don't drop an idle replay stream.
+const REPLAY_HEARTBEAT_MS = 15000;
 const auditService = require("../services/auditService");
 
 const AUDIT_FORMATS = new Set(["json", "csv"]);
@@ -229,6 +233,94 @@ class GameController {
 	}
 
 	/**
+	 * GET /api/games/:id/stream?speed=1|2|5 (Issue #245)
+	 * Replays a game's moves over Server-Sent Events, pacing each `move`
+	 * event by the move's original duration divided by the speed multiplier.
+	 * Events: `start` (game metadata), `move` (one per move, `id` = move
+	 * index, so clients can resume with Last-Event-ID) and `end` (result).
+	 */
+	async streamGameReplay(req, res) {
+		const { id } = req.params;
+		const speed = replayService.parseSpeed(req.query.speed);
+		if (speed === null) {
+			return res.status(400).json({
+				success: false,
+				error: `speed must be a number between ${replayService.MIN_SPEED} and ${replayService.MAX_SPEED}`,
+			});
+		}
+
+		let game;
+		let frames;
+		try {
+			game = await gameModel.getGame(id);
+			if (!game) throw new Error("Game not found");
+			frames = replayService.buildReplayFrames(game, await gameModel.getMoves(id));
+		} catch (error) {
+			return res.status(404).json({ success: false, error: error.message });
+		}
+
+		// Resume after the last move the client saw (reconnect or ?from=N).
+		const resumeFrom = parseInt(req.headers["last-event-id"] ?? req.query.from ?? "0", 10);
+		let next = Number.isInteger(resumeFrom) ? Math.min(Math.max(resumeFrom, 0), frames.length) : 0;
+
+		res.writeHead(200, {
+			"Content-Type": "text/event-stream; charset=utf-8",
+			"Cache-Control": "no-cache, no-transform",
+			Connection: "keep-alive",
+			"X-Accel-Buffering": "no",
+		});
+
+		let closed = false;
+		let timer = null;
+		const heartbeat = setInterval(() => res.write(": keep-alive\n\n"), REPLAY_HEARTBEAT_MS);
+
+		const cleanup = () => {
+			closed = true;
+			clearTimeout(timer);
+			clearInterval(heartbeat);
+		};
+		// "close" fires when the client disconnects (and after res.end()).
+		res.on("close", cleanup);
+
+		const send = (event, onFlushed) => {
+			if (res.write(replayService.formatSSE(event))) onFlushed();
+			else res.once("drain", onFlushed);
+		};
+
+		const scheduleNext = () => {
+			if (closed) return;
+			if (next >= frames.length) {
+				send({
+					event: "end",
+					data: { gameCode: game.game_code, status: game.status, winner: game.winner || null, endReason: game.end_reason || null },
+				}, () => {});
+				cleanup();
+				res.end();
+				return;
+			}
+
+			const frame = frames[next];
+			timer = setTimeout(() => {
+				if (closed) return;
+				next += 1;
+				send({ event: "move", id: frame.index, data: frame }, scheduleNext);
+			}, replayService.replayDelayMs(frame.durationMs, speed));
+		};
+
+		res.write(`retry: 3000\n\n`);
+		send({
+			event: "start",
+			data: {
+				gameCode: game.game_code,
+				speed,
+				totalMoves: frames.length,
+				resumeFrom: next,
+				players: { white: game.player_white_address || null, black: game.player_black_address || null },
+				timeControlSeconds: game.time_control_seconds ?? null,
+				incrementSeconds: game.time_increment_seconds ?? null,
+				startedAt: game.game_started_at || null,
+			},
+		}, scheduleNext);
 	 * GET /api/games/:id/audit-export?format=json|csv&download=true (Issue #243)
 	 * Forensic audit package for dispute resolution. `:id` is the game UUID or
 	 * game code. Restricted to the match's two players and platform admins.
