@@ -2592,3 +2592,54 @@ fn test_resolve_match_with_used_nonce() {
         assert_eq!(m.status, MatchStatus::Resolved);
     }
 }
+
+#[test]
+fn test_milestone_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+
+    token_admin_client.mint(&player1, &100000);
+    token_admin_client.mint(&player2, &100000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    approve(&env, &token, &player1, &contract_id, 100000);
+    approve(&env, &token, &player2, &contract_id, 100000);
+
+    for i in 1..=6 {
+        let game_code = String::from_str(&env, &alloc::format!("STREAK_GAME_{}", i));
+        client.create_match(&game_code, &player1, &token.address, &100);
+        client.join_match(&game_code, &player2);
+        client.resolve_match(&game_code, &Some(player1.clone()));
+    }
+
+    let events = env.events().all();
+    let mut streak5_found = false;
+    for (_contract_id, topic, payload) in events.into_iter() {
+        if topic.len() == 2 {
+            let t0: Result<Symbol, _> = topic.get(0).unwrap().try_into_val(&env);
+            if let Ok(sym) = t0 {
+                if sym == symbol_short!("milestone") {
+                    let p: Address = topic.get(1).unwrap().try_into_val(&env).unwrap();
+                    assert_eq!(p, player1);
+                    let (streak, m_type): (u32, Symbol) = payload.try_into_val(&env).unwrap();
+                    assert_eq!(streak, 5);
+                    assert_eq!(m_type, symbol_short!("streak5"));
+                    streak5_found = true;
+                }
+            }
+        }
+    }
+    assert!(streak5_found, "milestone event for streak 5 not found");
+}
