@@ -134,6 +134,18 @@ pub enum EscrowError {
     CannotConfirmOwnProposal = 48,
     /// Caller is not an authorized participant in this match (Issue #290).
     UnauthorizedPlayer = 49,
+    /// Submitted account nonce does not match expected incremented sequence (Issue #284).
+    InvalidNonce = 44,
+}
+
+/// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepositAuthorizationPayload {
+    pub player: Address,
+    pub game_code: String,
+    pub amount: i128,
+    pub nonce: u64,
 }
 
 pub type Error = EscrowError;
@@ -618,6 +630,8 @@ pub struct PlatformMetrics {
     pub active_matches_count: u32,
     pub total_volume_xlm: i128,
     pub total_rake_collected: i128,
+    /// Account deposit sequence nonce for replay protection (Issue #284).
+    AccountNonce(Address),
 }
 
 /// Chesster Escrow Smart Contract instance.
@@ -830,6 +844,63 @@ impl ChessterEscrow {
             .instance()
             .get(&Symbol::new(&env, "nonce"))
             .unwrap_or(0)
+    }
+
+    /// Retrieves current nonce for an account (Issue #284).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `account` - Account address to query.
+    ///
+    /// # Returns
+    /// * `u64` - Current account deposit nonce.
+    pub fn get_account_nonce(env: Env, account: Address) -> u64 {
+        let key = DataKey::AccountNonce(account);
+        env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    /// Retrieves current deposit sequence nonce for a player (Issue #284).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `player` - Player address to query.
+    ///
+    /// # Returns
+    /// * `u64` - Current player deposit nonce.
+    pub fn get_player_nonce(env: Env, player: Address) -> u64 {
+        Self::get_account_nonce(env, player)
+    }
+
+    /// Verifies that expected nonce equals current nonce + 1 and increments it in persistent storage (Issue #284).
+    fn verify_and_increment_nonce(
+        env: &Env,
+        account: &Address,
+        expected_nonce: u64,
+    ) -> Result<(), EscrowError> {
+        let key = DataKey::AccountNonce(account.clone());
+        let current_nonce: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+        if expected_nonce != current_nonce + 1 {
+            return Err(EscrowError::InvalidNonce);
+        }
+        env.storage().persistent().set(&key, &expected_nonce);
+        Self::bump_entry_ttl(env, &key);
+        Ok(())
+    }
+
+    /// Increments player nonce after verifying authorization and expected nonce sequence (Issue #284).
+    pub fn increment_player_nonce(env: Env, player: Address, expected_nonce: u64) {
+        player.require_auth();
+        if let Err(e) = Self::verify_and_increment_nonce(&env, &player, expected_nonce) {
+            panic_with_error!(&env, e);
+        }
+    }
+
+    /// Verifies a deposit authorization payload and protects against replay (Issue #284).
+    pub fn verify_deposit_authorization(env: Env, payload: DepositAuthorizationPayload) {
+        payload.player.require_auth();
+        if let Err(e) = Self::verify_and_increment_nonce(&env, &payload.player, payload.nonce) {
+            panic_with_error!(&env, e);
+        }
     }
 
     /// Retrieves registered coordinator address.
@@ -3777,7 +3848,8 @@ impl ChessterEscrow {
         env.storage().persistent().set(&key, &record);
         Self::bump_entry_ttl(&env, &key);
 
-        env.events().publish((symbol_short!("rating_up"), player), rating);
+        env.events()
+            .publish((symbol_short!("rating_up"), player), rating);
     }
 
     /// Commits an official Elo rating record using an Ed25519 signature from the coordinator.
@@ -3807,7 +3879,8 @@ impl ChessterEscrow {
         env.storage().persistent().set(&key, &record);
         Self::bump_entry_ttl(&env, &key);
 
-        env.events().publish((symbol_short!("rating_up"), player), rating);
+        env.events()
+            .publish((symbol_short!("rating_up"), player), rating);
     }
 
     /// Queries the committed on-chain rating record for a player, if one exists.

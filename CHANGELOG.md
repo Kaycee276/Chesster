@@ -1,3 +1,10 @@
+# [1.23.0](https://github.com/Kaycee276/Chesster/compare/v1.22.0...v1.23.0) (2026-09-26)
+
+
+### Features
+
+* **contracts:** implement nonce-based replay protection for player deposit signatures ([90c3515](https://github.com/Kaycee276/Chesster/commit/90c35156945a72108c3da08a139315ff95d79624))
+
 # [1.22.0](https://github.com/Kaycee276/Chesster/compare/v1.21.0...v1.22.0) (2026-09-26)
 
 
