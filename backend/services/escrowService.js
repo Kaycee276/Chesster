@@ -1,4 +1,4 @@
-const { Keypair, rpc, TransactionBuilder, Networks, Contract, xdr, scValToNative, nativeToScVal } = require("@stellar/stellar-sdk");
+const { Keypair, rpc, TransactionBuilder, Networks, Contract, xdr, scValToNative, nativeToScVal, BASE_FEE } = require("@stellar/stellar-sdk");
 
 const RPC_URL = process.env.STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = process.env.STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -39,6 +39,16 @@ const FALLBACK_FEE = "100000";
 // market fluctuations between simulation and submission don't cause an
 // avoidable insufficient-fee rejection.
 const FEE_SAFETY_MARGIN = 1.2;
+
+// Maximum gas fee sponsorship allowed per user (stroops) to prevent draining coordinator funds (Issue #289)
+const MAX_SPONSORSHIP_PER_USER_STROOPS = Number.isFinite(Number(process.env.MAX_SPONSORSHIP_PER_USER_STROOPS))
+	? Number(process.env.MAX_SPONSORSHIP_PER_USER_STROOPS)
+	: 10_000_000; // 1 XLM default cap per user
+
+// In-memory accounting of cumulative sponsored gas fees per player address
+const userSponsorshipTotals = new Map();
+// In-memory audit log of fee sponsorships (replicated to match_audit_logs if Supabase available)
+const matchAuditLogs = [];
 
 let server, coordinatorKeypair, contract;
 
@@ -635,6 +645,153 @@ async function validateEscrowDeposit(txData, gameCode) {
 	}
 }
 
+/**
+ * Records sponsored gas expenditure in match_audit_logs and in-memory tracking (Issue #289).
+ *
+ * @param {string} gameCode - Match identifier
+ * @param {string} userAddress - Player address receiving sponsorship
+ * @param {number|string} feeStroops - Gas fee in stroops covered by the sponsor
+ * @param {object} [extra] - Additional metadata (e.g. sponsorAddress, txHash, gameId)
+ * @returns {Promise<object>} Audit log entry
+ */
+async function recordSponsoredGasExpenditure(gameCode, userAddress, feeStroops, extra = {}) {
+	const feeNum = Number(feeStroops);
+	const currentTotal = userSponsorshipTotals.get(userAddress) || 0;
+	const newTotal = currentTotal + feeNum;
+	userSponsorshipTotals.set(userAddress, newTotal);
+
+	const logEntry = {
+		game_code: gameCode,
+		player_address: userAddress,
+		event_type: "SPONSORED_GAS_EXPENDITURE",
+		event_data: {
+			fee_stroops: String(feeStroops),
+			cumulative_user_sponsorship: String(newTotal),
+			sponsor_address: extra.sponsorAddress || coordinatorKeypair?.publicKey?.(),
+			...extra,
+		},
+		created_at: new Date().toISOString(),
+	};
+
+	matchAuditLogs.push(logEntry);
+
+	try {
+		let supabase;
+		try {
+			supabase = require("../config/supabase");
+		} catch (e) {
+			// Supabase config not provided in standalone or test environment
+		}
+		if (supabase && typeof supabase.from === "function") {
+			await supabase.from("match_audit_logs").insert({
+				game_id: extra.gameId || null,
+				event_type: "SPONSORED_GAS_EXPENDITURE",
+				event_data: logEntry.event_data,
+				player_address: userAddress,
+				coordinator_tx_hash: extra.txHash || null,
+			});
+		}
+	} catch (err) {
+		logger?.warn?.("[Escrow] Could not persist sponsored gas log to database:", err.message);
+	}
+
+	return logEntry;
+}
+
+/**
+ * Builds and signs a fee bump transaction using Stellar SDK TransactionBuilder (Issue #289).
+ *
+ * @param {object} innerTransaction - Built and signed inner transaction
+ * @param {object} [opts] - Options
+ * @param {object} [opts.sponsorKeypair] - Keypair of fee sponsor (defaults to coordinatorKeypair)
+ * @param {string|number} [opts.fee] - Base fee in stroops (default "200")
+ * @param {string} [opts.networkPassphrase] - Network passphrase
+ * @returns {object} Signed fee bump transaction
+ */
+function buildFeeBumpTransaction(innerTransaction, { sponsorKeypair: sponsor, fee, networkPassphrase } = {}) {
+	const feeSource = sponsor || coordinatorKeypair;
+	if (!feeSource) throw new Error("Coordinator/Sponsor keypair not configured");
+
+	const passphrase = networkPassphrase || NETWORK_PASSPHRASE;
+	const baseFee = fee !== undefined ? String(fee) : "200";
+
+	const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
+		feeSource,
+		baseFee,
+		innerTransaction,
+		passphrase
+	);
+	feeBumpTx.sign(feeSource);
+	return feeBumpTx;
+}
+
+/**
+ * Wraps an unfunded player's inner transaction in a coordinator-sponsored fee bump transaction (Issue #289).
+ * Enforces per-user maximum sponsorship caps and records expenditures in match audit logs.
+ *
+ * @param {object} innerTransaction - Player transaction
+ * @param {string} userAddress - Player address
+ * @param {object} [opts]
+ * @param {string|number} [opts.fee] - Fee in stroops (default "200")
+ * @param {string} [opts.gameCode] - Game code identifier
+ * @param {object} [opts.sponsorKeypair] - Custom sponsor keypair
+ * @param {string} [opts.gameId] - Database UUID of game
+ * @returns {Promise<object>} Signed fee bump transaction
+ */
+async function sponsorTransaction(innerTransaction, userAddress, { fee = "200", gameCode, sponsorKeypair: sponsor, gameId } = {}) {
+	if (!userAddress) throw new Error("User address required for fee sponsorship");
+	const feeStroops = Number(fee);
+	if (!Number.isFinite(feeStroops) || feeStroops <= 0) {
+		throw new Error("Invalid fee stroops for fee sponsorship");
+	}
+
+	const currentTotal = userSponsorshipTotals.get(userAddress) || 0;
+	if (currentTotal + feeStroops > MAX_SPONSORSHIP_PER_USER_STROOPS) {
+		throw new Error(`Sponsorship cap of ${MAX_SPONSORSHIP_PER_USER_STROOPS} stroops exceeded for user ${userAddress}`);
+	}
+
+	const feeBumpTx = buildFeeBumpTransaction(innerTransaction, {
+		sponsorKeypair: sponsor,
+		fee: String(feeStroops),
+	});
+
+	await recordSponsoredGasExpenditure(gameCode, userAddress, feeStroops, {
+		sponsorAddress: (sponsor || coordinatorKeypair)?.publicKey?.(),
+		gameId,
+	});
+
+	return feeBumpTx;
+}
+
+/**
+ * Returns cumulative sponsored gas expenditures in stroops for a user (Issue #289).
+ */
+function getUserSponsorshipTotal(userAddress) {
+	return userSponsorshipTotals.get(userAddress) || 0;
+}
+
+/**
+ * Returns match audit logs for a game code or all logs (Issue #289).
+ */
+function getMatchAuditLogs(gameCode) {
+	if (gameCode) {
+		return matchAuditLogs.filter((l) => l.game_code === gameCode);
+	}
+	return [...matchAuditLogs];
+}
+
+/**
+ * Resets user sponsorship counters and audit logs (useful for testing) (Issue #289).
+ */
+function resetUserSponsorship(userAddress) {
+	if (userAddress) {
+		userSponsorshipTotals.delete(userAddress);
+	} else {
+		userSponsorshipTotals.clear();
+		matchAuditLogs.length = 0;
+	}
+}
+
 module.exports = {
 	init,
 	resolveMatch,
@@ -651,4 +808,11 @@ module.exports = {
 	verifyDepositTransaction,
 	createTransactionIndexer,
 	validateEscrowDeposit,
+	MAX_SPONSORSHIP_PER_USER_STROOPS,
+	buildFeeBumpTransaction,
+	sponsorTransaction,
+	recordSponsoredGasExpenditure,
+	getUserSponsorshipTotal,
+	getMatchAuditLogs,
+	resetUserSponsorship,
 };
