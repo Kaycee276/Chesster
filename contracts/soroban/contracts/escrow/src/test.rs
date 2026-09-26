@@ -1743,14 +1743,21 @@ fn test_admin_action_multisig_threshold_flow() {
     let client = ChessterEscrowClient::new(&env, &contract_id);
     client.init(&coordinator, &500);
 
-    let guardians = vec![&env, guardian1.clone(), guardian2.clone(), guardian3.clone()];
+    let guardians = vec![
+        &env,
+        guardian1.clone(),
+        guardian2.clone(),
+        guardian3.clone(),
+    ];
     client.set_guardians(&guardians, &2);
     assert_eq!(client.get_guardians(), guardians);
     assert_eq!(client.get_admin_threshold(), 2);
 
     let proposal_id: u64 = 7;
     let payload_hash = BytesN::from_array(&env, &[11u8; 32]);
-    assert!(client.try_propose_admin_action(&outsider, &proposal_id, &payload_hash).is_err());
+    assert!(client
+        .try_propose_admin_action(&outsider, &proposal_id, &payload_hash)
+        .is_err());
 
     client.propose_admin_action(&guardian1, &proposal_id, &payload_hash);
     let proposal = client.get_admin_proposal(&proposal_id);
@@ -1765,7 +1772,9 @@ fn test_admin_action_multisig_threshold_flow() {
     assert!(client.get_admin_proposal(&proposal_id).executed);
 
     // Re-confirming the same guardian is a duplicate and must be rejected.
-    assert!(client.try_confirm_admin_action(&guardian2, &proposal_id).is_err());
+    assert!(client
+        .try_confirm_admin_action(&guardian2, &proposal_id)
+        .is_err());
 }
 
 #[test]
@@ -2517,18 +2526,8 @@ fn test_resolve_match_with_invalid_signature() {
     let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     token_admin_client.mint(&player1, &1000);
     token_admin_client.mint(&player2, &1000);
-
-fn test_batch_resolve_five_matches() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let coordinator = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-
-    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
     let contract_id = env.register(ChessterEscrow, ());
     let client = ChessterEscrowClient::new(&env, &contract_id);
-
     client.init(&coordinator, &500);
     client.add_whitelisted_token(&token.address);
     client.set_coordinator_pubkey(&BytesN::from_array(&env, &pubkey_bytes));
@@ -2548,6 +2547,50 @@ fn test_batch_resolve_five_matches() {
 
     let bad_sig_bytes = [0u8; 64];
     client.resolve_match_with_signature(&payload, &BytesN::from_array(&env, &bad_sig_bytes));
+}
+
+#[test]
+fn test_batch_resolve_five_matches() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let mut resolutions = Vec::new(&env);
+    for i in 0..5 {
+        let p1 = Address::generate(&env);
+        let p2 = Address::generate(&env);
+        token_admin_client.mint(&p1, &1000);
+        token_admin_client.mint(&p2, &1000);
+
+        let game_code = String::from_str(&env, &alloc::format!("GAME{}", i));
+        approve(&env, &token, &p1, &contract_id, 100);
+        approve(&env, &token, &p2, &contract_id, 100);
+        client.create_match(&game_code, &p1, &token.address, &100);
+        client.join_match(&game_code, &p2);
+
+        resolutions.push_back(MatchResolution {
+            match_id: game_code,
+            winner: Some(p1),
+            moves_hash: String::from_str(&env, "hash"),
+        });
+    }
+
+    client.batch_resolve_matches(&resolutions);
+
+    for i in 0..5 {
+        let game_code = String::from_str(&env, &alloc::format!("GAME{}", i));
+        let m = client.get_match(&game_code);
+        assert_eq!(m.status, MatchStatus::Resolved);
+    }
 }
 
 #[test]
@@ -2601,32 +2644,4 @@ fn test_resolve_match_with_used_nonce() {
 
     // Should panic on second invocation
     client.resolve_match_with_signature(&payload, &BytesN::from_array(&env, &sig_bytes));
-
-    let mut resolutions = Vec::new(&env);
-    for i in 0..5 {
-        let p1 = Address::generate(&env);
-        let p2 = Address::generate(&env);
-        token_admin_client.mint(&p1, &1000);
-        token_admin_client.mint(&p2, &1000);
-
-        let game_code = String::from_str(&env, &alloc::format!("GAME{}", i));
-        approve(&env, &token, &p1, &contract_id, 100);
-        approve(&env, &token, &p2, &contract_id, 100);
-        client.create_match(&game_code, &p1, &token.address, &100);
-        client.join_match(&game_code, &p2);
-
-        resolutions.push_back(MatchResolution {
-            match_id: game_code.clone(),
-            winner: Some(p1.clone()),
-            moves_hash: String::from_str(&env, "hash"),
-        });
-    }
-
-    client.batch_resolve_matches(&resolutions);
-
-    for i in 0..5 {
-        let game_code = String::from_str(&env, &alloc::format!("GAME{}", i));
-        let m = client.get_match(&game_code);
-        assert_eq!(m.status, MatchStatus::Resolved);
-    }
 }
