@@ -40,11 +40,24 @@ jest.mock("@stellar/stellar-sdk", () => {
     Contract: jest.fn().mockImplementation(() => ({
       call: jest.fn().mockReturnValue("mock-operation"),
     })),
-    TransactionBuilder: jest.fn().mockImplementation(() => ({
-      addOperation: jest.fn().mockReturnThis(),
-      setTimeout: jest.fn().mockReturnThis(),
-      build: jest.fn().mockReturnValue("mock-tx"),
-    })),
+    TransactionBuilder: Object.assign(
+      jest.fn().mockImplementation(() => ({
+        addOperation: jest.fn().mockReturnThis(),
+        setTimeout: jest.fn().mockReturnThis(),
+        build: jest.fn().mockReturnValue("mock-tx"),
+      })),
+      {
+        buildFeeBumpTransaction: jest.fn().mockImplementation((source, fee, inner, network) => ({
+          feeSource: typeof source === "object" && source.publicKey ? source.publicKey() : source,
+          fee,
+          innerTx: inner,
+          networkPassphrase: network,
+          sign: jest.fn(),
+        })),
+        BASE_FEE: 100,
+        MIN_FEE: 100,
+      }
+    ),
     xdr: {
       ScVal: {
         scvVoid: jest.fn().mockReturnValue("mock-void"),
@@ -77,6 +90,7 @@ describe("Escrow Service", () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    escrowService.resetUserSponsorship();
   });
 
   describe("getMatch", () => {
@@ -191,4 +205,60 @@ describe("Escrow Service", () => {
       expect(serverInstance.sendTransaction).toHaveBeenCalledTimes(3);
     });
   });
+
+  describe("fee sponsorship & fee bump builder (Issue #289)", () => {
+    it("builds and signs a fee bump transaction with coordinator by default", () => {
+      const mockInner = { operations: [1], fee: "100" };
+      const feeBumpTx = escrowService.buildFeeBumpTransaction(mockInner, { fee: "250" });
+      expect(feeBumpTx).toBeDefined();
+      expect(TransactionBuilder.buildFeeBumpTransaction).toHaveBeenCalled();
+      expect(feeBumpTx.sign).toHaveBeenCalled();
+    });
+
+    it("sponsors an unfunded player transaction and records gas audit log", async () => {
+      const mockInner = { operations: [1], fee: "100" };
+      const user = "GBELXTVUSO745SBIL6OINE3FR3YB4BTXKOL5BY7LK6GC5AOQJCZOVMBX";
+
+      const feeBumpTx = await escrowService.sponsorTransaction(mockInner, user, {
+        fee: "300",
+        gameCode: "GAME123",
+      });
+
+      expect(feeBumpTx).toBeDefined();
+      expect(escrowService.getUserSponsorshipTotal(user)).toBe(300);
+
+      const logs = escrowService.getMatchAuditLogs("GAME123");
+      expect(logs).toHaveLength(1);
+      expect(logs[0].player_address).toBe(user);
+      expect(logs[0].event_type).toBe("SPONSORED_GAS_EXPENDITURE");
+      expect(logs[0].event_data.fee_stroops).toBe("300");
+    });
+
+    it("enforces maximum fee sponsorship cap per user", async () => {
+      const mockInner = { operations: [1], fee: "100" };
+      const user = "GUNFUNDEDUSER123";
+
+      // Cap is 10,000,000 stroops
+      await escrowService.sponsorTransaction(mockInner, user, {
+        fee: "9999900",
+        gameCode: "GAME123",
+      });
+
+      // Next sponsorship pushes past cap -> throws error
+      await expect(
+        escrowService.sponsorTransaction(mockInner, user, {
+          fee: "200",
+          gameCode: "GAME123",
+        }),
+      ).rejects.toThrow(/Sponsorship cap of .* stroops exceeded/);
+    });
+
+    it("rejects sponsorship without user address", async () => {
+      const mockInner = { operations: [1], fee: "100" };
+      await expect(escrowService.sponsorTransaction(mockInner, null)).rejects.toThrow(
+        "User address required for fee sponsorship",
+      );
+    });
+  });
 });
+

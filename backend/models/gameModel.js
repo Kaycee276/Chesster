@@ -1,4 +1,4 @@
-const supabase = require("../config/supabase");
+﻿const supabase = require("../config/supabase");
 const chessEngine = require("../services/chessEngine");
 const escrowService = require("../services/escrowService");
 const referralService = require("../services/referralService");
@@ -989,6 +989,22 @@ class GameModel {
 	generateGameCode() {
 		return Math.random().toString(36).substring(2, 8).toUpperCase();
 	}
+
+	/**
+	 * Invokes stored procedure settle_game_transactionally via Supabase RPC (Issue #322)
+	 * Executes game status update, match audit logging, and player stat counter increments in one ACID transaction.
+	 */
+	async settleGameTransactionally(gameId, winner, txHash, reason) {
+		const { data, error } = await supabase.rpc("settle_game_transactionally", {
+			p_game_id: gameId,
+			p_winner: winner,
+			p_tx_hash: txHash,
+			p_reason: reason,
+		});
+		if (error) throw error;
+		return data;
+	}
 }
+
 
 module.exports = new GameModel();
