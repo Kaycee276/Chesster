@@ -57,7 +57,7 @@ class TimerService {
 		this.timers = new Map();
 
 		// `${gameCode}:${color}` -> { timeout, expiresAt }
-		this.reconnectTimers = new Map();
+		this.player_disconnect_timers = new Map();
 	}
 
 	init(io) {
@@ -262,7 +262,7 @@ class TimerService {
 		this.cancelReconnectGrace(gameCode, color);
 
 		const timeout = setTimeout(async () => {
-			this.reconnectTimers.delete(key);
+			this.player_disconnect_timers.delete(key);
 			try {
 				const gameModel = require("../models/gameModel");
 				const game = await gameModel.forfeitByDisconnect(gameCode, color);
@@ -282,22 +282,22 @@ class TimerService {
 			}
 		}, graceSeconds * 1000);
 
-		this.reconnectTimers.set(key, { timeout, expiresAt: Date.now() + graceSeconds * 1000 });
+		this.player_disconnect_timers.set(key, { timeout, expiresAt: Date.now() + graceSeconds * 1000 });
 	}
 
 	cancelReconnectGrace(gameCode, color) {
 		const key = `${gameCode}:${color}`;
-		const entry = this.reconnectTimers.get(key);
+		const entry = this.player_disconnect_timers.get(key);
 		if (entry) {
 			clearTimeout(entry.timeout);
-			this.reconnectTimers.delete(key);
+			this.player_disconnect_timers.delete(key);
 			return true;
 		}
 		return false;
 	}
 
 	isPendingForfeit(gameCode, color) {
-		return this.reconnectTimers.has(`${gameCode}:${color}`);
+		return this.player_disconnect_timers.has(`${gameCode}:${color}`);
 	}
 }
 
