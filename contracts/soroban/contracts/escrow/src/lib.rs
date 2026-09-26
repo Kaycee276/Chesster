@@ -16,7 +16,8 @@ pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
 pub const STALE_MATCH_THRESHOLD_SECS: u64 = 2_592_000;
 /// Default duration (in seconds) after which a pending or active match expires (1 hour).
 pub const MATCH_EXPIRATION_SECS: u64 = 3_600;
-/// Default minimum allowable wager amount (1 unit/stroop).
+/// Duration (in seconds) of the escrow emergency drain timelock delay (7 days = 604,800s) (Issue #285).
+pub const EMERGENCY_DRAIN_TIMELOCK_SECS: u64 = 604_800;
 pub const DEFAULT_MIN_WAGER: i128 = 1;
 /// Default maximum allowable wager amount (maximum positive i128).
 pub const DEFAULT_MAX_WAGER: i128 = i128::MAX;
@@ -557,6 +558,8 @@ pub enum DataKey {
     PlayerRating(Address),
     /// Account deposit sequence nonce for replay protection (Issue #284).
     AccountNonce(Address),
+    /// Emergency drain schedule (recipient, unlock_time) (Issue #285).
+    DrainSchedule,
 }
 
 /// Chesster Escrow Smart Contract instance.
@@ -815,6 +818,69 @@ impl ChessterEscrow {
         if let Err(e) = Self::verify_and_increment_nonce(&env, &payload.player, payload.nonce) {
             panic_with_error!(&env, e);
         }
+    }
+
+    /// Schedules an emergency escrow evacuation with a 7-day timelock delay (Issue #285).
+    /// Restricted to coordinator admin authority.
+    pub fn schedule_emergency_drain(env: Env, recipient: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let unlock_timestamp = env.ledger().timestamp() + EMERGENCY_DRAIN_TIMELOCK_SECS;
+        let schedule = (recipient.clone(), unlock_timestamp);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DrainSchedule, &schedule);
+        Self::bump_entry_ttl(&env, &DataKey::DrainSchedule);
+
+        env.events()
+            .publish((symbol_short!("drain_sch"),), (recipient, unlock_timestamp));
+    }
+
+    /// Cancels a previously scheduled emergency drain (Issue #285).
+    /// Restricted to coordinator admin authority.
+    pub fn cancel_emergency_drain(env: Env) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        env.storage().persistent().remove(&DataKey::DrainSchedule);
+        env.events().publish((symbol_short!("drain_can"),), ());
+    }
+
+    /// Executes a scheduled emergency drain after the 7-day timelock has expired (Issue #285).
+    /// Evacuates the contract's entire balance of the specified token to the registered cold recipient.
+    pub fn execute_emergency_drain(env: Env, token: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        let (recipient, unlock_timestamp): (Address, u64) = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DrainSchedule)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::DisputeNotFound));
+
+        if env.ledger().timestamp() < unlock_timestamp {
+            panic_with_error!(&env, EscrowError::DisputeTimeLockActive);
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        let contract_balance = token_client.balance(&env.current_contract_address());
+        if contract_balance > 0 {
+            token_client.transfer(
+                &env.current_contract_address(),
+                &recipient,
+                &contract_balance,
+            );
+        }
+
+        env.storage().persistent().remove(&DataKey::DrainSchedule);
+        env.events()
+            .publish((symbol_short!("drain_exe"),), (recipient, contract_balance));
+    }
+
+    /// Retrieves active emergency drain schedule if currently scheduled (Issue #285).
+    pub fn get_emergency_drain_schedule(env: Env) -> Option<(Address, u64)> {
+        env.storage().persistent().get(&DataKey::DrainSchedule)
     }
 
     /// Retrieves registered coordinator address.

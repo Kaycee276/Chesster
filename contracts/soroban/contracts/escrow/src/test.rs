@@ -2794,3 +2794,98 @@ fn test_replay_protection_rejects_out_of_order_nonce() {
     // Skipping from 0 to 5 must fail with InvalidNonce (#44)
     client.increment_player_nonce(&player, &5);
 }
+
+#[test]
+fn test_timelock_safety() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    // Mint funds to contract to simulate trapped escrow funds
+    token_admin_client.mint(&contract_id, &50_000);
+    assert_eq!(token.balance(&contract_id), 50_000);
+
+    // Initial state: no drain scheduled
+    assert_eq!(client.get_emergency_drain_schedule(), None);
+
+    // 1. Coordinator schedules emergency drain
+    let current_time = env.ledger().timestamp();
+    client.schedule_emergency_drain(&recipient);
+
+    let (sched_recipient, unlock_time) = client.get_emergency_drain_schedule().unwrap();
+    assert_eq!(sched_recipient, recipient);
+    assert_eq!(unlock_time, current_time + EMERGENCY_DRAIN_TIMELOCK_SECS);
+
+    // 2. Cancellation test: coordinator cancels drain
+    client.cancel_emergency_drain();
+    assert_eq!(client.get_emergency_drain_schedule(), None);
+
+    // 3. Reschedule drain
+    client.schedule_emergency_drain(&recipient);
+    let (_, new_unlock_time) = client.get_emergency_drain_schedule().unwrap();
+
+    // 4. Advance time past the 7-day timelock delay (604,800 seconds)
+    env.ledger().set_timestamp(new_unlock_time + 10);
+
+    // 5. Execution succeeds after timelock elapses
+    client.execute_emergency_drain(&token.address);
+
+    assert_eq!(token.balance(&recipient), 50_000);
+    assert_eq!(token.balance(&contract_id), 0);
+    assert_eq!(client.get_emergency_drain_schedule(), None);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #25)")]
+fn test_timelock_safety_blocks_premature_drain() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+    token_admin_client.mint(&contract_id, &50_000);
+
+    client.schedule_emergency_drain(&recipient);
+
+    // Attempting execution immediately or before 7 days (e.g. 6 days) must fail with DisputeTimeLockActive (#25)
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + (6 * 24 * 60 * 60));
+    client.execute_emergency_drain(&token.address);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #24)")]
+fn test_timelock_safety_blocks_unscheduled_drain() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, _) = create_token_contract(&env, &token_admin);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    // Executing drain without active schedule fails with DisputeNotFound (#24)
+    client.execute_emergency_drain(&token.address);
+}
