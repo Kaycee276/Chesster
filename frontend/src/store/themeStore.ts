@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type BoardThemeKey = "classic" | "wood" | "neon" | "marble";
+export type BoardThemeKey = "classic" | "wood" | "neon" | "marble" | "high-contrast";
 export type PieceSetKey = "standard" | "neo" | "wood" | "pixel";
 
 export interface PieceSet {
@@ -83,6 +83,13 @@ export const BOARD_THEMES: BoardTheme[] = [
 		dark: "#5c6370",
 		preview: "linear-gradient(135deg, #eceae3 50%, #5c6370 50%)",
 	},
+	{
+		key: "high-contrast",
+		name: "High Contrast",
+		light: "#ffffff",
+		dark: "#000000",
+		preview: "linear-gradient(135deg, #ffffff 50%, #000000 50%)",
+	},
 ];
 
 export const DEFAULT_BOARD_THEME: BoardThemeKey = "classic";
@@ -112,6 +119,7 @@ export function applyColorMode(mode: ColorMode) {
 function applyBoardTheme(key: BoardThemeKey) {
 	if (typeof document === "undefined") return;
 	const theme = BOARD_THEMES.find((t) => t.key === key) ?? BOARD_THEMES[0];
+	document.documentElement.dataset.theme = theme.key;
 	document.documentElement.style.setProperty("--sq-light", theme.light);
 	document.documentElement.style.setProperty("--sq-dark", theme.dark);
 }
@@ -142,7 +150,7 @@ export const useThemeStore = create<ThemeState>()(
 			},
 		}),
 		{
-			name: "chesster-theme",
+			name: "chesster_theme",
 			partialize: (state) => ({
 				boardTheme: state.boardTheme,
 				pieceSet: state.pieceSet,
@@ -155,4 +163,3 @@ export const useThemeStore = create<ThemeState>()(
 // Apply the persisted (or default) board theme and color mode as soon as the module loads.
 applyBoardTheme(useThemeStore.getState().boardTheme);
 applyColorMode(useThemeStore.getState().colorMode);
-

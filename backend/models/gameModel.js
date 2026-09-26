@@ -1,6 +1,7 @@
 const supabase = require("../config/supabase");
 const chessEngine = require("../services/chessEngine");
 const escrowService = require("../services/escrowService");
+const referralService = require("../services/referralService");
 
 // Initialize escrow service
 escrowService.init();
@@ -9,6 +10,61 @@ escrowService.init();
 const ON_CHAIN_STATUS = { PENDING: 0, ACTIVE: 1, RESOLVED: 2, REFUNDED: 3 };
 
 class GameModel {
+	async _creditReferralRake(dbGame, winner, onChain) {
+		if (!dbGame?.id || winner === "draw") return;
+
+		const loserWallet = winner === "white"
+			? dbGame.player_black_address
+			: dbGame.player_white_address;
+		if (!loserWallet) return;
+
+		const totalStaked = BigInt(onChain.totalStaked || 0);
+		const feeBps = BigInt(process.env.PLATFORM_RAKE_BPS || "500");
+		const rakeAmount = (totalStaked * feeBps) / 10000n;
+		if (rakeAmount === 0n) return;
+
+		try {
+			await referralService.creditReferralCommission(dbGame.id, rakeAmount, loserWallet);
+		} catch (error) {
+			console.error(`[Referral] commission credit failed for ${dbGame.game_code}:`, error.message);
+		}
+	}
+
+	_scheduleAntiCheatAnalysis(game) {
+		if (!game?.id) return;
+		const antiCheatService = require("../services/antiCheatService");
+		antiCheatService.analyzeGame(game.id).catch((error) => {
+			console.error(`[AntiCheat] analysis failed for ${game.game_code}:`, error.message);
+		});
+	}
+
+	async recordCheatAnalysis(gameId, analysis) {
+		const white = analysis.white;
+		const black = analysis.black;
+		const { error } = await supabase.from("games").update({
+			white_cheat_suspicion: white.score,
+			black_cheat_suspicion: black.score,
+			cheat_flagged: white.flagged || black.flagged,
+			anti_cheat_analyzed_at: new Date().toISOString(),
+		}).eq("id", gameId);
+		if (error) throw error;
+
+		const flags = [white, black]
+			.filter((player) => player.flagged && player.playerAddress)
+			.map((player) => ({
+				game_id: gameId,
+				player_address: player.playerAddress,
+				anomaly_score: player.score,
+				reasons: player.reasons,
+			}));
+		if (flags.length > 0) {
+			const { error: flagError } = await supabase
+				.from("player_flags")
+				.upsert(flags, { onConflict: "game_id,player_address", ignoreDuplicates: true });
+			if (flagError) throw flagError;
+		}
+	}
+
 	async createGame(
 		gameType = "chess",
 		wagerAmount = null,
@@ -33,6 +89,8 @@ class GameModel {
 			time_control_seconds: timeControlSeconds,
 			time_control_preset: timeControlPreset,
 			time_increment_seconds: timeIncrementSeconds || 0,
+			position_history: [chessEngine.getPositionKey(initialBoard, "white")],
+			halfmove_clock: 0,
 		};
 
 		let { data, error } = await supabase
@@ -44,6 +102,18 @@ class GameModel {
 		if (error && error.message && (error.message.includes("time_control_preset") || error.message.includes("time_increment_seconds"))) {
 			delete insertPayload.time_control_preset;
 			delete insertPayload.time_increment_seconds;
+			const retry = await supabase
+				.from("games")
+				.insert(insertPayload)
+				.select()
+				.single();
+			data = retry.data;
+			error = retry.error;
+		}
+
+		if (error && error.message && (error.message.includes("position_history") || error.message.includes("halfmove_clock"))) {
+			delete insertPayload.position_history;
+			delete insertPayload.halfmove_clock;
 			const retry = await supabase
 				.from("games")
 				.insert(insertPayload)
@@ -240,6 +310,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, winner).catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		console.log(`[GameModel] ${gameCode} ended by time — white ${whiteScore} vs black ${blackScore} → ${winner}`);
 		return data;
@@ -272,6 +343,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, winner).catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		console.log(`[GameModel] ${gameCode} ended by flag fall — ${loserColor} ran out of time, ${winner} wins`);
 		return data;
@@ -304,6 +376,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, winner, "disconnect").catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		console.log(`[GameModel] ${gameCode} auto-forfeited — ${disconnectedColor} failed to reconnect, ${winner} wins`);
 		return data;
@@ -341,6 +414,7 @@ class GameModel {
 		// ── 2. Already resolved / refunded ───────────────────────────────────
 		if (chainStatus === ON_CHAIN_STATUS.RESOLVED) {
 			await supabase.from("games").update({ escrow_status: "settled" }).eq("game_code", gameCode);
+			await this._creditReferralRake(dbGame, winner, onChain);
 			console.log(`[Escrow] ${gameCode} already RESOLVED on-chain — DB updated`);
 			return;
 		}
@@ -411,6 +485,7 @@ class GameModel {
 				.from("games")
 				.update({ escrow_resolve_tx: receipt.hash, escrow_status: "settled" })
 				.eq("game_code", gameCode);
+			await this._creditReferralRake(dbGame, winner, onChain);
 
 			console.log(`[Escrow] ${gameCode} settled — tx: ${receipt.hash}`);
 		} catch (resolveErr) {
@@ -427,6 +502,7 @@ class GameModel {
 						escrow_status: "settled",
 						...(raceTxHash ? { escrow_resolve_tx: raceTxHash } : {}),
 					}).eq("game_code", gameCode);
+					await this._creditReferralRake(dbGame, winner, recheck);
 					return;
 				}
 			} catch (_) { /* ignore recheck failure */ }
@@ -507,6 +583,17 @@ class GameModel {
 			piece,
 		});
 
+		// FIDE draw tracking: the halfmove clock resets on any pawn move or
+		// capture (including en passant), and otherwise increments. The
+		// position key covers piece placement, turn, castling rights and en
+		// passant target, letting us detect repeated positions.
+		const isCapture = targetPiece !== "." || Boolean(validation.enPassant);
+		const isPawnMove = piece.toLowerCase() === "p";
+		const newHalfmoveClock = isPawnMove || isCapture ? 0 : (game.halfmove_clock || 0) + 1;
+		const newPositionKey = chessEngine.getPositionKey(newBoard, nextTurn);
+		const newPositionHistory = [...(game.position_history || []), newPositionKey];
+		const drawCheck = chessEngine.checkDrawConditions(newPositionKey, newPositionHistory, newHalfmoveClock);
+
 		let newStatus = game.status;
 		let winner = null;
 		let endReason = null;
@@ -519,7 +606,13 @@ class GameModel {
 			newStatus = "finished";
 			winner = "draw";
 			endReason = "stalemate";
+		} else if (drawCheck.isDraw) {
+			newStatus = "finished";
+			winner = "draw";
+			endReason = drawCheck.reason;
 		}
+
+		const drawClaimable = newStatus === "active" && drawCheck.canClaimDraw;
 
 		const { data: updatedGame, error: updateError } = await supabase
 			.from("games")
@@ -535,6 +628,10 @@ class GameModel {
 				captured_black: newCapturedBlack,
 				turn_started_at: new Date().toISOString(),
 				draw_offer: null,
+				halfmove_clock: newHalfmoveClock,
+				position_history: newPositionHistory,
+				draw_claimable: drawClaimable,
+				draw_claim_reason: drawClaimable ? drawCheck.reason : null,
 				// Set resolving atomically so the socket event already carries it,
 				// preventing both clients from re-triggering _settleEscrow on poll.
 				...(newStatus === "finished" && game.wager_amount ? { escrow_status: "resolving" } : {}),
@@ -572,6 +669,25 @@ class GameModel {
 			.update({ move_count: game.move_count + 1 })
 			.eq("game_code", gameCode);
 
+		const antiCheatService = require("../services/antiCheatService");
+		antiCheatService.recordMove({
+			gameId: game.id,
+			gameCode,
+			color: game.current_turn,
+			playerAddress: game.current_turn === "white"
+				? game.player_white_address
+				: game.player_black_address,
+			moveNumber: game.move_count + 1,
+			move: { from, to, promotion },
+			boardBefore: game.board_state,
+			boardAfter: newBoard,
+			turnStartedAt: game.turn_started_at,
+		}).then(() => {
+			if (newStatus === "finished") this._scheduleAntiCheatAnalysis(updatedGame);
+		}).catch((error) => {
+			console.error(`[AntiCheat] move telemetry failed for ${gameCode}:`, error.message);
+		});
+
 		return updatedGame;
 	}
 
@@ -596,6 +712,7 @@ class GameModel {
 		this._settleEscrow(gameCode, data, winner).catch((err) => {
 			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
 		});
+		this._scheduleAntiCheatAnalysis(data);
 
 		return data;
 	}
@@ -622,6 +739,50 @@ class GameModel {
 			.from("games")
 			.update({
 				status: "finished", winner: "draw", draw_offer: null, end_reason: "draw_agreed",
+				...(existing.wager_amount ? { escrow_status: "resolving" } : {}),
+			})
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+
+		if (error) throw error;
+		if (!data) throw new Error("Game could not be updated — it may have already ended");
+
+		this._settleEscrow(gameCode, data, "draw").catch((err) => {
+			console.error(`[Escrow] _settleEscrow threw for ${gameCode}:`, err.message);
+		});
+		this._scheduleAntiCheatAnalysis(data);
+
+		return data;
+	}
+
+	/**
+	 * Claim a draw under the FIDE threefold repetition or 50-move rule.
+	 * Either player may invoke this once the position has repeated three
+	 * times or 50 moves have passed without a pawn move or capture.
+	 * @param {string} gameCode
+	 */
+	async claimDraw(gameCode) {
+		const existing = await this.getGame(gameCode);
+		if (!existing) throw new Error("Game not found");
+		if (existing.status !== "active") throw new Error("Game is not active");
+
+		const positionKey = chessEngine.getPositionKey(existing.board_state, existing.current_turn);
+		const drawCheck = chessEngine.checkDrawConditions(
+			positionKey,
+			existing.position_history || [],
+			existing.halfmove_clock || 0,
+		);
+
+		if (!drawCheck.isDraw && !drawCheck.canClaimDraw) {
+			throw new Error("Draw cannot be claimed yet");
+		}
+
+		const { data, error } = await supabase
+			.from("games")
+			.update({
+				status: "finished", winner: "draw", draw_offer: null,
+				end_reason: drawCheck.reason, draw_claimable: false, draw_claim_reason: null,
 				...(existing.wager_amount ? { escrow_status: "resolving" } : {}),
 			})
 			.eq("game_code", gameCode)

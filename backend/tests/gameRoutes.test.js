@@ -35,10 +35,13 @@ const timerService = require("../services/timerService");
 const escrowService = require("../services/escrowService");
 const gameRoutes = require("../routes/gameRoutes");
 const escrowRoutes = require("../routes/escrowRoutes");
+const swaggerUi = require("swagger-ui-express");
+const swaggerDocument = require("../docs/swagger.json");
 
 function buildApp() {
   const app = express();
   app.use(express.json());
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
   app.set("io", { to: jest.fn(() => ({ emit: jest.fn() })) });
   app.use("/api", gameRoutes);
   app.use("/api/escrow", escrowRoutes);
@@ -50,6 +53,9 @@ describe("game and escrow route integration", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    if (gameRoutes.matchCreationLimiter) {
+      gameRoutes.matchCreationLimiter.reset();
+    }
     app = buildApp();
   });
 
@@ -148,4 +154,37 @@ describe("game and escrow route integration", () => {
     expect(escrowService.resolveMatch).toHaveBeenCalledWith("ABCD12", "GDRAW");
     expect(response.body).toMatchObject({ success: true, txHash: "tx1", blockNumber: 12 });
   });
+
+  test("POST /api/games enforces rate limiting after 5 match creations per IP (Issue #151)", async () => {
+    const game = { game_code: "RATE12", status: "waiting", current_turn: "white" };
+    gameModel.createGame.mockResolvedValue(game);
+
+    for (let i = 0; i < 5; i++) {
+      const res = await request(app)
+        .post("/api/games")
+        .send({ gameType: "chess", wagerAmount: 10, playerWhiteAddress: "GWHITE" });
+      expect(res.status).toBe(201);
+      expect(res.headers["x-ratelimit-limit"]).toBe("5");
+      expect(res.headers["x-ratelimit-remaining"]).toBe(String(4 - i));
+    }
+
+    const blockedRes = await request(app)
+      .post("/api/games")
+      .send({ gameType: "chess", wagerAmount: 10, playerWhiteAddress: "GWHITE" });
+
+    expect(blockedRes.status).toBe(429);
+    expect(blockedRes.body).toEqual({
+      success: false,
+      error: "Too many matches created from this IP, please try again after an hour.",
+    });
+    expect(blockedRes.headers["retry-after"]).toBeDefined();
+    expect(blockedRes.headers["x-ratelimit-remaining"]).toBe("0");
+  });
+
+  test("GET /api-docs/ serves interactive Swagger API documentation (Issue #152)", async () => {
+    const response = await request(app).get("/api-docs/");
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("Swagger UI");
+  });
 });
+

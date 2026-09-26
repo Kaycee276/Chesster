@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+	BOARD_THEMES,
 	useThemeStore,
 	applyColorMode,
 	getResolvedColorMode,
@@ -17,6 +18,7 @@ describe("Theme Store & Dark/Light Mode", () => {
 					remove: (cls: string) => classListSet.delete(cls),
 					contains: (cls: string) => classListSet.has(cls),
 				},
+				dataset: {} as Record<string, string>,
 				style: {
 					setProperty: vi.fn(),
 				},
@@ -55,5 +57,27 @@ describe("Theme Store & Dark/Light Mode", () => {
 		setColorMode("light");
 		expect(useThemeStore.getState().colorMode).toBe("light");
 		expect(document.documentElement.classList.contains("dark")).toBe(false);
+	});
+
+	it("includes the High-Contrast accessibility theme (#314)", () => {
+		const theme = BOARD_THEMES.find((t) => t.key === "high-contrast");
+		expect(theme).toBeDefined();
+		expect(theme?.name).toBe("High Contrast");
+		// Pure white vs pure black squares: the maximum 21:1 contrast ratio.
+		expect(theme?.light.toLowerCase()).toBe("#ffffff");
+		expect(theme?.dark.toLowerCase()).toBe("#000000");
+	});
+
+	it("applies the High-Contrast theme via setBoardTheme", () => {
+		const setProperty = document.documentElement.style.setProperty as ReturnType<typeof vi.fn>;
+		const setBoardTheme = useThemeStore.getState().setBoardTheme;
+
+		setBoardTheme("high-contrast");
+
+		expect(useThemeStore.getState().boardTheme).toBe("high-contrast");
+		expect(document.documentElement.dataset.theme).toBe("high-contrast");
+		// Runtime square variables are overridden with the theme colors.
+		expect(setProperty).toHaveBeenCalledWith("--sq-light", "#ffffff");
+		expect(setProperty).toHaveBeenCalledWith("--sq-dark", "#000000");
 	});
 });

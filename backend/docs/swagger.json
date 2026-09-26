@@ -1,0 +1,691 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Chesster Backend REST API",
+    "description": "Interactive API documentation for Chesster — decentralized crypto-wagered chess and tournament platform on Stellar & Soroban.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Chesster Team",
+      "url": "https://github.com/Kaycee276/Chesster"
+    },
+    "license": {
+      "name": "ISC",
+      "url": "https://opensource.org/licenses/ISC"
+    }
+  },
+  "servers": [
+    {
+      "url": "/api",
+      "description": "Main API endpoint prefix"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Games",
+      "description": "Game lobby, match creation, move execution, and lifecycle management"
+    },
+    {
+      "name": "Time Controls",
+      "description": "Chess clock presets and custom time controls"
+    },
+    {
+      "name": "Escrow",
+      "description": "Soroban on-chain escrow, match settlement, and side pools"
+    },
+    {
+      "name": "Auth",
+      "description": "User authentication, profile management, and wallet binding"
+    },
+    {
+      "name": "Health",
+      "description": "Service health checks and telemetry"
+    }
+  ],
+  "paths": {
+    "/games": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Create a new game lobby / match",
+        "description": "Creates a new chess match with an optional cryptographic escrow wager. Rate limited to 5 match creations per IP per hour to prevent lobby flooding (Issue #151).",
+        "operationId": "createGame",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGameRequest"
+              },
+              "example": {
+                "gameType": "chess",
+                "wagerAmount": 25,
+                "playerWhiteAddress": "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H",
+                "timeControlSeconds": 600,
+                "timeIncrementSeconds": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Game lobby successfully created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GameResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid game parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (more than 5 match creations per IP per hour)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "success": false,
+                  "error": "Too many matches created from this IP, please try again after an hour."
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["Games"],
+        "summary": "Retrieve user game history",
+        "description": "Fetches a list of past and completed games for an authenticated player address.",
+        "operationId": "getGameHistory",
+        "parameters": [
+          {
+            "name": "playerAddress",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stellar public address of the player"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of games returned successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Game" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/games/pending": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "List open lobby matches waiting for opponents",
+        "description": "Returns open games in 'waiting' status available for other players to join.",
+        "operationId": "getPendingGames",
+        "responses": {
+          "200": {
+            "description": "Pending games retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Game" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/games/{gameCode}": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "Get game details by unique game code",
+        "operationId": "getGame",
+        "parameters": [
+          {
+            "name": "gameCode",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "example": "ABCD12" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Game details retrieved",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GameResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Game not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/games/{gameCode}/join": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Join an open match lobby",
+        "operationId": "joinGame",
+        "parameters": [
+          {
+            "name": "gameCode",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["playerColor", "playerAddress"],
+                "properties": {
+                  "playerColor": {
+                    "type": "string",
+                    "enum": ["white", "black"],
+                    "example": "black"
+                  },
+                  "playerAddress": {
+                    "type": "string",
+                    "example": "GBLACKADDRESS1234567890"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Game joined and clock activated",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GameResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot join game (already full, self-join, or invalid color)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/games/{gameCode}/move": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Submit a validated chess move",
+        "operationId": "makeMove",
+        "parameters": [
+          {
+            "name": "gameCode",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["from", "to"],
+                "properties": {
+                  "from": { "type": "string", "example": "e2" },
+                  "to": { "type": "string", "example": "e4" },
+                  "promotion": { "type": "string", "enum": ["q", "r", "b", "n"], "default": "q" },
+                  "playerAddress": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Move accepted and applied to game board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fen": { "type": "string" },
+                        "turn": { "type": "string" },
+                        "isCheck": { "type": "boolean" },
+                        "isCheckmate": { "type": "boolean" },
+                        "clock": { "$ref": "#/components/schemas/Clock" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Illegal move or not player's turn",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/games/{gameCode}/moves": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "Fetch move history for a game",
+        "operationId": "getMoves",
+        "parameters": [
+          {
+            "name": "gameCode",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Move list retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Move" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/games/{gameCode}/resign": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Resign from an active game",
+        "operationId": "resignGame",
+        "parameters": [
+          { "name": "gameCode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["playerAddress"],
+                "properties": {
+                  "playerAddress": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resignation accepted and game finished",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GameResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/games/{gameCode}/draw/offer": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Offer a mutual draw to the opponent",
+        "operationId": "offerDraw",
+        "parameters": [
+          { "name": "gameCode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Draw offer sent" }
+        }
+      }
+    },
+    "/games/{gameCode}/draw/accept": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Accept an active mutual draw offer",
+        "operationId": "acceptDraw",
+        "parameters": [
+          { "name": "gameCode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Draw accepted and game concluded" }
+        }
+      }
+    },
+    "/games/{gameCode}/undo/request": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Request an undo of the last move",
+        "operationId": "requestUndoMove",
+        "parameters": [
+          { "name": "gameCode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Undo request transmitted" }
+        }
+      }
+    },
+    "/games/{gameCode}/undo/accept": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Accept an opponent's undo move request",
+        "operationId": "acceptUndoMove",
+        "parameters": [
+          { "name": "gameCode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Undo accepted and board state reverted" }
+        }
+      }
+    },
+    "/games/{gameCode}/undo/reject": {
+      "post": {
+        "tags": ["Games"],
+        "summary": "Reject an undo move request",
+        "operationId": "rejectUndoMove",
+        "parameters": [
+          { "name": "gameCode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Undo rejected" }
+        }
+      }
+    },
+    "/games/{gameCode}/chat": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "Fetch moderated in-game chat messages",
+        "operationId": "getChatMessages",
+        "parameters": [
+          { "name": "gameCode", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chat messages returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sender": { "type": "string" },
+                          "text": { "type": "string" },
+                          "timestamp": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/games/{id}/stream": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "Stream a game replay over Server-Sent Events",
+        "description": "Replays a game's moves as Server-Sent Events (Issue #245). Sends a `start` event with game metadata, one `move` event per move (id = move index; payload includes the move, UCI string, captured piece, check flags, resulting FEN, remaining clocks and original duration), then an `end` event with the result. Each move is delayed by its original duration (capped at 10s) divided by `speed`. Clients can resume with the Last-Event-ID header.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Game code" },
+          { "name": "speed", "in": "query", "schema": { "type": "number", "minimum": 1, "maximum": 10, "default": 1 }, "description": "Playback speed multiplier (e.g. 1, 2, 5)" },
+          { "name": "Last-Event-ID", "in": "header", "schema": { "type": "integer" }, "description": "Resume after this move index" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": { "type": "string", "example": "id: 1\nevent: move\ndata: {\"index\":1,\"uci\":\"e2e4\"}\n\n" }
+              }
+            }
+          },
+          "400": { "description": "Invalid speed" },
+    "/games/{id}/audit-export": {
+      "get": {
+        "tags": ["Games"],
+        "summary": "Export a match's forensic audit log",
+        "description": "Compiles move timestamps (server receive time, client timestamp, latency), hashed client IPs, socket disconnect events, FEN snapshots and an HMAC-SHA256 signature over the match outcome for arbitrated dispute resolution (Issue #243). Restricted to the match's players and admins. The outcome hash and signature are also returned in the X-Audit-Outcome-Hash and X-Audit-Signature headers.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Game UUID or game code" },
+          { "name": "format", "in": "query", "schema": { "type": "string", "enum": ["json", "csv"], "default": "json" } },
+          { "name": "download", "in": "query", "schema": { "type": "boolean" }, "description": "Serve the JSON package as a file attachment" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audit package (JSON) or chronological timeline (CSV)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "schemaVersion": { "type": "integer", "example": 1 },
+                        "generatedAt": { "type": "string", "format": "date-time" },
+                        "match": { "type": "object" },
+                        "escrow": { "type": "object" },
+                        "summary": { "type": "object" },
+                        "moves": { "type": "array", "items": { "type": "object" } },
+                        "events": { "type": "array", "items": { "type": "object" } },
+                        "integrity": {
+                          "type": "object",
+                          "properties": {
+                            "algorithm": { "type": "string", "example": "HMAC-SHA256" },
+                            "outcome": { "type": "object" },
+                            "outcomeHash": { "type": "string" },
+                            "signature": { "type": "string" }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "text/csv": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "400": { "description": "Unsupported format" },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Caller is neither a match player nor an admin" },
+          "404": { "description": "Game not found" }
+        }
+      }
+    },
+    "/time-controls": {
+      "get": {
+        "tags": ["Time Controls"],
+        "summary": "List available time control presets",
+        "description": "Returns supported clock presets (e.g. Bullet, Blitz, Rapid, Classical) and increments.",
+        "operationId": "getTimeControls",
+        "responses": {
+          "200": {
+            "description": "Supported time control presets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/TimeControl" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT issued by POST /api/auth/login"
+      }
+    },
+    "schemas": {
+      "CreateGameRequest": {
+        "type": "object",
+        "required": ["gameType"],
+        "properties": {
+          "gameType": { "type": "string", "example": "chess" },
+          "wagerAmount": { "type": "number", "minimum": 0, "example": 25 },
+          "playerWhiteAddress": { "type": "string", "example": "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H" },
+          "timeControlSeconds": { "type": "integer", "default": 600 },
+          "timeIncrementSeconds": { "type": "integer", "default": 0 },
+          "preset": { "type": "string", "example": "rapid" }
+        }
+      },
+      "Game": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "game_code": { "type": "string", "example": "ABCD12" },
+          "status": {
+            "type": "string",
+            "enum": ["waiting", "active", "completed", "cancelled", "disputed"],
+            "example": "waiting"
+          },
+          "game_type": { "type": "string", "example": "chess" },
+          "wager_amount": { "type": "number", "example": 25 },
+          "player_white_address": { "type": "string" },
+          "player_black_address": { "type": "string" },
+          "current_turn": { "type": "string", "enum": ["white", "black"], "example": "white" },
+          "fen": { "type": "string", "example": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1" },
+          "time_control_seconds": { "type": "integer", "example": 600 },
+          "time_increment_seconds": { "type": "integer", "example": 0 },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "GameResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "data": { "$ref": "#/components/schemas/Game" }
+        }
+      },
+      "Clock": {
+        "type": "object",
+        "properties": {
+          "whiteMs": { "type": "integer", "example": 600000 },
+          "blackMs": { "type": "integer", "example": 600000 },
+          "turn": { "type": "string", "enum": ["white", "black"] }
+        }
+      },
+      "Move": {
+        "type": "object",
+        "properties": {
+          "move_number": { "type": "integer", "example": 1 },
+          "player_color": { "type": "string", "enum": ["white", "black"] },
+          "from_square": { "type": "string", "example": "e2" },
+          "to_square": { "type": "string", "example": "e4" },
+          "san": { "type": "string", "example": "e4" },
+          "fen_after": { "type": "string" }
+        }
+      },
+      "TimeControl": {
+        "type": "object",
+        "properties": {
+          "preset": { "type": "string", "example": "rapid" },
+          "name": { "type": "string", "example": "Rapid 10+0" },
+          "seconds": { "type": "integer", "example": 600 },
+          "increment": { "type": "integer", "example": 0 }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": false },
+          "error": { "type": "string", "example": "Error message description" }
+        }
+      }
+    }
+  }
+}

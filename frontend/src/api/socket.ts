@@ -8,6 +8,12 @@ export interface ChatMessage {
 	createdAt: string;
 }
 
+export interface SpectatorReaction {
+	id: string;
+	emoji: string;
+	xOffset: number;
+}
+
 const BACKEND_URL =
 	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
 
@@ -62,8 +68,36 @@ class SocketService {
 		this.socket?.on("chat-message", callback);
 	}
 
+	sendReaction(gameCode: string, emoji: string) {
+		this.socket?.emit("spectator:reaction", { gameCode, emoji });
+	}
+
+	onReaction(callback: (data: SpectatorReaction) => void) {
+		this.socket?.off("spectator:reaction");
+		this.socket?.on("spectator:reaction", callback);
+	}
+
+	offReaction() {
+		this.socket?.off("spectator:reaction");
+	}
+
 	offChatMessage() {
 		this.socket?.off("chat-message");
+	}
+
+	requestRematch(gameCode: string, playerColor: string) {
+		this.socket?.emit("request-rematch", { gameCode, playerColor });
+	}
+
+	onRematchRequested(
+		callback: (data: { gameCode: string; playerColor: string }) => void,
+	) {
+		this.socket?.off("rematch-requested");
+		this.socket?.on("rematch-requested", callback);
+	}
+
+	offRematchRequested() {
+		this.socket?.off("rematch-requested");
 	}
 }
 

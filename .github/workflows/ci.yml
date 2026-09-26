@@ -109,6 +109,19 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check Frontend Bundle Size
+        run: npm run size-check
+
+      - name: Generate Frontend Bundle Stats
+        run: npm run build:analyze
+
+      - name: Upload Frontend Bundle Stats
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-bundle-stats
+          path: frontend/dist/stats.html
+          if-no-files-found: error
+
       - name: Upload Frontend Coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
