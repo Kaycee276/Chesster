@@ -19,7 +19,21 @@ function startLocalTimer() {
   _timerInterval = setInterval(() => {
     useGameStore.setState((s) => {
       if (s.status !== "active") return s;
-      return { secondsLeft: Math.max(0, s.secondsLeft - 1) };
+      
+      const newSecondsLeft = Math.max(0, s.secondsLeft - 1);
+      
+      // Play low-time tick sound: active player with < 10 seconds remaining
+      // Threshold is < 10s (not <=) so tick starts exactly when 10s is reached on next interval
+      const isActivePlayerLowTime = 
+        s.playerColor === s.currentTurn && 
+        newSecondsLeft > 0 && 
+        newSecondsLeft < 10;
+      
+      if (isActivePlayerLowTime && soundService.isEnabled()) {
+        soundService.lowTimeTick();
+      }
+      
+      return { secondsLeft: newSecondsLeft };
     });
   }, 1000);
 }
@@ -67,11 +81,15 @@ interface GameStore {
   chatMessages: ChatMessage[];
   unreadCount: number;
   chatOpen: boolean;
+  // Blindfold mode for training calculation skills
+  isBlindfoldMode: boolean;
+  toggleBlindfoldMode: () => void;
 
   createGame: (
     walletAddress: string,
     wagerAmount?: string,
     timeControlSeconds?: number,
+    timeIncrementSeconds?: number,
   ) => Promise<void>;
   joinGame: (
     code: string,
@@ -131,17 +149,24 @@ export const useGameStore = create<GameStore>()(
       chatMessages: [],
       unreadCount: 0,
       chatOpen: false,
+      isBlindfoldMode: false,
+
+      toggleBlindfoldMode: () =>
+        set((s) => ({ isBlindfoldMode: !s.isBlindfoldMode })),
 
       createGame: async (
         walletAddress: string,
         wagerAmount?: string,
         timeControlSeconds?: number,
+        timeIncrementSeconds?: number,
       ) => {
         const data = await api.createGame(
           "chess",
           walletAddress,
           wagerAmount,
           timeControlSeconds,
+          undefined,
+          timeIncrementSeconds,
         );
         if (data.success) {
           await get().joinGame(data.data.game_code, "white", walletAddress);
@@ -519,6 +544,7 @@ export const useGameStore = create<GameStore>()(
       partialize: (state) => ({
         gameCode: state.gameCode,
         playerColor: state.playerColor,
+        isBlindfoldMode: state.isBlindfoldMode,
       }),
     },
   ),
@@ -597,6 +623,17 @@ export const useGameNotifications = () => {
       addToast("Opponent offered a draw", "info");
     }
   }, [drawOffer, playerColor, status, addToast]);
+
+  // Notify this player when the opponent requests a rematch (Issue #254).
+  useEffect(() => {
+    if (!gameCode || !playerColor) return;
+    const handler = (data: { gameCode: string; playerColor: string }) => {
+      if (data.gameCode !== gameCode || data.playerColor === playerColor) return;
+      addToast("Opponent wants a rematch!", "info");
+    };
+    socketService.onRematchRequested(handler);
+    return () => socketService.offRematchRequested();
+  }, [gameCode, playerColor, addToast]);
 
   // Poll the DB every 3 s while waiting for the opponent to join.
   // Clears automatically when status leaves "waiting".

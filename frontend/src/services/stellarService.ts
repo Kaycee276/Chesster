@@ -4,8 +4,53 @@ import { signTransaction } from "@stellar/freighter-api";
 const RPC_URL = import.meta.env.VITE_STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = import.meta.env.VITE_STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
 const ESCROW_ADDRESS = import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS || import.meta.env.VITE_CONTRACT_ID || "";
+const HORIZON_URL = import.meta.env.VITE_STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org";
 
 const server = new rpc.Server(RPC_URL);
+
+export interface WalletBalance {
+    /** "XLM" for the native asset, otherwise the SAC's asset code. */
+    assetCode: string;
+    /** Human-readable balance, as returned by Horizon (e.g. "12.4550000"). */
+    balance: string;
+    /** Issuer account of the asset, absent for the native XLM balance. */
+    assetIssuer?: string;
+}
+
+/**
+ * Fetches the XLM and SAC token balances for a Stellar public key via Horizon.
+ * Returns a zero XLM balance for accounts that haven't been funded/created yet,
+ * since that's a normal state for a freshly-generated wallet rather than an error.
+ */
+export async function fetchAccountBalances(publicKey: string): Promise<WalletBalance[]> {
+    if (!publicKey) throw new Error("A public key is required to fetch balances");
+
+    let response: Response;
+    try {
+        response = await fetch(`${HORIZON_URL}/accounts/${publicKey}`);
+    } catch {
+        throw new Error("Unable to reach the Stellar network to fetch balances");
+    }
+
+    if (response.status === 404) {
+        return [{ assetCode: "XLM", balance: "0" }];
+    }
+
+    if (!response.ok) {
+        throw new Error(`Failed to fetch account balances (status ${response.status})`);
+    }
+
+    const data = await response.json();
+    const rawBalances = Array.isArray(data?.balances) ? data.balances : [];
+
+    return rawBalances.map(
+        (b: { asset_type: string; asset_code?: string; asset_issuer?: string; balance: string }) => ({
+            assetCode: b.asset_type === "native" ? "XLM" : b.asset_code || "SAC",
+            balance: b.balance,
+            assetIssuer: b.asset_type === "native" ? undefined : b.asset_issuer,
+        }),
+    );
+}
 
 export async function depositXLM(fnName: "create_match" | "join_match", gameCode: string, amount: string, publicKey: string) {
     if (!ESCROW_ADDRESS) throw new Error("Escrow contract address not configured");

@@ -1,3 +1,133 @@
+# [1.23.0](https://github.com/Kaycee276/Chesster/compare/v1.22.0...v1.23.0) (2026-09-26)
+
+
+### Features
+
+* **contracts:** implement nonce-based replay protection for player deposit signatures ([90c3515](https://github.com/Kaycee276/Chesster/commit/90c35156945a72108c3da08a139315ff95d79624))
+
+# [1.22.0](https://github.com/Kaycee276/Chesster/compare/v1.21.0...v1.22.0) (2026-09-26)
+
+
+### Bug Fixes
+
+* **backend:** keep deletion sessions revoked ([f9af09e](https://github.com/Kaycee276/Chesster/commit/f9af09e24f847519564d28726f17afd0e0e7f352))
+* **backend:** prune archived game partitions ([f70c91d](https://github.com/Kaycee276/Chesster/commit/f70c91d345c6ce34d4b8dc51c392b601c2b1415f))
+* **frontend:** repair SpectatorPage and ChessBoard broken by merge conflicts ([b1566c2](https://github.com/Kaycee276/Chesster/commit/b1566c22ae2d8bd6cd83aff727c175b12fba4916))
+
+
+### Features
+
+* **#304:** Implement spectator chat slow-mode and room isolation ([11b0a18](https://github.com/Kaycee276/Chesster/commit/11b0a187f2648405a4f56c29acace2e19c4ec584)), closes [#304](https://github.com/Kaycee276/Chesster/issues/304)
+* **#306:** Interactive Tactical Puzzle Solver with Hint System ([f2b0ddd](https://github.com/Kaycee276/Chesster/commit/f2b0ddd1e0aba1aafe5f218145f314e3629b5f2a)), closes [#306](https://github.com/Kaycee276/Chesster/issues/306)
+* add custom sound theme packs (wood, plastic, arcade, retro 8-bit) ([f468bc1](https://github.com/Kaycee276/Chesster/commit/f468bc18399aee75a2875aac0f8b11d80bf9b2e0)), closes [#307](https://github.com/Kaycee276/Chesster/issues/307)
+* add low-time warning alert with pulsing border and tick sound ([fbd8e76](https://github.com/Kaycee276/Chesster/commit/fbd8e762945fc70478b6a56550ebe9cc0099e5bc)), closes [#309](https://github.com/Kaycee276/Chesster/issues/309)
+* **backend:** add account privacy redaction ([31e417f](https://github.com/Kaycee276/Chesster/commit/31e417f75e98146c90e15896ccfcbd58957aa66a))
+* **backend:** add asynchronous event broadcasting ([7bfb067](https://github.com/Kaycee276/Chesster/commit/7bfb0672a4cbd944d01603eef7a3bd1f965e87f3))
+* **backend:** add automated game archival ([360cb3d](https://github.com/Kaycee276/Chesster/commit/360cb3decb61b49b866e32609ba0f1de0b4ea421))
+* **backend:** add daily chess puzzles ([5bcaf11](https://github.com/Kaycee276/Chesster/commit/5bcaf1168916b7722c5f9f7061f81b33215dc1fb))
+* **backend:** add dynamic elo bucket expansion to matchmaking ([b0267d8](https://github.com/Kaycee276/Chesster/commit/b0267d89f8c9228bf723cdbf38400b0b9f41519e)), closes [#248](https://github.com/Kaycee276/Chesster/issues/248)
+* **backend:** add match audit log export API for dispute resolution ([94f62c8](https://github.com/Kaycee276/Chesster/commit/94f62c81a1ad2aeda84dd0bc36f6018f66b58fed)), closes [#243](https://github.com/Kaycee276/Chesster/issues/243)
+* **backend:** add referral commission tracking ([43347bf](https://github.com/Kaycee276/Chesster/commit/43347bfbb937561cc603bc80ded2a78fb1813c40))
+* **backend:** add webhook exponential backoff and dead-letter queue ([f527e8f](https://github.com/Kaycee276/Chesster/commit/f527e8f2ebf1dce6ac1acbfd4ad22358d72b12e5)), closes [#246](https://github.com/Kaycee276/Chesster/issues/246)
+* **backend:** cache user profile stats and match history in redis ([8a76331](https://github.com/Kaycee276/Chesster/commit/8a763312e68ce144d45776589d1ed48deea93dbd)), closes [#247](https://github.com/Kaycee276/Chesster/issues/247)
+* **backend:** dispatch tournament notifications ([61e4e23](https://github.com/Kaycee276/Chesster/commit/61e4e23d4b2a1c1fea4bab20a3dfc55c27bc7092))
+* **backend:** enforce wager geo compliance ([e6a8567](https://github.com/Kaycee276/Chesster/commit/e6a8567ee63fb7ec9c5159a740471f35fc2779e7))
+* **backend:** persist anti-cheat analysis ([07b7f25](https://github.com/Kaycee276/Chesster/commit/07b7f25e0224d8037c4fee10a91a44a1daf3fcf9))
+* **backend:** run stockfish bot moves in a worker thread pool ([c8519d4](https://github.com/Kaycee276/Chesster/commit/c8519d49b09fc0c06d8820a958a4346c33fcec58)), closes [#241](https://github.com/Kaycee276/Chesster/issues/241)
+* **backend:** stream game replays over server-sent events ([077b6ba](https://github.com/Kaycee276/Chesster/commit/077b6ba4a199022f5deca22cc59ade19828c2e44)), closes [#245](https://github.com/Kaycee276/Chesster/issues/245)
+* board social card image generator (closes [#310](https://github.com/Kaycee276/Chesster/issues/310)) ([670fc78](https://github.com/Kaycee276/Chesster/commit/670fc78f7554b60188a5e8c38fb728e8ca20f90e))
+* **contracts:** Add Cryptographic Ed25519 Result Signature Verification in Escrow Settlement ([98a7a03](https://github.com/Kaycee276/Chesster/commit/98a7a030e50701788eae50c82b12cd8cfbbe5b02)), closes [#233](https://github.com/Kaycee276/Chesster/issues/233)
+* **contracts:** Implement Compact Binary Serialization for Match Storage to Reduce Soroban Gas ([3738574](https://github.com/Kaycee276/Chesster/commit/3738574ca31c0fa8199728ee205dcb82d41b0f01)), closes [#234](https://github.com/Kaycee276/Chesster/issues/234)
+* **contracts:** implement player elo rating commitment and proof-of-skill on stellar ([2491c28](https://github.com/Kaycee276/Chesster/commit/2491c28a8bcf9824be5300e74096389f877e4e71))
+* **frontend:** add client-side stockfish evaluation bar ([5eaaca7](https://github.com/Kaycee276/Chesster/commit/5eaaca7b167d9682b87005d562fa9f06241009fc)), closes [#250](https://github.com/Kaycee276/Chesster/issues/250)
+* **frontend:** add player profile page with rating history chart ([629285c](https://github.com/Kaycee276/Chesster/commit/629285c90b70c992386ab306872d91566ef3cfab)), closes [#255](https://github.com/Kaycee276/Chesster/issues/255)
+* **frontend:** high-contrast accessibility board theme for low-vision players ([fde1e8f](https://github.com/Kaycee276/Chesster/commit/fde1e8f2ecb237328725c0fdf37521489cb9578b)), closes [hi#contrast](https://github.com/hi/issues/contrast) [#314](https://github.com/Kaycee276/Chesster/issues/314) [Hi#Contrast](https://github.com/Hi/issues/Contrast) [hi#contrast](https://github.com/hi/issues/contrast)
+* **frontend:** keyboard shortcuts, board accessibility, wager pills, and leaderboard ([d1a3e17](https://github.com/Kaycee276/Chesster/commit/d1a3e174fa3bd09cc40fa466f1a1a8dbfce96707))
+* **frontend:** move accuracy & blunder classification in post-game analysis ([2202e89](https://github.com/Kaycee276/Chesster/commit/2202e8973a4473962e577fec4bb62072d01b3eb8)), closes [#313](https://github.com/Kaycee276/Chesster/issues/313)
+* implement Blindfold Mode & Peek feature (Issue [#305](https://github.com/Kaycee276/Chesster/issues/305)) ([ca248ad](https://github.com/Kaycee276/Chesster/commit/ca248ad440ffe045ff2aa33416bc1d909a44b24a))
+* implement player referral dashboard (closes [#308](https://github.com/Kaycee276/Chesster/issues/308)) ([cd0eaec](https://github.com/Kaycee276/Chesster/commit/cd0eaecafed002d9891eab799e9079d6f34a3fc3))
+* implement Socket.io reconnect handshake recovery with game state rehydration (issue [#303](https://github.com/Kaycee276/Chesster/issues/303)) ([b47e1ca](https://github.com/Kaycee276/Chesster/commit/b47e1cadb2caf75bb3b6c1d174930dc045807409))
+
+# [1.21.0](https://github.com/Kaycee276/Chesster/compare/v1.20.0...v1.21.0) (2026-09-25)
+
+
+### Features
+
+* **frontend:** add right-click arrows and square highlights to the board ([23482a5](https://github.com/Kaycee276/Chesster/commit/23482a524797106a324bb80caca97d7ba830b6bc))
+
+# [1.20.0](https://github.com/Kaycee276/Chesster/compare/v1.19.0...v1.20.0) (2026-09-25)
+
+
+### Features
+
+* harden chat and add tournament health coverage ([86b8634](https://github.com/Kaycee276/Chesster/commit/86b86341165a8f15b1bf09767ee1544daadf0abb))
+
+# [1.19.0](https://github.com/Kaycee276/Chesster/compare/v1.18.0...v1.19.0) (2026-09-25)
+
+
+### Features
+
+* **frontend:** add network/offline connection alert banner ([86ea021](https://github.com/Kaycee276/Chesster/commit/86ea021c0077610379ee5a1666be91bffc59f52c)), closes [#256](https://github.com/Kaycee276/Chesster/issues/256)
+
+# [1.18.0](https://github.com/Kaycee276/Chesster/compare/v1.17.0...v1.18.0) (2026-09-25)
+
+
+### Features
+
+* **backend:** add IP rate limiting for WebSocket handshakes ([25cd6c8](https://github.com/Kaycee276/Chesster/commit/25cd6c83383f2fc300031c6ba54722f7fdd7d240)), closes [#244](https://github.com/Kaycee276/Chesster/issues/244)
+* **backend:** implement threefold repetition and 50-move draw detection ([8f87590](https://github.com/Kaycee276/Chesster/commit/8f87590b2c8c67956b62949eaf3396ab6d0dbb32)), closes [#242](https://github.com/Kaycee276/Chesster/issues/242)
+* **frontend:** add PGN import and visual move replay analyzer ([9335a83](https://github.com/Kaycee276/Chesster/commit/9335a8358869e051ee92d8416de0e0323ddf1788))
+* **frontend:** add post-game result modal with PGN copy, rematch and share ([47dfa08](https://github.com/Kaycee276/Chesster/commit/47dfa0862f640d1e747de2e4835d49e3918a38ae)), closes [#254](https://github.com/Kaycee276/Chesster/issues/254)
+
+# [1.17.0](https://github.com/Kaycee276/Chesster/compare/v1.16.0...v1.17.0) (2026-09-25)
+
+
+### Features
+
+* add spectator reactions, themes, controls, and csrf ([7dd4527](https://github.com/Kaycee276/Chesster/commit/7dd4527b58147e74d21a8c680e287bdcc588af22))
+* **frontend:** add low-time cue, autoplay unlock, and sound service tests ([7bfeda1](https://github.com/Kaycee276/Chesster/commit/7bfeda1f0fbd0c56183e6323d62972f793fe4996))
+* **frontend:** add touch drag-and-drop piece movement with haptic feedback ([fb8db99](https://github.com/Kaycee276/Chesster/commit/fb8db997b82c67bb21562aa4627a487ac7d64896))
+
+# [1.16.0](https://github.com/Kaycee276/Chesster/compare/v1.15.0...v1.16.0) (2026-09-24)
+
+
+### Features
+
+* **frontend:** build Tournament Hub screen with category filters and search ([#228](https://github.com/Kaycee276/Chesster/issues/228)) ([b83b330](https://github.com/Kaycee276/Chesster/commit/b83b330e8f32ce483b490864c0b16ab67154c1f0))
+
+# [1.15.0](https://github.com/Kaycee276/Chesster/compare/v1.14.0...v1.15.0) (2026-09-24)
+
+
+### Features
+
+* **contracts:** Implement Batch Settlement Function for Concurrent Escrows ([516f067](https://github.com/Kaycee276/Chesster/commit/516f067e61e0ea003772db1a20078e319a528429)), closes [#236](https://github.com/Kaycee276/Chesster/issues/236)
+
+# [1.14.0](https://github.com/Kaycee276/Chesster/compare/v1.13.0...v1.14.0) (2026-09-24)
+
+
+### Features
+
+* **tournament:** implement on-chain prize escrow, refund window, bracket seeding, and round advancement ([709f2fc](https://github.com/Kaycee276/Chesster/commit/709f2fcdf4a15c7f7a845e3b5e6b2dc8a8b9339d)), closes [#219](https://github.com/Kaycee276/Chesster/issues/219) [#220](https://github.com/Kaycee276/Chesster/issues/220) [#223](https://github.com/Kaycee276/Chesster/issues/223) [#224](https://github.com/Kaycee276/Chesster/issues/224)
+
+
+### Performance Improvements
+
+* **contracts:** optimize contract WASM size within 64 KB budget limit ([8e14730](https://github.com/Kaycee276/Chesster/commit/8e1473031ecd98a292ee3558fb3ab2ba12daa4d2))
+
+# [1.13.0](https://github.com/Kaycee276/Chesster/compare/v1.12.0...v1.13.0) (2026-09-24)
+
+
+### Features
+
+* **backend,contracts:** match creation rate limiting, api docs, tournament rake, and disqualification slashing (closes [#151](https://github.com/Kaycee276/Chesster/issues/151), closes [#152](https://github.com/Kaycee276/Chesster/issues/152), closes [#221](https://github.com/Kaycee276/Chesster/issues/221), closes [#222](https://github.com/Kaycee276/Chesster/issues/222)) ([5ee7463](https://github.com/Kaycee276/Chesster/commit/5ee7463241d94d809d92824276a8c0e3cdaa4e6d))
+
+# [1.12.0](https://github.com/Kaycee276/Chesster/compare/v1.11.0...v1.12.0) (2026-09-24)
+
+
+### Features
+
+* **database:** add tournament bracket and participant tables migration ([c902d26](https://github.com/Kaycee276/Chesster/commit/c902d2646daed783abd8d19d3efc736f11f20e78))
+
 # [1.11.0](https://github.com/Kaycee276/Chesster/compare/v1.10.1...v1.11.0) (2026-09-23)
 
 
