@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Puzzle, puzzleApi } from "../api/puzzleApi";
+import { type Puzzle, puzzleApi } from "../api/puzzleApi";
 import { useToastStore } from "../store/toastStore";
 import { Loader2, RotateCcw, Lightbulb, Home } from "lucide-react";
-import { boardToFen } from "../utils/chessUtils";
 
 interface PuzzleMove {
 	from: [number, number];

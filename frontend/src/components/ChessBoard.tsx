@@ -47,7 +47,6 @@ import ConfirmModal from "./ConfirmModal";
 import GameResultModal from "./GameResultModal";
 import TurnTimer from "./TurnTimer";
 import ChatPanel from "./ChatPanel";
-import GameResultModal from "./GameResultModal";
 
 const PIECE_SYMBOLS: Record<string, string> = {
 	K: "♔",
@@ -332,6 +331,9 @@ function ChessBoardInner() {
 	const [flipped, setFlipped] = useState(false);
 	const [isPeeking, setIsPeeking] = useState(false);
 	const peekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	// Focusable board grid container — receives keyboard focus for arrow-key
+	// navigation/annotation shortcuts and drag/right-drag pointer tracking.
+	const boardGridRef = useRef<HTMLDivElement>(null);
 
 	// ── Piece move animation ───────────────────────────────────────────────────
 	const lastMove = useGameStore((s) => s.lastMove);
@@ -1089,19 +1091,6 @@ function ChessBoardInner() {
 				</div>
 			)}
 
-			{/* ── Game Result Modal (for sharing board image) ── */}
-			{status === "finished" && (
-				<GameResultModal
-					isOpen={showResultModal}
-					onClose={() => setShowResultModal(false)}
-					board={board}
-					currentTurn={currentTurn}
-					winner={winner}
-					endReason={endReason}
-					whiteUsername={opponentColor === "black" ? gameCode || "White" : "You"}
-					whiteRating={1600}
-					blackUsername={opponentColor === "white" ? gameCode || "Black" : "You"}
-					blackRating={1600}
 			{/* ── Post-Game Result Modal ── */}
 			{showResultModal && status === "finished" && (
 				<GameResultModal
@@ -1163,7 +1152,6 @@ function ChessBoardInner() {
 				{boardPx > 0 && (
 				<div
 					ref={boardGridRef}
-					className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity ${isMoving ? "opacity-70" : "opacity-100"}`}
 					role="grid"
 					tabIndex={-1}
 					aria-label={`Chess board, ${moveHistory.length} moves played. Use arrow keys to review, Z to step back, F to flip the board.`}
@@ -1292,6 +1280,7 @@ function ChessBoardInner() {
 												className="leading-none pointer-events-none"
 												style={{
 													fontSize: "calc(var(--board-size) / 8 * 0.72)",
+													opacity: isDragSource ? 0.35 : 1,
 													...(piece === piece.toUpperCase()
 														? WHITE_PIECE_STYLE
 														: BLACK_PIECE_STYLE),
@@ -1306,26 +1295,6 @@ function ChessBoardInner() {
 											</span>
 										)}
 									</>
-									<span
-										key={isPieceAnimating ? "anim" : "static"}
-										className={`leading-none pointer-events-none ${
-											piece === piece.toUpperCase() ? "board-piece-white" : "board-piece-black"
-										}`}
-										style={{
-											fontSize: "calc(var(--board-size) / 8 * 0.72)",
-											opacity: isDragSource ? 0.35 : 1,
-											...(piece === piece.toUpperCase()
-												? WHITE_PIECE_STYLE
-												: BLACK_PIECE_STYLE),
-											...(isPieceAnimating && {
-												animation: "pieceSlide 0.38s cubic-bezier(0.22,1,0.36,1) forwards",
-												"--piece-dx": `calc(${animOffset.dx} * var(--board-size) / 8)`,
-												"--piece-dy": `calc(${animOffset.dy} * var(--board-size) / 8)`,
-											}),
-										} as React.CSSProperties}
-									>
-										{PIECE_SYMBOLS[piece]}
-									</span>
 								)}
 							</div>
 						);
