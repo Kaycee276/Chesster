@@ -2794,3 +2794,86 @@ fn test_replay_protection_rejects_out_of_order_nonce() {
     // Skipping from 0 to 5 must fail with InvalidNonce (#44)
     client.increment_player_nonce(&player, &5);
 }
+
+#[test]
+fn test_fee_discount_tiers() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let zero_bal_winner = Address::generate(&env);
+    let tier1_winner = Address::generate(&env);
+    let tier2_winner = Address::generate(&env);
+    let opponent = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    let (gov_token, gov_token_admin_client) = create_token_contract(&env, &token_admin);
+
+    // Fund players with match wagering tokens
+    token_admin_client.mint(&zero_bal_winner, &10_000);
+    token_admin_client.mint(&tier1_winner, &10_000);
+    token_admin_client.mint(&tier2_winner, &10_000);
+    token_admin_client.mint(&opponent, &30_000);
+
+    // Fund governance token holdings
+    // Tier 1: 1,000 tokens (10_000_000_000 stroops) -> 25% discount off 500 bps = 375 bps
+    gov_token_admin_client.mint(&tier1_winner, &10_000_000_000);
+    // Tier 2: 5,000 tokens (50_000_000_000 stroops) -> 50% discount off 500 bps = 250 bps
+    gov_token_admin_client.mint(&tier2_winner, &50_000_000_000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500); // 5% base fee (500 bps)
+    client.add_whitelisted_token(&token.address);
+    client.set_gov_token_address(&gov_token.address);
+
+    assert_eq!(client.get_gov_token(), Some(gov_token.address.clone()));
+
+    // 1. Verify calculated effective fee bps
+    assert_eq!(client.get_effective_fee_bps(&zero_bal_winner), 500); // 0% discount
+    assert_eq!(client.get_effective_fee_bps(&tier1_winner), 375); // 25% discount
+    assert_eq!(client.get_effective_fee_bps(&tier2_winner), 250); // 50% discount
+
+    // 2. Verify calculate_discounted_fee view function and strict balance conservation
+    let pool: i128 = 200;
+    let (net0, fee0) = client.calculate_discounted_fee(&pool, &zero_bal_winner);
+    assert_eq!(fee0, 10);
+    assert_eq!(net0, 190);
+    assert_eq!(net0 + fee0, pool);
+
+    let (net1, fee1) = client.calculate_discounted_fee(&pool, &tier1_winner);
+    assert_eq!(fee1, 7); // 200 * 375 / 10000 = 7.5 -> 7
+    assert_eq!(net1, 193);
+    assert_eq!(net1 + fee1, pool);
+
+    let (net2, fee2) = client.calculate_discounted_fee(&pool, &tier2_winner);
+    assert_eq!(fee2, 5); // 200 * 250 / 10000 = 5
+    assert_eq!(net2, 195);
+    assert_eq!(net2 + fee2, pool);
+
+    // 3. Test resolve_match execution for Tier 1 winner
+    approve(&env, &token, &tier1_winner, &contract_id, 100);
+    approve(&env, &token, &opponent, &contract_id, 100);
+
+    let game_code_1 = String::from_str(&env, "GAME_TIER1");
+    client.create_match(&game_code_1, &tier1_winner, &token.address, &100);
+    client.join_match(&game_code_1, &opponent);
+
+    client.resolve_match(&game_code_1, &Some(tier1_winner.clone()));
+    assert_eq!(token.balance(&tier1_winner), 10_000 - 100 + 193); // net payout 193
+    assert_eq!(token.balance(&coordinator), 7); // fee payout 7
+
+    // 4. Test resolve_match execution for Tier 2 winner
+    approve(&env, &token, &tier2_winner, &contract_id, 100);
+    approve(&env, &token, &opponent, &contract_id, 100);
+
+    let game_code_2 = String::from_str(&env, "GAME_TIER2");
+    client.create_match(&game_code_2, &tier2_winner, &token.address, &100);
+    client.join_match(&game_code_2, &opponent);
+
+    client.resolve_match(&game_code_2, &Some(tier2_winner.clone()));
+    assert_eq!(token.balance(&tier2_winner), 10_000 - 100 + 195); // net payout 195
+    assert_eq!(token.balance(&coordinator), 7 + 5); // additional fee payout 5
+}
