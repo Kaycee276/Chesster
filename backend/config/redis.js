@@ -77,4 +77,16 @@ async function closeRedis() {
 	}
 }
 
-module.exports = { getRedisClient, getRedisConnection, closeRedis };
+let pubClient = null;
+let subClient = null;
+
+function getPubSubClients() {
+	if (!process.env.REDIS_URL) return { pubClient: null, subClient: null };
+	if (!pubClient) {
+		pubClient = createClient(process.env.REDIS_URL);
+		subClient = pubClient.duplicate();
+	}
+	return { pubClient, subClient };
+}
+
+module.exports = { getRedisClient, getRedisConnection, closeRedis, getPubSubClients };

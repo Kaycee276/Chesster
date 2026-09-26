@@ -660,6 +660,10 @@ class ChessEngine {
       differences
     };
   }
+  async processMove(gameId, fn) {
+    const { withLock } = require('../utils/distributedLock');
+    return await withLock(gameId, 2000, fn);
+  }
 }
 
 module.exports = new ChessEngine();

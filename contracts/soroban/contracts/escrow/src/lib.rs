@@ -2658,6 +2658,28 @@ impl ChessterEscrow {
 
         Self::remove_from_active_lists(env, game_code, m);
 
+        if let Some(w) = &m.winner {
+            let key = (symbol_short!("streak"), w.clone());
+            let mut streak: u32 = env.storage().instance().get(&key).unwrap_or(0);
+            streak += 1;
+            env.storage().instance().set(&key, &streak);
+
+            if streak == 5 {
+                Self::emit_milestone_event(env, w.clone(), streak, symbol_short!("streak5"));
+            } else if streak == 10 {
+                Self::emit_milestone_event(env, w.clone(), streak, symbol_short!("streak10"));
+            } else if streak == 25 {
+                Self::emit_milestone_event(env, w.clone(), streak, symbol_short!("streak25"));
+            }
+
+            let loser = if w == &m.player1 { m.player2.clone().unwrap() } else { m.player1.clone() };
+            env.storage().instance().set(&(symbol_short!("streak"), loser), &0u32);
+        } else {
+            env.storage().instance().set(&(symbol_short!("streak"), m.player1.clone()), &0u32);
+            if let Some(p2) = m.player2.clone() {
+                env.storage().instance().set(&(symbol_short!("streak"), p2), &0u32);
+            }
+        }
         // Update platform metrics (Issue #288)
         let mut metrics = env
             .storage()
@@ -2675,6 +2697,13 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(env, &DataKey::Metrics);
 
         admin_fee
+    }
+
+    fn emit_milestone_event(env: &Env, player: Address, streak_count: u32, milestone_type: Symbol) {
+        env.events().publish(
+            (symbol_short!("milestone"), player.clone()),
+            (streak_count, milestone_type)
+        );
     }
 
     /// Configures the match expiration timeout period in seconds (Coordinator only).

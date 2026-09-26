@@ -40,6 +40,15 @@ const io = new Server(server, {
   },
 });
 
+const { createAdapter } = require('@socket.io/redis-adapter');
+const { getPubSubClients } = require('./config/redis');
+
+const { pubClient, subClient } = getPubSubClients();
+if (pubClient && subClient) {
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log('Socket.io Redis adapter connected');
+}
+
 // Rate limit WebSocket handshake/connection attempts per IP to prevent
 // connection-flooding DoS before a socket is ever allocated (Issue #244).
 const socketHandshakeLimiter = createSocketRateLimiter({
@@ -177,7 +186,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     const { gameCode, playerColor } = socket.data || {};
     if (!gameCode || !playerColor) return;
 
@@ -186,8 +195,17 @@ io.on("connection", (socket) => {
     // fresher reconnect (e.g. rapid refresh / duplicate tabs).
     if (presence[playerColor].socketId !== socket.id) return;
 
+    try {
+      const gameModel = require("./models/gameModel");
+      const game = await gameModel.getGame(gameCode);
+      if (!game || game.status !== "active") return;
+    } catch (e) {
+      return;
+    }
+
     presence[playerColor].socketId = null;
     broadcastPresence(gameCode, playerColor, "reconnecting");
+    io.to(gameCode).emit('player_status', { color: playerColor, status: 'disconnected', graceMs: 60 * 1000 });
 
     // Give the player a 60-second grace period to reconnect before the
     // match is auto-forfeited on their behalf (see timerService).
@@ -324,6 +342,7 @@ io.on("connection", (socket) => {
         color: playerColor,
         timestamp: new Date().toISOString(),
       });
+      socket.to(gameId).emit('player_status', { color: playerColor, status: 'reconnected' });
 
       // Confirm success via ack
       sendAck(null, { success: true, gameId, playerColor });
