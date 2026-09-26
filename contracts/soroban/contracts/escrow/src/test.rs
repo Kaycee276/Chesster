@@ -2619,7 +2619,9 @@ fn test_player_rating_commitment() {
     client.commit_player_rating(&player, &1650, &42);
 
     // Query record and verify contents
-    let record = client.get_player_rating(&player).expect("record should exist");
+    let record = client
+        .get_player_rating(&player)
+        .expect("record should exist");
     assert_eq!(record.rating, 1650);
     assert_eq!(record.games_played, 42);
     assert_eq!(record.updated_at, env.ledger().timestamp());
@@ -2629,7 +2631,9 @@ fn test_player_rating_commitment() {
     env.ledger().set_timestamp(env.ledger().timestamp() + 3600);
     client.commit_player_rating(&player, &1720, &55);
 
-    let updated = client.get_player_rating(&player).expect("updated record should exist");
+    let updated = client
+        .get_player_rating(&player)
+        .expect("updated record should exist");
     assert_eq!(updated.rating, 1720);
     assert_eq!(updated.games_played, 55);
     assert_eq!(updated.updated_at, env.ledger().timestamp());
@@ -2650,7 +2654,10 @@ fn test_player_rating_unauthorized() {
     // Disallow mock auths
     env.set_auths(&[]);
     let res = client.try_commit_player_rating(&player, &1800, &20);
-    assert!(res.is_err(), "Non-coordinator or unauthorized call must fail");
+    assert!(
+        res.is_err(),
+        "Non-coordinator or unauthorized call must fail"
+    );
 }
 
 #[test]
@@ -2691,7 +2698,9 @@ fn test_player_rating_commitment_with_signature() {
         &BytesN::from_array(&env, &sig_bytes),
     );
 
-    let record = client.get_player_rating(&player).expect("record should exist");
+    let record = client
+        .get_player_rating(&player)
+        .expect("record should exist");
     assert_eq!(record.rating, 1950);
     assert_eq!(record.games_played, 120);
 }
@@ -2717,10 +2726,71 @@ fn test_player_rating_commitment_with_invalid_signature() {
     client.set_coordinator_pubkey(&BytesN::from_array(&env, &pubkey_bytes));
 
     let bad_sig = [9u8; 64];
-    client.commit_player_rating_with_sig(
-        &player,
-        &2100,
-        &300,
-        &BytesN::from_array(&env, &bad_sig),
-    );
+    client.commit_player_rating_with_sig(&player, &2100, &300, &BytesN::from_array(&env, &bad_sig));
+}
+
+#[test]
+fn test_replay_protection() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let player = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    // Initial nonce must be 0
+    assert_eq!(client.get_account_nonce(&player), 0);
+    assert_eq!(client.get_player_nonce(&player), 0);
+
+    // 1. Valid first execution with nonce = 1 succeeds and increments nonce
+    client.increment_player_nonce(&player, &1);
+    assert_eq!(client.get_account_nonce(&player), 1);
+    assert_eq!(client.get_player_nonce(&player), 1);
+
+    // 2. Valid second execution with nonce = 2 succeeds and increments nonce
+    client.increment_player_nonce(&player, &2);
+    assert_eq!(client.get_account_nonce(&player), 2);
+    assert_eq!(client.get_player_nonce(&player), 2);
+
+    // 3. Test deposit authorization payload verification
+    let payload = DepositAuthorizationPayload {
+        player: player.clone(),
+        game_code: String::from_str(&env, "GAME_DEP"),
+        amount: 100,
+        nonce: 3,
+    };
+    client.verify_deposit_authorization(&payload);
+    assert_eq!(client.get_account_nonce(&player), 3);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #44)")]
+fn test_replay_protection_rejects_duplicate_nonce() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let player = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    // Nonce 1 executes
+    client.increment_player_nonce(&player, &1);
+    assert_eq!(client.get_account_nonce(&player), 1);
+
+    // Replay of Nonce 1 must panic with InvalidNonce (#44)
+    client.increment_player_nonce(&player, &1);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #44)")]
+fn test_replay_protection_rejects_out_of_order_nonce() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let player = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    // Skipping from 0 to 5 must fail with InvalidNonce (#44)
+    client.increment_player_nonce(&player, &5);
 }
