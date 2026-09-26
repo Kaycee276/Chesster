@@ -1688,14 +1688,39 @@ impl ChessterEscrow {
         }
     }
 
-    fn validate_player_funds(env: &Env, token: &Address, owner: &Address, amount: i128) {
+    fn verify_token_allowance(env: &Env, token: &Address, owner: &Address, amount: i128) -> Result<(), EscrowError> {
         let token_client = token::Client::new(env, token);
-        if token_client.balance(owner) < amount {
+        let allowance = token_client.allowance(owner, &env.current_contract_address());
+        if allowance < amount {
+            return Err(EscrowError::InsufficientAllowance);
+        }
+        Ok(())
+    }
+
+    fn deposit_wager(env: &Env, token: &Address, from: &Address, amount: i128) {
+        if !Self::is_token_supported(env.clone(), token.clone()) {
+            panic_with_error!(env, EscrowError::TokenNotWhitelisted);
+        }
+
+        let key = Self::whitelist_key(env);
+        if env.storage().instance().has(&key) {
+            let whitelisted: Vec<Address> = env.storage().instance().get(&key).unwrap();
+            if !whitelisted.contains(token) {
+                panic_with_error!(env, EscrowError::TokenNotWhitelisted);
+            }
+        }
+
+        if let Err(e) = Self::verify_token_allowance(env, token, from, amount) {
+            panic_with_error!(env, e);
+        }
+
+        let token_client = token::Client::new(env, token);
+        if token_client.balance(from) < amount {
             panic_with_error!(env, EscrowError::InsufficientFunds);
         }
-        if token_client.allowance(owner, &env.current_contract_address()) < amount {
-            panic_with_error!(env, EscrowError::InsufficientAllowance);
-        }
+
+        token_client.transfer_from(&env.current_contract_address(), from, &env.current_contract_address(), &amount);
+        Self::add_locked(env, token, amount);
     }
 
     fn validate_wager_amount(env: &Env, token: &Address, amount: i128) {
@@ -1768,17 +1793,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::ContractPaused);
         }
 
-        if !Self::is_token_supported(env.clone(), token.clone()) {
-            panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
-        }
 
-        let key = Self::whitelist_key(&env);
-        if env.storage().instance().has(&key) {
-            let whitelisted: Vec<Address> = env.storage().instance().get(&key).unwrap();
-            if !whitelisted.contains(&token) {
-                panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
-            }
-        }
 
         if env.storage().persistent().has(&game_code) {
             panic_with_error!(&env, EscrowError::MatchAlreadyExists);
@@ -1802,10 +1817,7 @@ impl ChessterEscrow {
             .instance()
             .set(&Symbol::new(&env, "nonce"), &next_nonce);
 
-        let token_client = token::Client::new(&env, &token);
-        Self::validate_player_funds(&env, &token, &player1, amount);
-        token_client.transfer(&player1, &env.current_contract_address(), &amount);
-        Self::add_locked(&env, &token, amount);
+        Self::deposit_wager(&env, &token, &player1, amount);
 
         let m = Match {
             game_code: game_code.clone(),
@@ -1914,10 +1926,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::MaxActiveMatchesReached);
         }
 
-        let token_client = token::Client::new(&env, &m.token);
-        Self::validate_player_funds(&env, &m.token, &player2, m.wager_amount);
-        token_client.transfer(&player2, &env.current_contract_address(), &m.wager_amount);
-        Self::add_locked(&env, &m.token, m.wager_amount);
+        Self::deposit_wager(&env, &m.token, &player2, m.wager_amount);
 
         m.player2 = Some(player2.clone());
         m.status = MatchStatus::Active;
@@ -1995,10 +2004,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::InvalidWinner);
         }
 
-        let token_client = token::Client::new(&env, &m.token);
-        Self::validate_player_funds(&env, &m.token, &spectator, amount);
-        token_client.transfer(&spectator, &env.current_contract_address(), &amount);
-        Self::add_locked(&env, &m.token, amount);
+        Self::deposit_wager(&env, &m.token, &spectator, amount);
 
         let pool_key = (Symbol::new(&env, "side_p"), game_code.clone());
         let mut pool: SidePool = env
@@ -3474,8 +3480,14 @@ impl ChessterEscrow {
         }
 
         let token_client = token::Client::new(&env, &tournament.token);
-        Self::validate_player_funds(&env, &tournament.token, &player, tournament.buy_in_amount);
-        token_client.transfer(
+        if let Err(e) = Self::verify_token_allowance(&env, &tournament.token, &player, tournament.buy_in_amount) {
+            panic_with_error!(&env, e);
+        }
+        if token_client.balance(&player) < tournament.buy_in_amount {
+            panic_with_error!(&env, EscrowError::InsufficientFunds);
+        }
+        token_client.transfer_from(
+            &env.current_contract_address(),
             &player,
             &env.current_contract_address(),
             &tournament.buy_in_amount,
