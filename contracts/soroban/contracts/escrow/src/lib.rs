@@ -748,9 +748,9 @@ impl ChessterEscrow {
             let token_client = token::Client::new(&env, &gov_token);
             let balance = token_client.balance(&player);
 
-            if balance >= 5_000_0000000 || (balance >= 5_000 && balance < 1_000_0000000) {
+            if balance >= 50_000_000_000 || (5_000..10_000_000_000).contains(&balance) {
                 base_fee / 2 // 50% discount
-            } else if balance >= 1_000_0000000 || (balance >= 1_000 && balance < 5_000) {
+            } else if balance >= 10_000_000_000 || (1_000..5_000).contains(&balance) {
                 (base_fee * 3) / 4 // 25% discount
             } else {
                 base_fee
@@ -2986,9 +2986,9 @@ impl ChessterEscrow {
             if let Some(gov_token) = Self::get_gov_token(env.clone()) {
                 let token_client = token::Client::new(&env, &gov_token);
                 let balance = token_client.balance(&top_winner);
-                if balance >= 5_000_0000000 || (balance >= 5_000 && balance < 1_000_0000000) {
+                if balance >= 50_000_000_000 || (5_000..10_000_000_000).contains(&balance) {
                     fee_bps = base_fee_bps / 2;
-                } else if balance >= 1_000_0000000 || (balance >= 1_000 && balance < 5_000) {
+                } else if balance >= 10_000_000_000 || (1_000..5_000).contains(&balance) {
                     fee_bps = (base_fee_bps * 3) / 4;
                 }
             }

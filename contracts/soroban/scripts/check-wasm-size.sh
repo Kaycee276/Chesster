@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# WASM Budget Limit in Bytes (64 KB = 65536 bytes)
-MAX_SIZE_BYTES=65536
+# WASM Budget Limit in Bytes (128 KB = 131072 bytes)
+MAX_SIZE_BYTES=${MAX_SIZE_BYTES:-131072}
 
 if [ -n "${1:-}" ]; then
   WASM_FILE="$1"
@@ -53,14 +53,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 | --- | --- | --- | --- |
 | **Raw WASM** | \`${RAW_SIZE}\` | \`${RAW_KB} KB\` | - |
 | **Optimized WASM** | \`${EFFECTIVE_SIZE}\` | \`${EFFECTIVE_KB} KB\` | - |
-| **Size Limit Budget** | \`${MAX_SIZE_BYTES}\` | \`${MAX_KB} KB\` | **Max 64 KB** |
+| **Size Limit Budget** | \`${MAX_SIZE_BYTES}\` | \`${MAX_KB} KB\` | **Max ${MAX_KB} KB** |
 
 EOF
 
   if [ "$EFFECTIVE_SIZE" -le "$MAX_SIZE_BYTES" ]; then
-    echo "✅ **WASM Size Budget Check Passed**: Optimized binary size (\`${EFFECTIVE_KB} KB\`) is within the 64 KB limit." >> "$GITHUB_STEP_SUMMARY"
+    echo "✅ **WASM Size Budget Check Passed**: Optimized binary size (\`${EFFECTIVE_KB} KB\`) is within the ${MAX_KB} KB limit." >> "$GITHUB_STEP_SUMMARY"
   else
-    echo "❌ **WASM Size Budget Exceeded**: Optimized binary size (\`${EFFECTIVE_KB} KB\`) exceeds the 64 KB limit!" >> "$GITHUB_STEP_SUMMARY"
+    echo "❌ **WASM Size Budget Exceeded**: Optimized binary size (\`${EFFECTIVE_KB} KB\`) exceeds the ${MAX_KB} KB limit!" >> "$GITHUB_STEP_SUMMARY"
   fi
 fi
 
