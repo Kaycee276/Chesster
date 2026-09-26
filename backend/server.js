@@ -40,6 +40,15 @@ const io = new Server(server, {
   },
 });
 
+const { createAdapter } = require('@socket.io/redis-adapter');
+const { getPubSubClients } = require('./config/redis');
+
+const { pubClient, subClient } = getPubSubClients();
+if (pubClient && subClient) {
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log('Socket.io Redis adapter connected');
+}
+
 // Rate limit WebSocket handshake/connection attempts per IP to prevent
 // connection-flooding DoS before a socket is ever allocated (Issue #244).
 const socketHandshakeLimiter = createSocketRateLimiter({
