@@ -2730,7 +2730,6 @@ fn test_player_rating_commitment_with_invalid_signature() {
 }
 
 #[test]
-<<<<<<< HEAD
 fn test_replay_protection() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2877,5 +2876,4 @@ fn test_fee_discount_tiers() {
     client.resolve_match(&game_code_2, &Some(tier2_winner.clone()));
     assert_eq!(token.balance(&tier2_winner), 10_000 - 100 + 195); // net payout 195
     assert_eq!(token.balance(&coordinator), 7 + 5); // additional fee payout 5
-}
 }
