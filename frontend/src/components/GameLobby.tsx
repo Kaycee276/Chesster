@@ -1,13 +1,15 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import QRCode from "qrcode";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 import { useWalletStore } from "../store/walletStore";
 import { api } from "../api/gameApi";
-import { Clock, Users, ChevronRight, Trophy } from "lucide-react";
+import { Clock, Users, ChevronRight, Trophy, Share2, Copy, Check } from "lucide-react";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "./WalletDropdown";
 import { getTimeCategory, isValidTimeControl } from "../utils/timeControl";
+import { buildShareLink } from "../utils/shareLink";
 
 // ── Time control options ───────────────────────────────────────────────────────
 const TIME_CONTROLS = [
@@ -25,7 +27,8 @@ type Step =
 	| "depositing"
 	| "fetching"
 	| "join-confirming"
-	| "joining";
+	| "joining"
+	| "sharing";
 
 // Quick-select wager amounts in XLM, offered alongside the custom input (#132).
 const WAGER_PRESETS = [1, 5, 10, 25, 50] as const;
@@ -221,6 +224,103 @@ function WagerConfirmPanel({
 	);
 }
 
+// ── Share match link (QR code) panel ──────────────────────────────────────────
+function ShareMatchModal({
+	gameCode,
+	onContinue,
+}: {
+	gameCode: string;
+	onContinue: () => void;
+}) {
+	const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+	const [qrError, setQrError] = useState(false);
+	const [copied, setCopied] = useState(false);
+
+	let shareLink = "";
+	let linkError = false;
+	try {
+		shareLink = buildShareLink(gameCode);
+	} catch {
+		linkError = true;
+	}
+
+	useEffect(() => {
+		if (!shareLink) return;
+		let active = true;
+		QRCode.toDataURL(shareLink, { width: 220, margin: 1 })
+			.then((url) => {
+				if (active) setQrDataUrl(url);
+			})
+			.catch(() => {
+				if (active) setQrError(true);
+			});
+		return () => {
+			active = false;
+		};
+	}, [shareLink]);
+
+	const handleCopy = async () => {
+		try {
+			await navigator.clipboard.writeText(shareLink);
+			setCopied(true);
+			setTimeout(() => setCopied(false), 2000);
+		} catch {
+			// Clipboard unsupported/denied — the link is still visible to copy by hand.
+		}
+	};
+
+	return (
+		<div className="h-svh w-screen flex flex-col items-center justify-center bg-(--bg) p-4">
+			<div className="w-full max-w-xs bg-(--bg-secondary) border border-(--border) rounded-2xl p-5 flex flex-col gap-4 shadow-xl items-center">
+				<div className="flex items-center gap-2">
+					<Share2 size={18} className="text-(--accent-primary)" />
+					<h2 className="font-bold text-lg">Share Match Link</h2>
+				</div>
+				<p className="text-sm text-(--text-secondary) text-center">
+					Scan this code on a mobile device to join instantly
+				</p>
+
+				<div className="w-48 h-48 flex items-center justify-center bg-white rounded-xl overflow-hidden shrink-0">
+					{linkError || qrError ? (
+						<span className="text-xs text-red-500 text-center px-3">
+							Couldn&apos;t generate a QR code
+						</span>
+					) : qrDataUrl ? (
+						<img
+							src={qrDataUrl}
+							alt={`QR code to join game ${gameCode}`}
+							className="w-full h-full"
+						/>
+					) : (
+						<Spinner size={24} />
+					)}
+				</div>
+
+				<div className="w-full flex items-center gap-2 bg-(--bg) border border-(--border) rounded-lg px-3 py-2">
+					<span className="flex-1 text-xs font-mono truncate">
+						{shareLink || "Unable to build link"}
+					</span>
+					<button
+						onClick={handleCopy}
+						disabled={!shareLink}
+						className="flex items-center gap-1 text-xs font-semibold text-(--accent-primary) disabled:opacity-40 shrink-0"
+					>
+						{copied ? <Check size={12} /> : <Copy size={12} />}
+						{copied ? "Copied" : "Copy"}
+					</button>
+				</div>
+
+				<button
+					onClick={onContinue}
+					className="w-full py-3 font-bold bg-(--accent-dark) hover:bg-(--accent-primary) rounded-xl transition-all"
+				>
+					Continue to Game
+				</button>
+			</div>
+		</div>
+	);
+}
+
 // ── Pending games list ────────────────────────────────────────────────────────
 function PendingGamesList({
 	onJoin,
@@ -330,6 +430,7 @@ export default function GameLobby() {
 	const [isCustomTimeControl, setIsCustomTimeControl] = useState(false);
 	const [step, setStep] = useState<Step>("idle");
 	const [pendingWager, setPendingWager] = useState<WagerInfo | null>(null);
+	const [pendingShareCode, setPendingShareCode] = useState<string | null>(null);
 
 	const { createGame, joinGame } = useGameStore();
 	const { addToast } = useToastStore();
@@ -403,11 +504,11 @@ export default function GameLobby() {
 
 			try {
 				await joinGame(preGeneratedCode, "white", address);
-				navigate(`/${preGeneratedCode}`);
+				setPendingShareCode(preGeneratedCode);
+				setStep("sharing");
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : "Something went wrong";
 				addToast(msg, "error");
-			} finally {
 				setStep("idle");
 			}
 		} else {
@@ -420,14 +521,26 @@ export default function GameLobby() {
 					isCustomTimeControl ? customTimeControl.incrementSeconds : 0,
 				);
 				const code = useGameStore.getState().gameCode;
-				if (code) navigate(`/${code}`);
+				if (code) {
+					setPendingShareCode(code);
+					setStep("sharing");
+				} else {
+					setStep("idle");
+				}
 			} catch (err: unknown) {
 				const msg = err instanceof Error ? err.message : "Something went wrong";
 				addToast(msg, "error");
-			} finally {
 				setStep("idle");
 			}
 		}
+	};
+
+	// ── Continue from the share-link screen into the created game ─────────────
+	const handleContinueToGame = () => {
+		const code = pendingShareCode;
+		setStep("idle");
+		setPendingShareCode(null);
+		if (code) navigate(`/${code}`);
 	};
 
 	// ── Join game by code ─────────────────────────────────────────────────────
@@ -523,6 +636,16 @@ export default function GameLobby() {
 
 	if (step === "fetching" && !isLoading) {
 		return <LobbySkeleton />;
+	}
+
+	// ── Show share-match-link (QR code) panel after creating a game ───────────
+	if (step === "sharing" && pendingShareCode) {
+		return (
+			<ShareMatchModal
+				gameCode={pendingShareCode}
+				onContinue={handleContinueToGame}
+			/>
+		);
 	}
 
 	// ── Main lobby ────────────────────────────────────────────────────────────

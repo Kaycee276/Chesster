@@ -1,4 +1,4 @@
-import { BOARD_THEMES, BoardThemeKey } from "../store/themeStore";
+import { BOARD_THEMES, type BoardThemeKey } from "../store/themeStore";
 
 /**
  * Chess piece Unicode symbols for rendering on canvas
