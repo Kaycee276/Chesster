@@ -484,6 +484,14 @@ pub struct MatchExpiredEvent {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Published when an active player claims victory due to opponent timeout.
+pub struct MatchTimeoutClaimedEvent {
+    pub game_code: String,
+    pub claimant: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 /// Published when the coordinator records a player's Elo rating.
 pub struct PlayerEloUpdatedEvent {
     /// Player whose rating changed.
@@ -2347,6 +2355,44 @@ impl ChessterEscrow {
                 game_code,
                 winner,
                 admin_fee,
+            },
+        );
+    }
+
+    /// Active player claims victory if the opponent has abandoned the match and timeout threshold elapsed.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `game_code` - Unique match game code.
+    /// * `claimant` - Address of the player claiming timeout victory.
+    pub fn claim_timeout_victory(env: Env, game_code: String, claimant: Address) {
+        let _guard = ReentrancyGuard::new(&env);
+        claimant.require_auth();
+
+        Self::ensure_dispute_not_locked(&env, &game_code);
+
+        let mut m = Self::load_match(&env, &game_code);
+        if m.status != MatchStatus::Active {
+            panic_with_error!(&env, EscrowError::MatchNotActive);
+        }
+
+        if claimant != m.player1 && Some(claimant.clone()) != m.player2 {
+            panic_with_error!(&env, EscrowError::InvalidWinner);
+        }
+
+        let current_time = env.ledger().timestamp();
+        if current_time < m.last_activity_timestamp + m.timeout_seconds {
+            panic_with_error!(&env, EscrowError::TimeoutNotExpired);
+        }
+
+        let coordinator = Self::get_coordinator(env.clone());
+        Self::settle_match(&env, &coordinator, &game_code, &mut m, Some(claimant.clone()));
+
+        env.events().publish(
+            (symbol_short!("timeout"), game_code.clone()),
+            MatchTimeoutClaimedEvent {
+                game_code,
+                claimant,
             },
         );
     }
