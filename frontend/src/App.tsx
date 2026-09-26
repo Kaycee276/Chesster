@@ -11,6 +11,7 @@ import ProfilePage from "./pages/ProfilePage";
 import TournamentBracketPage from "./pages/TournamentBracketPage";
 import AnalysisPage from "./pages/AnalysisPage";
 import LeaderboardPage from "./pages/LeaderboardPage";
+import OverlayPage from "./pages/OverlayPage";
 import Toast from "./components/Toast";
 import ThemeSelector from "./components/ThemeSelector";
 import NetworkBanner from "./components/NetworkBanner";
@@ -59,6 +60,7 @@ const App = () => {
 				/>
 				<Route path="/analysis" element={<AnalysisPage />} />
 				<Route path="/leaderboard" element={<LeaderboardPage />} />
+				<Route path="/overlay/game/:gameCode" element={<OverlayPage />} />
 				<Route path="/:gameCode" element={<GamePage />} />
 				<Route path="/spectate/:gameCode" element={<SpectatorPage />} />
 			</Routes>

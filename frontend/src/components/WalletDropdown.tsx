@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWalletStore, type WalletType } from "../store/walletStore";
+import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
-import { ChevronDown, LogOut, RefreshCw, Wallet, Gift } from "lucide-react";
+import { ChevronDown, LogOut, RefreshCw, UserRound, Wallet, Gift } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useWalletStore, type WalletType } from "../store/walletStore";
-import { useToastStore } from "../store/toastStore";
-import { ChevronDown, LogOut, RefreshCw, UserRound, Wallet } from "lucide-react";
+import { rpc } from "@stellar/stellar-sdk";
+
+const RPC_URL = import.meta.env.VITE_STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
+const server = new rpc.Server(RPC_URL);
 
 const WALLET_OPTIONS: { type: WalletType; label: string; hint: string }[] = [
   { type: "freighter", label: "Freighter", hint: "Official Stellar wallet" },
@@ -17,11 +19,26 @@ const WALLET_OPTIONS: { type: WalletType; label: string; hint: string }[] = [
 
 export default function WalletDropdown() {
   const { address, walletType, connectWith, disconnect } = useWalletStore();
+  const isStreamerMode = useGameStore((s) => s.isStreamerMode);
   const { addToast } = useToastStore();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [connecting, setConnecting] = useState<WalletType | null>(null);
+  const [balance, setBalance] = useState<string>("0");
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!address) {
+      setBalance("0");
+      return;
+    }
+    server.getAccount(address).then((acc) => {
+      const native = acc.balances.find((b) => b.asset_type === "native");
+      if (native) setBalance(parseFloat(native.balance).toFixed(2));
+    }).catch(() => {
+      setBalance("0");
+    });
+  }, [address]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -45,6 +62,9 @@ export default function WalletDropdown() {
       setConnecting(null);
     }
   };
+
+  const displayBalance = isStreamerMode ? "•••• XLM" : `${balance} XLM`;
+  const displayAddress = isStreamerMode && address ? `${address.slice(0, 4)}...${address.slice(-4)}` : address;
 
   // Not connected — show wallet picker button
   if (!address) {
@@ -90,7 +110,8 @@ export default function WalletDropdown() {
         className="flex items-center gap-2 text-sm font-mono bg-(--bg-secondary) hover:bg-(--bg-tertiary) px-3 py-1.5 rounded-lg border border-(--border) transition-colors"
       >
         {walletType && <span className="text-[10px] text-(--text-tertiary) font-sans capitalize">{walletType}</span>}
-        {address.slice(0, 4)}...{address.slice(-4)}
+        <span className="text-xs text-(--text-secondary)">{displayBalance}</span>
+        <span>{displayAddress}</span>
         <ChevronDown size={14} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
       </button>
 
