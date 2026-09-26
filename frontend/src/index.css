@@ -46,6 +46,103 @@
 	--sq-dark: #b58863;
 }
 
+:root[data-theme="classic"] {
+	--sq-light: #f0d9b5;
+	--sq-dark: #b58863;
+	--sq-highlight: #829769;
+}
+
+:root[data-theme="wood"] {
+	--sq-light: #f1d7a8;
+	--sq-dark: #a9743a;
+	--sq-highlight: #d8a15d;
+}
+
+:root[data-theme="neon"] {
+	--sq-light: #15c2b8;
+	--sq-dark: #0b1020;
+	--sq-highlight: #38bdf8;
+}
+
+:root[data-theme="marble"] {
+	--sq-light: #eceae3;
+	--sq-dark: #5c6370;
+	--sq-highlight: #94a3b8;
+}
+
+/* High-contrast accessibility theme (#314)
+   Pure white/black squares: 21:1 square-to-square contrast (WCAG AAA needs
+   7:1) and ≥10:1 for every marker color against both square colors. */
+:root[data-theme="high-contrast"] {
+	--sq-light: #ffffff;
+	--sq-dark: #000000;
+	--sq-highlight: #ffff00;
+	--sq-selected: #00ffff;
+	--sq-lastmove: #ffff00;
+	--sq-check: #ff0000;
+}
+
+/* Diagonal crosshatch on dark squares gives them a distinct texture, so a
+   low-vision player can tell square colors apart without relying on color
+   alone. Thin white lines keep the underlying black at full contrast. */
+:root[data-theme="high-contrast"] [class*="bg-(--sq-dark)"] {
+	background-image: repeating-linear-gradient(
+		45deg,
+		rgba(255, 255, 255, 0.16) 0px,
+		rgba(255, 255, 255, 0.16) 2px,
+		transparent 2px,
+		transparent 9px
+	);
+}
+
+/* Legal-move hints: solid yellow reads on both white and black squares,
+   replacing the translucent black/white dots used by other themes. */
+:root[data-theme="high-contrast"] .legal-move-dot {
+	background: #ffff00;
+	opacity: 0.9;
+	box-shadow: 0 0 0 1px #000000;
+}
+
+:root[data-theme="high-contrast"] .legal-move-ring {
+	border-color: #ffff00;
+	box-shadow: 0 0 0 2px #000000, inset 0 0 0 1px #000000;
+}
+
+/* Squares: selected = cyan, last move = yellow, check = red — all solid.
+   These come after Tailwind's utilities so they win at equal specificity.
+   Each gets a hard outline (black, or white for the red check square) so the
+   boundary stays ≥3:1 against both neighbouring square colors (WCAG 1.4.11). */
+:root[data-theme="high-contrast"] .square-selected {
+	background: var(--sq-selected);
+	box-shadow: inset 0 0 0 2px #000000;
+}
+
+:root[data-theme="high-contrast"] .square-last-move {
+	background: var(--sq-lastmove);
+	box-shadow: inset 0 0 0 2px #000000;
+}
+
+:root[data-theme="high-contrast"] .square-check {
+	background: var(--sq-check);
+	box-shadow: inset 0 0 0 2px #ffffff;
+}
+
+/* Pieces: thicken the built-in 4-direction halo to 2–3px so glyph edges stay
+   crisp against both pure white and pure black squares. */
+:root[data-theme="high-contrast"] .board-piece-white {
+	color: #ffffff !important;
+	text-shadow:
+		-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000,
+		0 -3px 0 #000, 0 3px 0 #000, -3px 0 0 #000, 3px 0 0 #000 !important;
+}
+
+:root[data-theme="high-contrast"] .board-piece-black {
+	color: #000000 !important;
+	text-shadow:
+		-2px -2px 0 #fff, 2px -2px 0 #fff, -2px 2px 0 #fff, 2px 2px 0 #fff,
+		0 -3px 0 #fff, 0 3px 0 #fff, -3px 0 0 #fff, 3px 0 0 #fff !important;
+}
+
 .dark {
 	--bg: var(--bg-dark);
 	--bg-secondary: var(--bg-dark-secondary);
@@ -66,6 +163,11 @@ body {
 		color 0.3s ease;
 }
 
+.bg-\(--sq-light\),
+.bg-\(--sq-dark\) {
+	transition: background-color 200ms ease;
+}
+
 html,
 body {
 	height: 100%;
@@ -80,6 +182,15 @@ html {
 #root {
 	height: 100%;
 	overflow: hidden;
+}
+
+/* Chessboard squares/pieces are drag targets on touch devices — disable
+   the browser's native pan/zoom/pull-to-refresh gestures over them so a
+   piece drag never scrolls the page. */
+.board-square {
+	touch-action: none;
+	-webkit-touch-callout: none;
+	user-select: none;
 }
 
 /* Custom scrollbar */
@@ -150,10 +261,69 @@ button:disabled {
 	100% { background-color: transparent; }
 }
 
+/* Move accuracy badges (#313) — pill glyph rendered next to each move in the
+   analysis notation table. Solid fills with white (or near-black on amber)
+   text keep every pair at ≥ 4.5:1. */
+.acc-badge {
+	display: inline-block;
+	margin-left: 4px;
+	padding: 0 4px;
+	border-radius: 9999px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 9px;
+	line-height: 14px;
+	font-weight: 700;
+	vertical-align: 1px;
+}
+
+.acc-best {
+	background: #15803d;
+	color: #ffffff;
+}
+
+.acc-good {
+	background: #0f766e;
+	color: #ffffff;
+}
+
+.acc-inaccuracy {
+	background: #fbbf24;
+	color: #451a03;
+}
+
+.acc-mistake {
+	background: #c2410c;
+	color: #ffffff;
+}
+
+.acc-blunder {
+	background: #dc2626;
+	color: #ffffff;
+}
+
+/* Accuracy summary card meters */
+.acc-meter-strong {
+	background: #16a34a;
+}
+
+.acc-meter-weak {
+	background: #f59e0b;
+}
+
 /* Toast slide-in from the right */
 @keyframes slideIn {
 	from { transform: translateX(100%); opacity: 0; }
 	to   { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes reactionFloatUp {
+	0% { transform: translateY(0) scale(0.8); opacity: 0; }
+	15% { transform: translateY(-8px) scale(1); opacity: 1; }
+	100% { transform: translateY(-180px) scale(1.15); opacity: 0; }
+}
+
+.reaction-float-up {
+	animation: reactionFloatUp 2s ease-out forwards;
 }
 
 .animate-slide-in {

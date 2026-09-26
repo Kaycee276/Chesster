@@ -31,6 +31,10 @@ jest.mock("../services/escrowService", () => ({
   resolveAsDraw: jest.fn().mockResolvedValue({}),
 }));
 
+jest.mock("../services/referralService", () => ({
+  creditReferralCommission: jest.fn().mockResolvedValue({ credited: true, amount: "20" }),
+}));
+
 jest.mock("../services/chessEngine", () => {
   const emptyBoard = Array(8).fill(Array(8).fill("."));
   return {
@@ -40,6 +44,8 @@ jest.mock("../services/chessEngine", () => {
     isKingInCheck: jest.fn().mockReturnValue(false),
     isCheckmate: jest.fn().mockReturnValue(false),
     isStalemate: jest.fn().mockReturnValue(false),
+    getPositionKey: jest.fn().mockReturnValue("position-key"),
+    checkDrawConditions: jest.fn().mockReturnValue({ isDraw: false, canClaimDraw: false, reason: null }),
   };
 });
 
