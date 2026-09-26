@@ -313,6 +313,7 @@ function ChessBoardInner() {
 		setViewingIndex,
 		loadMoveHistory,
 		isBlindfoldMode,
+		isStreamerMode,
 	} = useGameStore();
 	const { addToast, removeToast } = useToastStore();
 	const navigate = useNavigate();
@@ -430,7 +431,7 @@ function ChessBoardInner() {
 	// Pot = each player's stake × 2 (only meaningful once both joined)
 	const potDisplay =
 		wagerAmount
-			? `${parseFloat(String(wagerAmount)) * 2} ${tokenLabel(tokenAddress)}`
+			? (isStreamerMode ? "•••• XLM" : `${parseFloat(String(wagerAmount)) * 2} ${tokenLabel(tokenAddress)}`)
 			: null;
 
 	// Current player will receive tokens when game ends
@@ -1254,6 +1255,18 @@ function ChessBoardInner() {
 								onMouseDown={(e) => handleSquareMouseDown(e, actualRow, actualCol)}
 								onPointerDown={(e) => handlePiecePointerDown(e, actualRow, actualCol)}
 							>
+								{/* Rank number on leftmost squares */}
+								{actualCol === 0 && (
+									<span className={`absolute top-0.5 left-1 font-bold pointer-events-none select-none z-10 ${isStreamerMode ? "text-sm sm:text-base text-yellow-300 font-extrabold" : "text-[10px] text-gray-500 dark:text-gray-400 opacity-75"}`}>
+										{playerColor === "black" ? actualRow + 1 : 8 - actualRow}
+									</span>
+								)}
+								{/* File letter on bottommost squares */}
+								{actualRow === 7 && (
+									<span className={`absolute bottom-0.5 right-1 font-bold pointer-events-none select-none z-10 ${isStreamerMode ? "text-sm sm:text-base text-yellow-300 font-extrabold" : "text-[10px] text-gray-500 dark:text-gray-400 opacity-75"}`}>
+										{String.fromCharCode(97 + (playerColor === "black" ? 7 - actualCol : actualCol))}
+									</span>
+								)}
 								{/* Legal-move marker: dot on empty squares, ring on captures (#123) */}
 								{possible && !capture && (
 									<div

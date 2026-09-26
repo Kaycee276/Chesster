@@ -5,6 +5,8 @@ import { useGameStore } from "../store/gameStore";
 export default function GameSettings() {
 	const isBlindfoldMode = useGameStore((s) => s.isBlindfoldMode);
 	const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
+	const isStreamerMode = useGameStore((s) => s.isStreamerMode);
+	const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
 	const [open, setOpen] = useState(false);
 
 	return (
@@ -79,6 +81,38 @@ export default function GameSettings() {
 						<p className="text-xs text-(--text-secondary) leading-relaxed">
 							When enabled, pieces appear as dots. Use the peek button (eye icon) in the action bar to reveal pieces for 2 seconds.
 						</p>
+
+						{/* Streamer Mode Toggle */}
+						<div className="flex flex-col gap-3 pt-3 border-t border-(--border)">
+							<div className="flex items-center justify-between">
+								<div className="flex flex-col gap-1">
+									<label className="text-sm font-semibold">
+										Streamer Mode
+									</label>
+									<p className="text-xs text-(--text-tertiary)">
+										Mask wallet addresses, balances, and wagers for live streaming
+									</p>
+								</div>
+								<button
+									type="button"
+									onClick={toggleStreamerMode}
+									className={`relative flex h-6 w-11 rounded-full transition-colors ${
+										isStreamerMode
+											? "bg-(--accent-primary)"
+											: "bg-(--bg-tertiary)"
+									}`}
+									role="switch"
+									aria-checked={isStreamerMode}
+									aria-label="Toggle streamer mode"
+								>
+									<div
+										className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+											isStreamerMode ? "translate-x-5" : "translate-x-0.5"
+										}`}
+									/>
+								</button>
+							</div>
+						</div>
 					</div>
 				</div>
 			)}

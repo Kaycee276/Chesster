@@ -84,6 +84,9 @@ interface GameStore {
   // Blindfold mode for training calculation skills
   isBlindfoldMode: boolean;
   toggleBlindfoldMode: () => void;
+  // Streamer mode for broadcasting matches securely
+  isStreamerMode: boolean;
+  toggleStreamerMode: () => void;
 
   createGame: (
     walletAddress: string,
@@ -150,9 +153,12 @@ export const useGameStore = create<GameStore>()(
       unreadCount: 0,
       chatOpen: false,
       isBlindfoldMode: false,
+      isStreamerMode: false,
 
       toggleBlindfoldMode: () =>
         set((s) => ({ isBlindfoldMode: !s.isBlindfoldMode })),
+      toggleStreamerMode: () =>
+        set((s) => ({ isStreamerMode: !s.isStreamerMode })),
 
       createGame: async (
         walletAddress: string,
@@ -545,6 +551,7 @@ export const useGameStore = create<GameStore>()(
         gameCode: state.gameCode,
         playerColor: state.playerColor,
         isBlindfoldMode: state.isBlindfoldMode,
+        isStreamerMode: state.isStreamerMode,
       }),
     },
   ),
