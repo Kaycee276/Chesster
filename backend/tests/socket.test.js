@@ -56,6 +56,10 @@ async function createSocketHarness() {
         createdAt: new Date(0).toISOString(),
       });
     });
+
+    socket.on("join_tournament_room", (tournamentId) => {
+      if (tournamentId) socket.join(`tournament:${tournamentId}`);
+    });
   });
 
   await new Promise((resolve) => httpServer.listen(0, resolve));
@@ -128,5 +132,27 @@ describe("socket.io game room concurrency", () => {
       expect.objectContaining({ playerColor: "white", message: "good move" }),
       expect.objectContaining({ playerColor: "white", message: "good move" }),
     ]);
+  });
+
+  test("tournament clients receive lifecycle events", async () => {
+    harness = await createSocketHarness();
+    const client = Client(harness.url);
+    clients.push(client);
+
+    await waitFor(client, "connect");
+
+    client.emit("join_tournament_room", "T123");
+    
+    const { emitPlayerJoined } = require("../services/tournamentService");
+    
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    
+    const eventPromise = waitFor(client, "tournament:player_joined");
+    emitPlayerJoined(harness.io, "T123", { playerCount: 10 });
+    
+    await expect(eventPromise).resolves.toMatchObject({
+      tournamentId: "T123",
+      playerCount: 10,
+    });
   });
 });

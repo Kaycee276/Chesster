@@ -1,51 +1,27 @@
-import { useState, useEffect } from "react";
-import { BrowserRouter, Routes, Route, useNavigate } from "react-router-dom";
+import { useEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import GameLobby from "./components/GameLobby";
 import GamePage from "./pages/GamePage";
 import SpectatorPage from "./pages/SpectatorPage";
+import TournamentPage from "./pages/TournamentPage";
+import PuzzlePage from "./pages/PuzzlePage";
+import GameSettings from "./components/GameSettings";
+import ReferralPage from "./pages/ReferralPage";
+import ProfilePage from "./pages/ProfilePage";
+import TournamentBracketPage from "./pages/TournamentBracketPage";
+import AnalysisPage from "./pages/AnalysisPage";
+import LeaderboardPage from "./pages/LeaderboardPage";
+import OverlayPage from "./pages/OverlayPage";
 import Toast from "./components/Toast";
 import ThemeSelector from "./components/ThemeSelector";
-import { TournamentQueueModal } from "./components/TournamentQueueModal";
+import NetworkBanner from "./components/NetworkBanner";
 import { useWalletStore } from "./store/walletStore";
 import { useThemeStore, applyColorMode } from "./store/themeStore";
-import { socketService } from "./api/socket";
-import type { MatchReadyEvent } from "./api/socket";
 
-const AppContent = () => {
-	const navigate = useNavigate();
-	const [matchData, setMatchData] = useState<MatchReadyEvent | null>(null);
-
-	useEffect(() => {
-		socketService.connect();
-		socketService.onTournamentMatchReady((data) => {
-			setMatchData(data);
-		});
-		return () => {
-			socketService.offTournamentMatchReady();
-		};
-	}, []);
-
-	return (
-		<>
-			<Toast />
-			<Routes>
-				<Route path="/" element={<GameLobby />} />
-				<Route path="/:gameCode" element={<GamePage />} />
-				<Route path="/spectate/:gameCode" element={<SpectatorPage />} />
-			</Routes>
-			<ThemeSelector />
-			{matchData && (
-				<TournamentQueueModal
-					matchData={matchData}
-					onEnterMatch={(gameCode) => {
-						setMatchData(null);
-						navigate(`/${gameCode}`);
-					}}
-				/>
-			)}
-		</>
-	);
-};
+function PrivateRoute({ element }: { element: React.ReactNode }) {
+	const { isConnected } = useWalletStore();
+	return isConnected ? element : <Navigate to="/" replace />;
+}
 
 const App = () => {
 	const { checkConnection } = useWalletStore();
@@ -70,7 +46,26 @@ const App = () => {
 
 	return (
 		<BrowserRouter>
-			<AppContent />
+			<NetworkBanner />
+			<Toast />
+			<Routes>
+				<Route path="/" element={<GameLobby />} />
+				<Route path="/tournaments" element={<TournamentPage />} />
+				<Route path="/puzzles" element={<PuzzlePage />} />
+				<Route path="/referrals" element={<PrivateRoute element={<ReferralPage />} />} />
+				<Route path="/profile/:address" element={<ProfilePage />} />
+				<Route
+					path="/tournaments/:tournamentId/bracket"
+					element={<TournamentBracketPage />}
+				/>
+				<Route path="/analysis" element={<AnalysisPage />} />
+				<Route path="/leaderboard" element={<LeaderboardPage />} />
+				<Route path="/overlay/game/:gameCode" element={<OverlayPage />} />
+				<Route path="/:gameCode" element={<GamePage />} />
+				<Route path="/spectate/:gameCode" element={<SpectatorPage />} />
+			</Routes>
+			<ThemeSelector />
+			<GameSettings />
 		</BrowserRouter>
 	);
 };

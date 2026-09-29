@@ -248,3 +248,23 @@ This script can be run in CI pipelines to periodically audit branch protection:
   env:
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
+
+## WebSocket load simulation
+
+The backend load harness in `backend/tests/load/websocketStress.js` opens 200
+Socket.IO clients in 100 rooms, sends move traffic, records update latency,
+and fails on connection errors or unexpected disconnects. Run it against a
+disposable server rather than a production instance:
+
+```bash
+cd backend
+LOAD_BASE_URL=http://localhost:3001 \
+LOAD_DURATION_SECONDS=300 \
+npm run test:load
+```
+
+The default ten-second smoke run is intentionally short. Set
+`LOAD_ROOMS`, `LOAD_MOVES`, and `LOAD_MOVE_INTERVAL_MS` to reproduce a smaller
+or longer scenario. The JSON report includes p95/p99 latency, rejected moves,
+connection errors, and unexpected disconnects; a non-zero exit code means the
+run cannot be considered healthy.

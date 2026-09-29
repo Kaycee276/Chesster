@@ -252,6 +252,61 @@ export function moveToAlgebraic(
 }
 
 /**
+ * Converts algebraic notation (e.g. "e4") to a board index position
+ * ([row, col]). Inverse of squareToAlgebraic.
+ */
+export function algebraicToSquare(square: string): [number, number] {
+	const col = square.charCodeAt(0) - 97;
+	const row = 8 - parseInt(square[1], 10);
+	return [row, col];
+}
+
+/**
+ * Applies a move to a board, returning a new board plus a few facts about
+ * the move (piece moved, whether it was a capture/castle/en-passant), and
+ * auto-queening pawns that reach the back rank unless a promotion piece is
+ * given. Used by the analysis board (#251) for interactively exploring
+ * candidate lines and by the PGN replay engine.
+ */
+export function applyMove(
+	board: string[][],
+	from: [number, number],
+	to: [number, number],
+	promotion?: string,
+): { board: string[][]; piece: string; isCapture: boolean; isCastle: boolean; isEnPassant: boolean } {
+	const next = board.map((r) => [...r]);
+	const piece = next[from[0]][from[1]];
+	const capturedOnDest = next[to[0]][to[1]] !== ".";
+	const isPawn = piece.toLowerCase() === "p";
+	const isEnPassant = isPawn && from[1] !== to[1] && !capturedOnDest;
+	const isCastle = piece.toLowerCase() === "k" && Math.abs(to[1] - from[1]) === 2;
+
+	if (isEnPassant) {
+		// Captured pawn sits beside the destination, on the departure rank.
+		next[from[0]][to[1]] = ".";
+	}
+
+	next[to[0]][to[1]] = piece;
+	next[from[0]][from[1]] = ".";
+
+	if (isCastle) {
+		const rank = from[0];
+		const kingside = to[1] > from[1];
+		const rookFromCol = kingside ? 7 : 0;
+		const rookToCol = kingside ? to[1] - 1 : to[1] + 1;
+		next[rank][rookToCol] = next[rank][rookFromCol];
+		next[rank][rookFromCol] = ".";
+	}
+
+	if (isPawn && (to[0] === 0 || to[0] === 7)) {
+		const promo = promotion ?? "q";
+		next[to[0]][to[1]] = piece === piece.toUpperCase() ? promo.toUpperCase() : promo.toLowerCase();
+	}
+
+	return { board: next, piece, isCapture: capturedOnDest || isEnPassant, isCastle, isEnPassant };
+}
+
+/**
  * Converts the current board array to a FEN position string.
  * Omits castling rights and en passant (not tracked client-side).
  */

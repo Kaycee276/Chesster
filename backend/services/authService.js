@@ -25,14 +25,18 @@ class AuthService {
 		this.challenges = new Map(); // address -> { nonce, expiresAt }
 	}
 
-	createChallenge(address) {
+	createChallenge(address, purpose = "login") {
 		if (!address || typeof address !== "string") {
 			throw new Error("Wallet address is required");
 		}
+		if (!["login", "delete-account"].includes(purpose)) {
+			throw new Error("Unsupported authentication challenge purpose");
+		}
 
 		const nonce = crypto.randomBytes(16).toString("hex");
-		const message = `Chesster login\naddress: ${address}\nnonce: ${nonce}`;
-		this.challenges.set(address, { message, expiresAt: Date.now() + CHALLENGE_TTL_MS });
+		const action = purpose === "delete-account" ? "account deletion" : "login";
+		const message = `Chesster ${action}\naddress: ${address}\nnonce: ${nonce}`;
+		this.challenges.set(address, { message, purpose, expiresAt: Date.now() + CHALLENGE_TTL_MS });
 		return message;
 	}
 
@@ -41,9 +45,12 @@ class AuthService {
 	 * @param {string} address - Stellar public key (G...)
 	 * @param {string} signature - base64-encoded signature over the challenge message
 	 */
-	verifySignature(address, signature) {
+	verifySignature(address, signature, expectedPurpose = "login") {
 		const entry = this.challenges.get(address);
 		if (!entry) throw new Error("No pending login challenge for this address");
+		if (entry.purpose !== expectedPurpose) {
+			throw new Error("Authentication challenge purpose mismatch");
+		}
 		if (Date.now() > entry.expiresAt) {
 			this.challenges.delete(address);
 			throw new Error("Login challenge expired, request a new one");
@@ -75,7 +82,10 @@ class AuthService {
 	}
 
 	issueToken(address) {
-		return jwt.sign({ sub: address, address }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+		return jwt.sign({ sub: address, address }, JWT_SECRET, {
+			expiresIn: JWT_EXPIRES_IN,
+			jwtid: crypto.randomUUID(),
+		});
 	}
 
 	verifyToken(token) {

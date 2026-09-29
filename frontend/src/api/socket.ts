@@ -8,13 +8,19 @@ export interface ChatMessage {
 	createdAt: string;
 }
 
-export interface MatchReadyEvent {
-	gameCode: string;
-	round: number;
-	opponentName: string;
-	opponentRating: number;
+export interface SpectatorReaction {
+	id: string;
+	emoji: string;
+	xOffset: number;
+}
+
+/** Payload of the server's presence/reconnection events (#317). */
+export interface OpponentStatusEvent {
+	gameCode?: string;
+	gameId?: string;
 	color: "white" | "black";
-	walletAddress: string;
+	status?: string;
+	forfeited?: boolean;
 }
 
 const BACKEND_URL =
@@ -71,16 +77,70 @@ class SocketService {
 		this.socket?.on("chat-message", callback);
 	}
 
+	sendReaction(gameCode: string, emoji: string) {
+		this.socket?.emit("spectator:reaction", { gameCode, emoji });
+	}
+
+	onReaction(callback: (data: SpectatorReaction) => void) {
+		this.socket?.off("spectator:reaction");
+		this.socket?.on("spectator:reaction", callback);
+	}
+
+	offReaction() {
+		this.socket?.off("spectator:reaction");
+	}
+
 	offChatMessage() {
 		this.socket?.off("chat-message");
 	}
 
-	onTournamentMatchReady(callback: (data: MatchReadyEvent) => void) {
-		this.socket?.on("tournament:match_ready", callback);
+	onTournamentMatchCompleted(callback: (data: any) => void) {
+		this.socket?.on("tournament:match_completed", callback);
 	}
 
-	offTournamentMatchReady() {
-		this.socket?.off("tournament:match_ready");
+	offTournamentMatchCompleted() {
+		this.socket?.off("tournament:match_completed");
+	requestRematch(gameCode: string, playerColor: string) {
+		this.socket?.emit("request-rematch", { gameCode, playerColor });
+	}
+
+	onRematchRequested(
+		callback: (data: { gameCode: string; playerColor: string }) => void,
+	) {
+		this.socket?.off("rematch-requested");
+		this.socket?.on("rematch-requested", callback);
+	}
+
+	offRematchRequested() {
+		this.socket?.off("rematch-requested");
+	}
+
+	// ── Opponent presence (#317) ───────────────────────────────────────────
+	// The server broadcasts "presence-update" when a player's socket drops
+	// (status "reconnecting") and again after the 60 s grace period expires
+	// with the match auto-forfeited (status "offline", forfeited true).
+	onOpponentReconnecting(callback: (data: OpponentStatusEvent) => void) {
+		this.socket?.off("presence-update");
+		this.socket?.on("presence-update", callback);
+	}
+
+	offOpponentReconnecting() {
+		this.socket?.off("presence-update");
+	}
+
+	// The reconnecting player's client cancels the grace timer through the
+	// join-game or reconnect_game handlers, which emit the same event under
+	// two spellings; both are wired so the banner dismisses either way.
+	onOpponentReconnected(callback: (data: OpponentStatusEvent) => void) {
+		this.socket?.off("player_reconnected");
+		this.socket?.off("player-reconnected");
+		this.socket?.on("player_reconnected", callback);
+		this.socket?.on("player-reconnected", callback);
+	}
+
+	offOpponentReconnected() {
+		this.socket?.off("player_reconnected");
+		this.socket?.off("player-reconnected");
 	}
 }
 

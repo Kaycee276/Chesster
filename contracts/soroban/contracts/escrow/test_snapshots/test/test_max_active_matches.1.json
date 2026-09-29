@@ -791,19 +791,9 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "cancel_requested_player1"
+                        "symbol": "cancellation_proposed_by"
                       },
-                      "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "cancel_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
-                      }
+                      "val": "void"
                     },
                     {
                       "key": {
@@ -815,18 +805,10 @@
                     },
                     {
                       "key": {
-                        "symbol": "draw_requested_player1"
+                        "symbol": "flags"
                       },
                       "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "draw_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
+                        "u32": 0
                       }
                     },
                     {
@@ -835,6 +817,14 @@
                       },
                       "val": {
                         "string": "GAME0"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "max_duration_seconds"
+                      },
+                      "val": {
+                        "u64": 3600
                       }
                     },
                     {
@@ -937,19 +927,9 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "cancel_requested_player1"
+                        "symbol": "cancellation_proposed_by"
                       },
-                      "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "cancel_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
-                      }
+                      "val": "void"
                     },
                     {
                       "key": {
@@ -961,18 +941,10 @@
                     },
                     {
                       "key": {
-                        "symbol": "draw_requested_player1"
+                        "symbol": "flags"
                       },
                       "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "draw_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
+                        "u32": 0
                       }
                     },
                     {
@@ -981,6 +953,14 @@
                       },
                       "val": {
                         "string": "GAME1"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "max_duration_seconds"
+                      },
+                      "val": {
+                        "u64": 3600
                       }
                     },
                     {
@@ -1083,19 +1063,9 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "cancel_requested_player1"
+                        "symbol": "cancellation_proposed_by"
                       },
-                      "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "cancel_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
-                      }
+                      "val": "void"
                     },
                     {
                       "key": {
@@ -1107,18 +1077,10 @@
                     },
                     {
                       "key": {
-                        "symbol": "draw_requested_player1"
+                        "symbol": "flags"
                       },
                       "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "draw_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
+                        "u32": 0
                       }
                     },
                     {
@@ -1127,6 +1089,14 @@
                       },
                       "val": {
                         "string": "GAME2"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "max_duration_seconds"
+                      },
+                      "val": {
+                        "u64": 3600
                       }
                     },
                     {
@@ -1229,19 +1199,9 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "cancel_requested_player1"
+                        "symbol": "cancellation_proposed_by"
                       },
-                      "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "cancel_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
-                      }
+                      "val": "void"
                     },
                     {
                       "key": {
@@ -1253,18 +1213,10 @@
                     },
                     {
                       "key": {
-                        "symbol": "draw_requested_player1"
+                        "symbol": "flags"
                       },
                       "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "draw_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
+                        "u32": 0
                       }
                     },
                     {
@@ -1273,6 +1225,14 @@
                       },
                       "val": {
                         "string": "GAME3"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "max_duration_seconds"
+                      },
+                      "val": {
+                        "u64": 3600
                       }
                     },
                     {
@@ -1375,19 +1335,9 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "cancel_requested_player1"
+                        "symbol": "cancellation_proposed_by"
                       },
-                      "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "cancel_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
-                      }
+                      "val": "void"
                     },
                     {
                       "key": {
@@ -1399,18 +1349,10 @@
                     },
                     {
                       "key": {
-                        "symbol": "draw_requested_player1"
+                        "symbol": "flags"
                       },
                       "val": {
-                        "bool": false
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "draw_requested_player2"
-                      },
-                      "val": {
-                        "bool": false
+                        "u32": 0
                       }
                     },
                     {
@@ -1419,6 +1361,14 @@
                       },
                       "val": {
                         "string": "GAME4"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "max_duration_seconds"
+                      },
+                      "val": {
+                        "u64": 3600
                       }
                     },
                     {
@@ -1486,6 +1436,84 @@
                         "symbol": "winner"
                       },
                       "val": "void"
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "Metrics"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "Metrics"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "active_matches_count"
+                      },
+                      "val": {
+                        "u32": 5
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "total_matches_created"
+                      },
+                      "val": {
+                        "u64": 5
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "total_rake_collected"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 0
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "total_volume_xlm"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 500
+                        }
+                      }
                     }
                   ]
                 }

@@ -6,7 +6,7 @@
 FROM node:20-alpine AS base
 WORKDIR /app
 RUN apk add --no-cache libc6-compat
-COPY package*.json ./
+COPY package.json package-lock.json ./
 
 # -------------------------------------------------------------
 # Stage 2: Development environment (with hot-reloading)
@@ -24,7 +24,7 @@ CMD ["npm", "run", "dev"]
 # -------------------------------------------------------------
 FROM base AS runner
 ENV NODE_ENV=production
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 COPY --chown=node:node . .
 USER node
 EXPOSE 3001

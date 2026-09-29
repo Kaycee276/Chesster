@@ -1,9 +1,15 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 import { useWalletStore } from "../store/walletStore";
 import ChessBoard from "../components/ChessBoard";
+import DisconnectBanner from "../components/DisconnectBanner";
+import { useGraceCountdown } from "../hooks/useGraceCountdown";
+import {
+	socketService,
+	type OpponentStatusEvent,
+} from "../api/socket";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "../components/WalletDropdown";
 
@@ -15,6 +21,94 @@ interface GameInfo {
 }
 
 type JoinStep = "idle" | "depositing" | "joining";
+
+const GRACE_PERIOD_SECONDS = 60;
+
+/**
+ * Live opponent-disconnect banner (#317).
+ *
+ * Subscribes to the server's presence events while mounted: when the
+ * opponent's socket drops, the server starts a 60 s grace timer and
+ * auto-forfeits the match when it expires. This component mirrors that
+ * countdown above the board and shows a green badge when they return.
+ */
+function OpponentDisconnectBanner() {
+	const gameCode = useGameStore((s) => s.gameCode);
+	const playerColor = useGameStore((s) => s.playerColor);
+
+	const [disconnectedColor, setDisconnectedColor] = useState<
+		"white" | "black" | null
+	>(null);
+	const [reconnected, setReconnected] = useState(false);
+
+	const isOpponentEvent = useCallback(
+		(event: OpponentStatusEvent) =>
+			!!event.color &&
+			event.color !== playerColor &&
+			(!event.gameCode || !event.gameId || event.gameCode === gameCode || event.gameId === gameCode),
+		[playerColor, gameCode],
+	);
+
+	useEffect(() => {
+		if (!gameCode) return;
+
+		const onReconnecting = (event: OpponentStatusEvent) => {
+			// "reconnecting" is the server's disconnect marker; "online" (return)
+			// and "offline" (auto-forfeit settled) are handled elsewhere.
+			if (!isOpponentEvent(event) || event.status !== "reconnecting") return;
+			setReconnected(false);
+			setDisconnectedColor(event.color);
+		};
+		const onReconnected = (event: OpponentStatusEvent) => {
+			if (!isOpponentEvent(event)) return;
+			setReconnected(true);
+		};
+
+		socketService.onOpponentReconnecting(onReconnecting);
+		socketService.onOpponentReconnected(onReconnected);
+		return () => {
+			socketService.offOpponentReconnecting();
+			socketService.offOpponentReconnected();
+		};
+	}, [gameCode, isOpponentEvent]);
+
+	// Restart the local mirror of the server's grace countdown whenever a new
+	// disconnect arrives. Server auto-forfeits at 0 regardless of this timer.
+	const remaining = useGraceCountdown(
+		disconnectedColor === null ? 0 : GRACE_PERIOD_SECONDS,
+	);
+	const graceSeconds = disconnectedColor === null ? 0 : remaining;
+
+	const handleClaimWin = () => {
+		// The actual forfeit is applied by the server when its grace timer
+		// expires; refreshing surfaces the settled result.
+		setDisconnectedColor(null);
+		setReconnected(false);
+		if (gameCode) {
+			useGameStore.getState().fetchGameState();
+		}
+	};
+
+	const handleDismiss = () => {
+		setDisconnectedColor(null);
+		setReconnected(false);
+	};
+
+	if (disconnectedColor === null) return null;
+
+	return (
+		<div className="px-2 pt-2">
+			<DisconnectBanner
+				opponentName={`Opponent (${disconnectedColor})`}
+				graceSeconds={graceSeconds}
+				totalSeconds={GRACE_PERIOD_SECONDS}
+				reconnected={reconnected}
+				onClaimWin={handleClaimWin}
+				onDismiss={handleDismiss}
+			/>
+		</div>
+	);
+}
 
 function Spinner({ size = 16 }: { size?: number }) {
 	return (
@@ -130,7 +224,13 @@ export default function GamePage() {
 
 	// Already a player → show board
 	if (storedGameCode === gameCode && playerColor) {
-		return <ChessBoard />;
+		return (
+			<>
+				{/* Opponent disconnect/reconnect banner above the board (#317). */}
+				<OpponentDisconnectBanner />
+				<ChessBoard />
+			</>
+		);
 	}
 
 	// Fetching game info

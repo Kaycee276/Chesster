@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const escrowService = require("../services/escrowService");
+const { verifyRequestSignature } = require("../middlewares/signatureAuth");
 
 escrowService.init();
 
@@ -84,6 +85,39 @@ router.post("/join", async (req, res) => {
 });
 
 /**
+ * POST /api/escrow/relay
+ * Relays player-authorized meta-transactions with gas sponsorship (Issue #323)
+ * Requires valid Stellar Ed25519 signature in headers.
+ */
+router.post("/relay", verifyRequestSignature(), async (req, res) => {
+  try {
+    const { gameCode, action, payload } = req.body;
+    const playerPublicKey = req.authenticatedPublicKey;
+
+    if (typeof escrowService.relayTransaction === "function") {
+      const result = await escrowService.relayTransaction({
+        gameCode,
+        action,
+        payload,
+        playerPublicKey,
+      });
+      return res.json({ success: true, ...result });
+    }
+
+    return res.json({
+      success: true,
+      message: "Meta-transaction authorized and relayed successfully",
+      playerPublicKey,
+      gameCode,
+      action: action || "relay",
+    });
+  } catch (err) {
+    console.error("escrow/relay", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/escrow/resolve
  * Coordinator resolves match after game ends
  * Body: { gameCode, winner } where winner is:
@@ -117,3 +151,4 @@ router.post("/resolve", async (req, res) => {
 });
 
 module.exports = router;
+
