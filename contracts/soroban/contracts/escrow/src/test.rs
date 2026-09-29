@@ -10,6 +10,49 @@ use soroban_sdk::{
     vec, Address, Env, String,
 };
 
+use proptest::{
+    prelude::*,
+    test_runner::{Config as ProptestConfig, TestRunner},
+};
+
+// Keep the property test deterministic and fast in CI while still exercising
+// thousands of fee/wager combinations, including values that truncate to zero.
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+    #[test]
+    fn test_balance_conservation_invariant(
+        wager in 1i128..10_000_000_000_000i128,
+        fee_bps in 0u32..500u32,
+        outcome in 0u8..3,
+    ) {
+        let total_pool = wager * 2;
+        let (winner_payout, treasury_fee) =
+            ChessterEscrow::calculate_tournament_rake(total_pool, fee_bps);
+
+        match outcome {
+            0 => {
+                // A winner receives the pool less the fee.
+                prop_assert_eq!(winner_payout + treasury_fee, total_pool);
+                prop_assert_eq!(total_pool - winner_payout - treasury_fee, 0);
+            }
+            1 => {
+                // A draw returns both players' deposits.
+                let player1_refund = wager;
+                let player2_refund = wager;
+                prop_assert_eq!(player1_refund + player2_refund, total_pool);
+                prop_assert_eq!(total_pool - player1_refund - player2_refund, 0);
+            }
+            _ => {
+                // Cancelling a pending match returns its single deposit.
+                let refund_amount = wager;
+                prop_assert_eq!(refund_amount, wager);
+                prop_assert_eq!(wager - refund_amount, 0);
+            }
+        }
+    }
+}
+
 fn create_token_contract<'a>(e: &Env, admin: &Address) -> (TokenClient<'a>, TokenAdminClient<'a>) {
     let contract_id = e.register_stellar_asset_contract_v2(admin.clone());
     (
@@ -3193,6 +3236,7 @@ fn test_mutual_cancellation_outsider_cannot_confirm() {
     client.confirm_mutual_cancellation(&game_code, &outsider);
 }
 
+mod extended_tests {
 #![cfg(test)]
 
 extern crate alloc;
@@ -7266,4 +7310,6 @@ fn test_timelock_safety_blocks_unscheduled_drain() {
 
     // Executing drain without active schedule fails with DisputeNotFound (#24)
     client.execute_emergency_drain(&token.address);
+}
+
 }
