@@ -583,7 +583,19 @@ io.on("connection", (socket) => {
 
 app.set("io", io);
 timerService.init(io);
+// Stop the auth challenge sweep timer on shutdown so the event loop exits cleanly.
+const authService = require("./services/authService");
 if (require.main === module) {
+	for (const signal of ["SIGTERM", "SIGINT"]) {
+		process.on(signal, () => {
+			try {
+				authService.stop();
+			} finally {
+				process.exit(0);
+			}
+		}
+		);
+	}
 	eventConsumer.start().catch((error) => logger.error("Event consumer failed to start", { error: error.message }));
   cronService.start();
   server.listen(PORT, "0.0.0.0", () => {
