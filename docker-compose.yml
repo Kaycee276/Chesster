@@ -32,6 +32,18 @@ services:
       DATABASE_URL: "postgresql://chesster_user:chesster_password@postgres:5432/chesster_db"
     ports:
       - "3001:3001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:3001/health', response => process.exit(response.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
     volumes:
       - ./backend:/app
       - /app/node_modules
