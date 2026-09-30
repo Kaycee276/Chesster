@@ -1014,6 +1014,103 @@ class GameModel {
 		return data;
 	}
 
+	/**
+	 * Atomically claim a batch of expired waiting lobbies by transitioning
+	 * their status from 'waiting' to 'expired' in a single UPDATE statement.
+	 *
+	 * This is the safe claim step for cleanupAbandonedLobbies:
+	 *  - Only rows still in 'waiting' are matched, so a concurrent joinGame
+	 *    that already moved a row to 'active' is never touched.
+	 *  - Postgres serialises concurrent row-level writes, so two cron
+	 *    instances running simultaneously cannot both claim the same row.
+	 *  - Wagered lobbies get escrow_refund_status = 'none' to signal that a
+	 *    refund is needed; unwagered lobbies leave it NULL.
+	 *
+	 * Returns the array of claimed game rows (id, game_code, wager_amount,
+	 * escrow_status, escrow_refund_status) so the caller can drive the
+	 * per-row refund phase without a second SELECT round-trip.
+	 *
+	 * @param {string} thresholdIso  - ISO timestamp; lobbies created before
+	 *                                 this time are eligible for expiry.
+	 * @param {number} [batchSize=100]
+	 * @returns {Promise<Array>}     - claimed rows
+	 */
+	async claimExpiredWaitingLobbies(thresholdIso, batchSize = 100) {
+		// Phase 1: find candidates (read-only; fast index scan on status+created_at)
+		const { data: candidates, error: fetchError } = await supabase
+			.from("games")
+			.select("id, game_code, wager_amount, escrow_status, escrow_refund_status")
+			.eq("status", "waiting")
+			.lt("created_at", thresholdIso)
+			.limit(batchSize);
+
+		if (fetchError) throw fetchError;
+		if (!candidates?.length) return [];
+
+		const ids = candidates.map((g) => g.id);
+
+		// Phase 2: atomic claim — only rows still 'waiting' are updated.
+		// Any row that became 'active' between Phase 1 and here is silently
+		// skipped because its status no longer matches the WHERE clause.
+		const { data: claimed, error: updateError } = await supabase
+			.from("games")
+			.update({
+				status: "expired",
+				// Mark wagered lobbies as needing a refund; unwagered stay null.
+				escrow_refund_status: supabase.raw(
+					"CASE WHEN wager_amount IS NOT NULL AND escrow_status = 'pending' THEN 'none' ELSE escrow_refund_status END",
+				),
+			})
+			.eq("status", "waiting") // re-assert: only still-waiting rows
+			.in("id", ids)
+			.select("id, game_code, wager_amount, escrow_status, escrow_refund_status");
+
+		if (updateError) throw updateError;
+		return claimed || [];
+	}
+
+	/**
+	 * Retrieve expired wagered lobbies whose refund has not yet succeeded.
+	 * Used by cronService to retry lobbies whose previous refund attempt
+	 * failed or whose cron process crashed between marking 'pending' and
+	 * writing 'succeeded'.
+	 *
+	 * 'pending' rows (in-flight from a concurrent/crashed run) are included
+	 * so they are eventually retried if the previous attempt never settled.
+	 *
+	 * @param {number} [batchSize=100]
+	 * @returns {Promise<Array>}
+	 */
+	async getPendingLobbyRefunds(batchSize = 100) {
+		const { data, error } = await supabase
+			.from("games")
+			.select("id, game_code, wager_amount, escrow_status, escrow_refund_status")
+			.eq("status", "expired")
+			.eq("escrow_status", "pending")
+			.in("escrow_refund_status", ["none", "failed", "pending"])
+			.limit(batchSize);
+
+		if (error) throw error;
+		return data || [];
+	}
+
+	/**
+	 * Persist a refund attempt outcome for an expired lobby.
+	 *
+	 * @param {string} gameId
+	 * @param {'pending'|'succeeded'|'failed'} refundStatus
+	 * @param {string|null}  [txHash]
+	 */
+	async updateLobbyRefundStatus(gameId, refundStatus, txHash = null) {
+		const patch = { escrow_refund_status: refundStatus };
+		if (refundStatus === "succeeded") {
+			patch.escrow_status = "refunded";
+			if (txHash) patch.escrow_refund_tx = txHash;
+		}
+		const { error } = await supabase.from("games").update(patch).eq("id", gameId);
+		if (error) throw error;
+	}
+
 	generateGameCode() {
 		return Math.random().toString(36).substring(2, 8).toUpperCase();
 	}
