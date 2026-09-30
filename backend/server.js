@@ -15,6 +15,7 @@ const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
 const referralRoutes = require("./routes/referralRoutes");
 const puzzleRoutes = require("./routes/puzzleRoutes");
+const metricsRoutes = require("./routes/metricsRoutes");
 const chessEngine = require("./services/chessEngine");
 const timerService = require("./services/timerService");
 const cronService = require("./services/cronService");
@@ -162,6 +163,7 @@ app.use("/api", botRoutes);
 app.use("/api", healthRoutes);
 app.use("/api/referrals", referralRoutes);
 app.use("/api/puzzles", puzzleRoutes);
+app.use(metricsRoutes);
 
 // Legacy health endpoint
 app.get("/health", (req, res) => {
@@ -213,6 +215,7 @@ function broadcastGameUpdate(gameCode, game) {
 }
 
 io.on("connection", (socket) => {
+  metricsRoutes.setConnectedClients(io.engine.clientsCount);
   // Accepts either a bare gameCode string (spectator join) or
   // { gameCode, playerColor } so we can track presence / handle reconnects.
   socket.on("join-game", validateSocketPayload(JoinRoomPayload, async (payload) => {
@@ -223,6 +226,7 @@ io.on("connection", (socket) => {
     if (!gameCode) return;
 
     socket.join(gameCode);
+    metricsRoutes.markGameConnected(gameCode);
 
     if (requestedColor && ["white", "black"].includes(requestedColor)) {
       // Server authority: a socket may only be bound to a player color if a
@@ -285,6 +289,7 @@ io.on("connection", (socket) => {
   // player's turn in an active game; otherwise it is rejected without touching
   // game state. This blocks socket injection and client-side move spoofing.
   socket.on("make-move", async ({ gameCode, from, to, promotion } = {}) => {
+    const moveStartedAt = Date.now();
     if (!gameCode) return;
 
     const boundColor = socket.data.playerColor;
@@ -303,6 +308,7 @@ io.on("connection", (socket) => {
 
       const moverColor = game.current_turn;
       const updated = await gameModel.makeMove(gameCode, from, to, promotion);
+      metricsRoutes.observeMoveLatency(moveStartedAt);
 
       let clock = null;
       if (updated.status === "active") {
@@ -347,6 +353,8 @@ io.on("connection", (socket) => {
   }));
 
   socket.on("disconnect", async () => {
+    metricsRoutes.setConnectedClients(io.engine.clientsCount);
+    metricsRoutes.markGameDisconnected(socket.data?.gameCode);
     const { gameCode, playerColor } = socket.data || {};
     if (!gameCode || !playerColor) return;
 
