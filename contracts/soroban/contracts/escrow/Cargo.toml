@@ -13,3 +13,4 @@ soroban-sdk = "22.0.1"
 [dev-dependencies]
 soroban-sdk = { version = "22.0.1", features = ["testutils"] }
 proptest = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }

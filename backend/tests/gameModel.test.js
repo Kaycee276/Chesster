@@ -31,6 +31,10 @@ jest.mock("../services/escrowService", () => ({
   resolveAsDraw: jest.fn().mockResolvedValue({}),
 }));
 
+jest.mock("../services/referralService", () => ({
+  creditReferralCommission: jest.fn().mockResolvedValue({ credited: true, amount: "20" }),
+}));
+
 jest.mock("../services/chessEngine", () => {
   const emptyBoard = Array(8).fill(Array(8).fill("."));
   return {
@@ -40,6 +44,8 @@ jest.mock("../services/chessEngine", () => {
     isKingInCheck: jest.fn().mockReturnValue(false),
     isCheckmate: jest.fn().mockReturnValue(false),
     isStalemate: jest.fn().mockReturnValue(false),
+    getPositionKey: jest.fn().mockReturnValue("position-key"),
+    checkDrawConditions: jest.fn().mockReturnValue({ isDraw: false, canClaimDraw: false, reason: null }),
   };
 });
 
@@ -59,6 +65,46 @@ describe("Game Model", () => {
     it("should allow a player to join a waiting game", async () => {
       const result = await gameModel.joinGame("GAME123", "black", "PLAYER2");
       expect(result.status).toBe("waiting");
+    });
+  });
+
+  describe("assertValidStellarAddress (SQL/filter injection guard)", () => {
+    const VALID_ADDRESS = "GA" + "A".repeat(54); // 56-char G-address
+
+    it("returns a well-formed Stellar public key unchanged", () => {
+      expect(gameModel.assertValidStellarAddress(VALID_ADDRESS)).toBe(VALID_ADDRESS);
+    });
+
+    it("accepts a well-formed contract (C) address", () => {
+      const contractAddr = "CA" + "A".repeat(54);
+      expect(gameModel.assertValidStellarAddress(contractAddr)).toBe(contractAddr);
+    });
+
+    it.each([
+      ["a PostgREST filter-injection payload", "GABC,status.eq.finished"],
+      ["a parenthesized or() injection", "x.or(status.eq.active)"],
+      ["a classic SQL injection string", "' OR '1'='1"],
+      ["an address with a trailing comma", VALID_ADDRESS + ","],
+      ["a too-short value", "GABC"],
+      ["lowercase characters", "ga" + "a".repeat(54)],
+      ["an empty string", ""],
+    ])("rejects %s", (_label, payload) => {
+      expect(() => gameModel.assertValidStellarAddress(payload)).toThrow("Invalid wallet address");
+    });
+
+    it.each([[null], [undefined], [123], [{}], [["array"]]])(
+      "rejects non-string input %p",
+      (payload) => {
+        expect(() => gameModel.assertValidStellarAddress(payload)).toThrow("Invalid wallet address");
+      },
+    );
+  });
+
+  describe("getGameHistory playerAddress filter", () => {
+    it("rejects a malicious playerAddress before it reaches the query", async () => {
+      await expect(
+        gameModel.getGameHistory({ playerAddress: "GABC,status.eq.finished" }),
+      ).rejects.toThrow("Invalid wallet address");
     });
   });
 

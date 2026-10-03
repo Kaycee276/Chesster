@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const sessionService = require("../services/sessionService");
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-insecure-secret-change-me";
 
@@ -10,7 +11,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-only-insecure-secret-change-me
  * the Stellar wallet address that authenticated — see authService.js).
  * On any failure it rejects the request with 401 and never calls next().
  */
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
 	const header = req.headers["authorization"] || req.headers["Authorization"];
 
 	if (!header || !header.startsWith("Bearer ")) {
@@ -24,7 +25,11 @@ function requireAuth(req, res, next) {
 
 	try {
 		const decoded = jwt.verify(token, JWT_SECRET);
-		req.user = { address: decoded.address || decoded.sub, ...decoded };
+		const address = decoded.address || decoded.sub;
+		if (await sessionService.isTokenRevoked(address, decoded.iat)) {
+			return res.status(401).json({ success: false, error: "Token revoked" });
+		}
+		req.user = { address, ...decoded };
 		return next();
 	} catch (err) {
 		if (err.name === "TokenExpiredError") {
@@ -40,7 +45,7 @@ function requireAuth(req, res, next) {
  * behave differently for logged-in vs anonymous callers without requiring
  * auth outright.
  */
-function optionalAuth(req, res, next) {
+async function optionalAuth(req, res, next) {
 	const header = req.headers["authorization"] || req.headers["Authorization"];
 	if (!header || !header.startsWith("Bearer ")) return next();
 
@@ -49,7 +54,10 @@ function optionalAuth(req, res, next) {
 
 	try {
 		const decoded = jwt.verify(token, JWT_SECRET);
-		req.user = { address: decoded.address || decoded.sub, ...decoded };
+		const address = decoded.address || decoded.sub;
+		if (!(await sessionService.isTokenRevoked(address, decoded.iat))) {
+			req.user = { address, ...decoded };
+		}
 	} catch (err) {
 		// Ignore invalid/expired tokens on the optional path.
 	}

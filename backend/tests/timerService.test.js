@@ -5,9 +5,11 @@ jest.mock("../models/gameModel", () => ({
 	endByFlag: jest.fn().mockResolvedValue({ game_code: "GAME123", status: "finished", winner: "black" }),
 	forfeitByDisconnect: jest.fn().mockResolvedValue({ game_code: "GAME123", status: "finished", winner: "black" }),
 }));
+jest.mock("../models/userModel", () => ({ invalidateProfilesForGame: jest.fn().mockResolvedValue(undefined) }));
 
 const timerService = require("../services/timerService");
 const gameModel = require("../models/gameModel");
+const userModel = require("../models/userModel");
 
 describe("TimerService", () => {
 	let mockIo;
@@ -62,6 +64,7 @@ describe("TimerService", () => {
 			await jest.advanceTimersByTimeAsync(1100);
 
 			expect(gameModel.endByFlag).toHaveBeenCalledWith("GAME123", "white");
+			expect(userModel.invalidateProfilesForGame).toHaveBeenCalledWith(expect.objectContaining({ status: "finished" }));
 			expect(mockIo.to).toHaveBeenCalledWith("GAME123");
 			expect(mockIo.emit).toHaveBeenCalledWith("game-update", expect.any(Object));
 		});
@@ -85,6 +88,7 @@ describe("TimerService", () => {
 			await jest.advanceTimersByTimeAsync(1100);
 
 			expect(gameModel.forfeitByDisconnect).toHaveBeenCalledWith("GAME123", "black");
+			expect(userModel.invalidateProfilesForGame).toHaveBeenCalledWith(expect.objectContaining({ status: "finished" }));
 			expect(timerService.isPendingForfeit("GAME123", "black")).toBe(false);
 		});
 

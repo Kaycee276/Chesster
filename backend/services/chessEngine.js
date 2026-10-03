@@ -424,6 +424,46 @@ class ChessEngine {
     return { board, currentColor, moveCount, fullmoveNumber };
   }
 
+  getVisibleSquares(board, viewerColor) {
+    const visible = new Set();
+    const own = (piece) => piece !== '.' && (viewerColor === 'white' ? piece === piece.toUpperCase() : piece === piece.toLowerCase());
+    const add = (row, col) => { if (row >= 0 && row < 8 && col >= 0 && col < 8) visible.add(`${row},${col}`); };
+    for (let row = 0; row < 8; row += 1) for (let col = 0; col < 8; col += 1) {
+      if (!own(board[row][col])) continue;
+      add(row, col);
+      const piece = board[row][col].toLowerCase();
+      const directions = piece === 'n' ? [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]
+        : piece === 'k' ? [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]]
+        : piece === 'b' ? [[-1,-1],[-1,1],[1,-1],[1,1]]
+        : piece === 'r' ? [[-1,0],[1,0],[0,-1],[0,1]]
+        : piece === 'q' ? [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]]
+        : [[viewerColor === 'white' ? -1 : 1, -1], [viewerColor === 'white' ? -1 : 1, 1]];
+      for (const [dr, dc] of directions) {
+        let nextRow = row + dr; let nextCol = col + dc;
+        do {
+          add(nextRow, nextCol);
+          if (piece === 'n' || piece === 'k' || piece === 'p' || (nextRow >= 0 && nextRow < 8 && nextCol >= 0 && nextCol < 8 && board[nextRow][nextCol] !== '.')) break;
+          nextRow += dr; nextCol += dc;
+        } while (nextRow >= 0 && nextRow < 8 && nextCol >= 0 && nextCol < 8);
+      }
+    }
+    return visible;
+  }
+
+  generateFogOfWarFen(board, viewerColor = 'white', turn = viewerColor, moveCount = 0, fullmoveNumber = 1) {
+    const visible = this.getVisibleSquares(board, viewerColor);
+    const masked = board.map((row, r) => row.map((piece, c) => visible.has(`${r},${c}`) ? piece : '.'));
+    return this.boardToFen(masked, turn, moveCount, fullmoveNumber);
+  }
+
+  isValidVariantMove(board, from, to, turn, variant = 'standard', lastMove = null) {
+    if (!['blindfold', 'fog_of_war'].includes(variant)) return this.isValidMove(board, from, to, turn, lastMove);
+    const target = board[to[0]][to[1]];
+    const isEnemyKing = target && target.toLowerCase() === 'k' && ((turn === 'white' && target === 'k') || (turn === 'black' && target === 'K'));
+    const result = this.isValidMove(board, from, to, turn, lastMove);
+    return isEnemyKing && result.valid ? { ...result, kingCaptured: true } : result;
+  }
+
   /**
    * Generate SAN (Standard Algebraic Notation) for a move
    * @param {Array} board - Current board state
@@ -591,6 +631,94 @@ class ChessEngine {
   }
 
   /**
+   * Generate a standards-compatible PGN with clock and engine annotations.
+   * Move rows may provide `clockSeconds`/`remainingSeconds` and
+   * `evaluationCp`/`centipawns`; missing telemetry is intentionally omitted.
+   */
+  generateRichPgn(moves = [], metadata = {}) {
+    const headers = {
+      Event: metadata.event || "Chesster Game",
+      Site: metadata.site || "Chesster",
+      Date: metadata.date || (metadata.createdAt ? String(metadata.createdAt).slice(0, 10).replaceAll("-", ".") : "????.??.??"),
+      Round: metadata.round || "-",
+      White: metadata.white || "?",
+      Black: metadata.black || "?",
+      Result: metadata.result || "*",
+      TimeControl: metadata.timeControl || "-",
+      Termination: metadata.termination || "normal",
+    };
+    const tagText = Object.entries(headers)
+      .map(([name, value]) => `[${name} "${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"]`)
+      .join("\n");
+    let board = (metadata.startBoard || this.initBoard()).map((row) => [...row]);
+    const tokens = [];
+    for (let index = 0; index < moves.length; index += 1) {
+      const move = moves[index];
+      if (index % 2 === 0) tokens.push(`${Math.floor(index / 2) + 1}.`);
+      const san = this.moveToSan(board, move.from || move.from_position, move.to || move.to_position, move.promotion);
+      const annotations = [];
+      const clockSeconds = move.clockSeconds ?? move.remainingSeconds ?? move.clock_seconds ?? move.remaining_seconds ?? metadata.initialClockSeconds;
+      if (Number.isFinite(Number(clockSeconds))) annotations.push(`[%clk ${this.formatPgnClock(Number(clockSeconds))}]`);
+      const evaluationCp = move.evaluationCp ?? move.centipawns ?? move.evaluation_cp;
+      if (Number.isFinite(Number(evaluationCp))) annotations.push(`[%eval ${(Number(evaluationCp) / 100).toFixed(2)}]`);
+      tokens.push(`${san}${annotations.length ? ` {${annotations.join(" ")}}` : ""}`);
+      board = this.makeMove(board, move.from || move.from_position, move.to || move.to_position, move.promotion);
+    }
+    tokens.push(headers.Result);
+    return `${tagText}\n\n${tokens.join(" ").trim()}\n`;
+  }
+
+  formatPgnClock(seconds) {
+    const total = Math.max(0, Math.floor(seconds));
+    return `${Math.floor(total / 3600)}:${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  }
+
+  /**
+   * Build a simplified position key used for repetition detection.
+   * Includes piece placement, active turn, castling rights and en passant
+   * target (the first four space-separated FEN fields) but deliberately
+   * excludes the halfmove clock and fullmove number so that identical
+   * positions reached via different move counts still compare equal.
+   * @param {Array} board - Current board state
+   * @param {string} color - Player to move
+   * @returns {string} Simplified position key
+   */
+  getPositionKey(board, color = 'white') {
+    return this.boardToFen(board, color).split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
+  }
+
+  /**
+   * Check automatic and claimable draw conditions per FIDE rules:
+   * - Fivefold repetition or 75 moves without a pawn move/capture => automatic draw
+   * - Threefold repetition or 50 moves without a pawn move/capture => claimable draw
+   * @param {string} positionKey - Simplified position key for the current position
+   * @param {Array<string>} positionHistory - Position keys recorded so far (including current)
+   * @param {number} halfMoveClock - Half-moves since the last pawn move or capture
+   * @returns {{isDraw: boolean, canClaimDraw: boolean, reason: string|null}}
+   */
+  checkDrawConditions(positionKey, positionHistory = [], halfMoveClock = 0) {
+    const repetitions = positionHistory.filter(key => key === positionKey).length;
+
+    if (repetitions >= 5 || halfMoveClock >= 150) {
+      return {
+        isDraw: true,
+        canClaimDraw: false,
+        reason: repetitions >= 5 ? 'fivefold_repetition' : '75_move_rule',
+      };
+    }
+
+    if (repetitions >= 3 || halfMoveClock >= 100) {
+      return {
+        isDraw: false,
+        canClaimDraw: true,
+        reason: repetitions >= 3 ? 'threefold_repetition' : '50_move_rule',
+      };
+    }
+
+    return { isDraw: false, canClaimDraw: false, reason: null };
+  }
+
+  /**
    * Sync game state with FEN (validate FEN matches board state)
    * @param {Array} board - Current board state
    * @param {string} expectedFen - Expected FEN string
@@ -614,6 +742,10 @@ class ChessEngine {
       fen: currentFen,
       differences
     };
+  }
+  async processMove(gameId, fn) {
+    const { withLock } = require('../utils/distributedLock');
+    return await withLock(gameId, 2000, fn);
   }
 }
 

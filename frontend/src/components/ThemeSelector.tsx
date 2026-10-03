@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Palette, Check, Crown, Sun, Moon, Laptop } from "lucide-react";
+import { Palette, Check, Crown, Sun, Moon, Laptop, Volume2 } from "lucide-react";
 import {
 	BOARD_THEMES,
 	PIECE_SETS,
@@ -7,6 +7,7 @@ import {
 	type BoardThemeKey,
 	type ColorMode,
 } from "../store/themeStore";
+import { soundService, type SoundPack } from "../services/soundService";
 
 // Re-apply the persisted theme whenever this component mounts (covers cases
 // where the store module was re-evaluated and the on-load application was missed).
@@ -22,6 +23,13 @@ function useApplyThemeOnMount() {
 	}, [boardTheme]);
 }
 
+const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> = [
+	{ key: "wood", name: "Wood", description: "Classic wooden piece sounds" },
+	{ key: "plastic", name: "Plastic", description: "Modern plastic piece sounds" },
+	{ key: "arcade", name: "Arcade", description: "Retro arcade synth sounds" },
+	{ key: "retro", name: "Retro 8-bit", description: "Classic chiptune sounds" },
+];
+
 export default function ThemeSelector() {
 	const boardTheme = useThemeStore((s) => s.boardTheme);
 	const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
@@ -30,12 +38,29 @@ export default function ThemeSelector() {
 	const colorMode = useThemeStore((s) => s.colorMode);
 	const setColorMode = useThemeStore((s) => s.setColorMode);
 	const [open, setOpen] = useState(false);
+	const [soundPack, setSoundPack] = useState<SoundPack>(soundService.getSoundPack());
 
 	useApplyThemeOnMount();
 
 	const handleSelect = (key: BoardThemeKey) => {
 		setBoardTheme(key);
 		setOpen(false);
+	};
+
+	const handleSoundPackChange = (pack: SoundPack) => {
+		setSoundPack(pack);
+		soundService.setSoundPack(pack);
+	};
+
+	const handleSoundPreview = (pack: SoundPack) => {
+		// Temporarily play the sound with the target pack
+		const originalPack = soundService.getSoundPack();
+		soundService.setSoundPack(pack);
+		soundService.move();
+		// Restore the previous pack after a brief delay
+		setTimeout(() => {
+			soundService.setSoundPack(originalPack);
+		}, 200);
 	};
 
 	return (
@@ -187,6 +212,51 @@ export default function ThemeSelector() {
 												<Check size={16} className="text-(--accent-primary)" />
 											)}
 										</div>
+									</button>
+								);
+							})}
+						</div>
+
+						<div className="flex items-center gap-2 mt-2">
+							<Volume2 size={14} className="text-(--accent-primary)" />
+							<span className="text-sm font-bold">Sound Pack</span>
+						</div>
+
+						<div className="grid grid-cols-2 gap-3">
+							{SOUND_PACKS.map((pack) => {
+								const active = pack.key === soundPack;
+								return (
+									<button
+										type="button"
+										key={pack.key}
+										onClick={() => handleSoundPackChange(pack.key)}
+										className={`relative flex flex-col gap-1.5 rounded-xl border p-3 text-left transition-colors ${
+											active
+												? "border-(--accent-primary) ring-1 ring-(--accent-primary)/50"
+												: "border-(--border) hover:border-(--accent-primary)/40"
+										}`}
+										aria-pressed={active}
+									>
+										<div className="flex items-start justify-between">
+											<div>
+												<div className="text-sm font-semibold">{pack.name}</div>
+												<div className="text-xs text-(--text-secondary) mt-0.5">{pack.description}</div>
+											</div>
+											{active && (
+												<Check size={16} className="text-(--accent-primary) flex-shrink-0" />
+											)}
+										</div>
+										<button
+											type="button"
+											onClick={(e) => {
+												e.stopPropagation();
+												handleSoundPreview(pack.key);
+											}}
+											className="mt-1 px-2 py-1 rounded bg-(--bg-tertiary) hover:bg-(--bg-tertiary)/80 text-xs font-semibold text-(--text-secondary) hover:text-(--text) transition-colors border border-(--border) hover:border-(--accent-primary)/40"
+											title="Preview this sound pack"
+										>
+											Test Sound
+										</button>
 									</button>
 								);
 							})}

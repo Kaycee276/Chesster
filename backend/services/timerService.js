@@ -57,7 +57,7 @@ class TimerService {
 		this.timers = new Map();
 
 		// `${gameCode}:${color}` -> { timeout, expiresAt }
-		this.reconnectTimers = new Map();
+		this.player_disconnect_timers = new Map();
 	}
 
 	init(io) {
@@ -140,6 +140,33 @@ class TimerService {
 		};
 	}
 
+	/**
+	 * Get precise remaining clocks for both players, accounting for elapsed time
+	 * since the current turn started. This is used for reconnection state rehydration
+	 * to ensure zero clock discrepancy when a player rejoins.
+	 *
+	 * @param {string} gameCode
+	 * @returns {object|null} { whiteMs, blackMs, turn } with millisecond precision,
+	 *                         or null if no clock is running for this game
+	 */
+	getPreciseClocks(gameCode) {
+		const state = this.clocks.get(gameCode);
+		if (!state) return null;
+
+		const now = Date.now();
+		const activeRemaining = Math.max(0, state.deadline - now);
+		const whiteMs = state.turn === "white" ? activeRemaining : state.whiteMs;
+		const blackMs = state.turn === "black" ? activeRemaining : state.blackMs;
+
+		return {
+			whiteMs,
+			blackMs,
+			turn: state.turn,
+			incrementMs: state.incrementMs,
+			preset: state.preset,
+		};
+	}
+
 	_scheduleFlagFall(gameCode) {
 		const state = this.clocks.get(gameCode);
 		if (!state) return;
@@ -153,6 +180,7 @@ class TimerService {
 			try {
 				const gameModel = require("../models/gameModel");
 				const game = await gameModel.endByFlag(gameCode, loser);
+				await require("../models/userModel").invalidateProfilesForGame(game);
 				if (this.io && game) {
 					this.io.to(gameCode).emit("game-update", game);
 					this.io.to(gameCode).emit("flag-fall", { gameCode, loser, winner: game.winner });
@@ -196,6 +224,7 @@ class TimerService {
 				try {
 					const gameModel = require("../models/gameModel");
 					const game = await gameModel.endByTime(gameCode);
+					await require("../models/userModel").invalidateProfilesForGame(game);
 					if (this.io && game) {
 						this.io.to(gameCode).emit("game-update", game);
 					}
@@ -233,10 +262,11 @@ class TimerService {
 		this.cancelReconnectGrace(gameCode, color);
 
 		const timeout = setTimeout(async () => {
-			this.reconnectTimers.delete(key);
+			this.player_disconnect_timers.delete(key);
 			try {
 				const gameModel = require("../models/gameModel");
 				const game = await gameModel.forfeitByDisconnect(gameCode, color);
+				await require("../models/userModel").invalidateProfilesForGame(game);
 				this.clearClock(gameCode);
 				if (this.io && game) {
 					this.io.to(gameCode).emit("game-update", game);
@@ -252,22 +282,22 @@ class TimerService {
 			}
 		}, graceSeconds * 1000);
 
-		this.reconnectTimers.set(key, { timeout, expiresAt: Date.now() + graceSeconds * 1000 });
+		this.player_disconnect_timers.set(key, { timeout, expiresAt: Date.now() + graceSeconds * 1000 });
 	}
 
 	cancelReconnectGrace(gameCode, color) {
 		const key = `${gameCode}:${color}`;
-		const entry = this.reconnectTimers.get(key);
+		const entry = this.player_disconnect_timers.get(key);
 		if (entry) {
 			clearTimeout(entry.timeout);
-			this.reconnectTimers.delete(key);
+			this.player_disconnect_timers.delete(key);
 			return true;
 		}
 		return false;
 	}
 
 	isPendingForfeit(gameCode, color) {
-		return this.reconnectTimers.has(`${gameCode}:${color}`);
+		return this.player_disconnect_timers.has(`${gameCode}:${color}`);
 	}
 }
 

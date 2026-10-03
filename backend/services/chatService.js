@@ -21,4 +21,30 @@ function moderateMessage(message) {
   return { accepted: true, message: moderated };
 }
 
-module.exports = { moderateMessage, MAX_MESSAGE_LENGTH };
+/**
+ * Spectator chat slow-mode rate limiter (per-IP, 5-second cooldown).
+ * 
+ * Tracks message timestamps per IP address to enforce a fixed-window slow-mode cooldown.
+ * Matches the per-IP keying convention used elsewhere in the codebase (HTTP rate limiter).
+ * 
+ * NOTE: The issue Context section mentions "5-second slow mode per IP", while the technical
+ * guidance snippet shows `checkSlowMode(socket.id, 5000)` (per-socket). We implement per-IP
+ * to be consistent with the HTTP rate-limiter convention elsewhere in this repo. The PR
+ * description flags this discrepancy for maintainer confirmation of intent.
+ */
+const spectatorSlowMode = new Map(); // key (IP) -> { lastMessageAt, windowMs }
+
+function checkSlowMode(key, windowMs) {
+  const now = Date.now();
+  const entry = spectatorSlowMode.get(key);
+
+  if (!entry || now >= entry.lastMessageAt + windowMs) {
+    spectatorSlowMode.set(key, { lastMessageAt: now, windowMs });
+    return { allowed: true, nextAvailableIn: 0 };
+  }
+
+  const nextAvailableIn = Math.ceil((entry.lastMessageAt + windowMs - now) / 1000);
+  return { allowed: false, nextAvailableIn };
+}
+
+module.exports = { moderateMessage, MAX_MESSAGE_LENGTH, checkSlowMode };

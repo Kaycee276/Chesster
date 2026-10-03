@@ -1,6 +1,13 @@
 const botService = require("../services/botService");
 const gameModel = require("../models/gameModel");
 
+// Worker-pool failures are capacity problems, not bad input (Issue #241).
+const BOT_ERROR_STATUS = { BOT_TIMEOUT: 504, BOT_QUEUE_FULL: 503, BOT_POOL_CLOSED: 503 };
+
+function statusForError(error, fallbackStatus) {
+	return BOT_ERROR_STATUS[error && error.code] || fallbackStatus;
+}
+
 class BotController {
 	/**
 	 * POST /api/bot/move
@@ -22,7 +29,7 @@ class BotController {
 
 			res.json({ success: true, data: move });
 		} catch (error) {
-			res.status(500).json({ success: false, error: error.message });
+			res.status(statusForError(error, 500)).json({ success: false, error: error.message });
 		}
 	}
 
@@ -63,7 +70,7 @@ class BotController {
 
 			res.json({ success: true, data: updatedGame, move });
 		} catch (error) {
-			res.status(400).json({ success: false, error: error.message });
+			res.status(statusForError(error, 400)).json({ success: false, error: error.message });
 		}
 	}
 }

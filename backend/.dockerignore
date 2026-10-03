@@ -1,0 +1,22 @@
+# Dependencies and generated output
+node_modules
+coverage
+logs
+*.log
+
+# Tests and development only files
+tests
+jest.config.js
+README.md
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Repository and editor metadata
+.git
+.github
+.vscode
+.idea
+.DS_Store

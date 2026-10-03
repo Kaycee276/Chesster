@@ -19,10 +19,10 @@ jobs:
       contracts: ${{ steps.filter.outputs.contracts }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Check for Workspace Changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         id: filter
         with:
           filters: |
@@ -33,6 +33,7 @@ jobs:
               - '.github/workflows/ci.yml'
             frontend:
               - 'frontend/**'
+              - '.lighthouserc.json'
               - 'package.json'
               - 'package-lock.json'
               - '.github/workflows/ci.yml'
@@ -51,14 +52,14 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: '.nvmrc'
+          node-version-file: 'backend/.nvmrc'
           cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
+          cache-dependency-path: 'backend/package-lock.json'
 
       - name: Install Dependencies
         run: npm ci
@@ -67,7 +68,7 @@ jobs:
         run: npm run test:coverage
 
       - name: Upload Backend Coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
         with:
           files: ./backend/coverage/lcov.info
           flags: backend
@@ -85,14 +86,14 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: '.nvmrc'
+          node-version-file: 'frontend/.nvmrc'
           cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
+          cache-dependency-path: 'frontend/package-lock.json'
 
       - name: Install Dependencies
         run: npm ci
@@ -109,8 +110,32 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Run Lighthouse CI
+        run: npm run lhci
+
+      - name: Upload Lighthouse CI Reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lighthouse-reports
+          path: frontend/.lighthouseci
+          if-no-files-found: warn
+
+      - name: Check Frontend Bundle Size
+        run: npm run size-check
+
+      - name: Generate Frontend Bundle Stats
+        run: npm run build:analyze
+
+      - name: Upload Frontend Bundle Stats
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-bundle-stats
+          path: frontend/dist/stats.html
+          if-no-files-found: error
+
       - name: Upload Frontend Coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
         with:
           files: ./frontend/coverage/lcov.info
           flags: frontend
@@ -128,27 +153,27 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ./contracts/soroban
 
       - name: Cache Release WASM
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ./contracts/soroban/target/wasm32-unknown-unknown/release
           key: ${{ runner.os }}-cargo-release-wasm-${{ hashFiles('contracts/soroban/Cargo.lock') }}
 
       - name: Install Tools (cargo-tarpaulin & stellar-cli)
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-tarpaulin, stellar-cli
 
@@ -161,6 +186,10 @@ jobs:
       - name: Run Contract Tests
         run: cargo test
 
+      - name: Run Soroban Contract Property Fuzz Tests
+        run: cargo test --release -p escrow fuzz_balance_conservation -- --ignored
+        timeout-minutes: 5
+
       - name: Build & Optimize Contract
         run: make optimize
 
@@ -171,7 +200,7 @@ jobs:
         run: cargo tarpaulin --out Lcov --output-dir coverage || true
 
       - name: Upload Contracts Coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
         with:
           files: ./contracts/soroban/coverage/lcov.info
           flags: smart-contracts

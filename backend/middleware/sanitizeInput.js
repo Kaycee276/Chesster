@@ -1,79 +1,95 @@
 /**
  * Input sanitization middleware.
  *
- * Rejects requests whose body/query/params contain an obvious injection
- * payload (script tags, inline event handlers, SQL/NoSQL injection
- * fragments) with a 400, and otherwise strips HTML tags from string values
- * in place so ordinary text (chat messages, usernames, etc.) reaches
- * downstream handlers clean.
+ * Walks `req.body`, `req.query`, and `req.params`, and:
+ *   - rejects the request with a 400 when any string value contains a payload
+ *     that looks like an XSS, SQL-injection, or NoSQL-injection attempt, and
+ *   - strips benign HTML tags from every other string value in place.
+ *
+ * This is a defense-in-depth layer that runs before route handlers. It never
+ * trusts client-supplied input and pairs with the per-route rate limiter.
  */
+
+// Patterns that indicate a deliberately malicious payload. A match rejects the
+// whole request rather than silently rewriting it.
 const DANGEROUS_PATTERNS = [
-	/<script[\s\S]*?>[\s\S]*?<\/script>/i,
-	/javascript:/i,
-	/on\w+\s*=\s*["']/i,
-	/\bunion\b[\s\S]*\bselect\b/i,
-	/;\s*drop\s+table/i,
-	/\$where\b/i,
+	/<\s*script\b/i, // inline script tag
+	/<\/\s*script\s*>/i,
+	/javascript:/i, // dangerous URI schemes
+	/vbscript:/i,
+	/data:\s*text\/html/i,
+	/\son\w+\s*=/i, // event handler attributes, e.g. onerror=
+	/\bunion\b\s+\bselect\b/i, // SQL injection
+	/\bdrop\b\s+\btable\b/i,
+	/\binsert\b\s+\binto\b/i,
+	/\bdelete\b\s+\bfrom\b/i,
+	/\bselect\b\s+.*\bfrom\b/i,
+	/\$where\b/i, // NoSQL operator injection
 	/\$ne\b/i,
+	/\$gt\b/i,
+	/\$lt\b/i,
+	/\$regex\b/i,
 ];
 
+/**
+ * Return true when a string looks like a malicious payload. Non-string input is
+ * never dangerous (returns false).
+ */
 function containsDangerousPayload(value) {
 	if (typeof value !== "string") return false;
 	return DANGEROUS_PATTERNS.some((pattern) => pattern.test(value));
 }
 
-function findDangerousPayload(value) {
-	if (typeof value === "string") {
-		return containsDangerousPayload(value) ? value : null;
-	}
-	if (Array.isArray(value)) {
-		for (const item of value) {
-			const found = findDangerousPayload(item);
-			if (found) return found;
-		}
-		return null;
-	}
-	if (value && typeof value === "object") {
-		for (const v of Object.values(value)) {
-			const found = findDangerousPayload(v);
-			if (found) return found;
-		}
-		return null;
-	}
-	return null;
-}
-
+/**
+ * Remove HTML tags from a value and trim surrounding whitespace.
+ */
 function stripHtml(value) {
+	if (typeof value !== "string") return value;
 	return value.replace(/<[^>]*>/g, "").trim();
 }
 
-// Mutates properties in place rather than reassigning req.query/req.params,
-// since Express 5 exposes those as getters that can't be replaced wholesale.
-function sanitizeInPlace(obj) {
-	if (!obj || typeof obj !== "object") return;
-	for (const key of Object.keys(obj)) {
-		const value = obj[key];
+/**
+ * Recursively sanitize a container (object or array) in place.
+ * Returns true as soon as a dangerous payload is found.
+ */
+function sanitizeContainer(container) {
+	if (!container || typeof container !== "object") return false;
+
+	for (const key of Object.keys(container)) {
+		const value = container[key];
+
 		if (typeof value === "string") {
-			obj[key] = stripHtml(value);
+			if (containsDangerousPayload(value)) return true;
+			container[key] = stripHtml(value);
 		} else if (value && typeof value === "object") {
-			sanitizeInPlace(value);
+			if (sanitizeContainer(value)) return true;
 		}
 	}
+
+	return false;
 }
 
+/**
+ * Express middleware entry point.
+ */
 function sanitizeInput(req, res, next) {
-	for (const source of [req.body, req.query, req.params]) {
-		const dangerous = findDangerousPayload(source);
-		if (dangerous) {
-			return res.status(400).json({ success: false, error: "Malicious input detected" });
+	try {
+		for (const part of [req.body, req.query, req.params]) {
+			if (sanitizeContainer(part)) {
+				return res.status(400).json({
+					success: false,
+					error: "Request contains disallowed or potentially malicious input.",
+				});
+			}
 		}
+		return next();
+	} catch (err) {
+		return next(err);
 	}
-
-	sanitizeInPlace(req.body);
-	sanitizeInPlace(req.query);
-	sanitizeInPlace(req.params);
-
-	return next();
 }
 
-module.exports = { sanitizeInput, containsDangerousPayload, stripHtml };
+module.exports = {
+	sanitizeInput,
+	containsDangerousPayload,
+	stripHtml,
+};

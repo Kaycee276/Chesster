@@ -1,6 +1,9 @@
 const supabase = require("../config/supabase");
 
 const DEFAULT_K_FACTOR = 32;
+const GLICKO2_SCALE = 173.7178;
+const GLICKO2_TAU = 0.5;
+const GLICKO2_EPSILON = 0.000001;
 
 /**
  * EloService — Standard FIDE Elo rating calculation.
@@ -15,6 +18,59 @@ const DEFAULT_K_FACTOR = 32;
  *   K      = K-factor (default 32)
  */
 class EloService {
+	calculateG(ratingDeviation) {
+		return 1 / Math.sqrt(1 + (3 * Math.pow(ratingDeviation / GLICKO2_SCALE, 2)) / Math.pow(Math.PI, 2));
+	}
+
+	calculateGlicko2Rating(player, opponent, actualScore, periodSeconds = 0) {
+		const rating = Number(player.rating ?? 1500);
+		const deviation = Math.min(350, Math.max(30, Number(player.ratingDeviation ?? player.rating_deviation ?? 350)));
+		const volatility = Number(player.volatility ?? 0.06);
+		const opponentRating = Number(opponent.rating ?? 1500);
+		const opponentDeviation = Math.min(350, Math.max(30, Number(opponent.ratingDeviation ?? opponent.rating_deviation ?? 350)));
+		const mu = (rating - 1500) / GLICKO2_SCALE;
+		const opponentMu = (opponentRating - 1500) / GLICKO2_SCALE;
+		const phi = deviation / GLICKO2_SCALE;
+		const opponentPhi = opponentDeviation / GLICKO2_SCALE;
+		const g = this.calculateG(opponentDeviation);
+		const expected = 1 / (1 + Math.exp(-g * (mu - opponentMu)));
+		const variance = 1 / (Math.pow(g, 2) * expected * (1 - expected));
+		const improvement = variance * g * (actualScore - expected);
+		const newVolatility = Math.max(0.01, Math.min(1, volatility));
+		const prePeriodDeviation = Math.sqrt(Math.pow(phi, 2) + Math.pow(newVolatility, 2) * Math.max(0, periodSeconds / (14 * 24 * 60 * 60)));
+		const newPhi = 1 / Math.sqrt(1 / Math.pow(prePeriodDeviation, 2) + 1 / variance);
+		const newMu = mu + Math.pow(newPhi, 2) * g * (actualScore - expected);
+		return {
+			rating: Math.round(1500 + GLICKO2_SCALE * newMu),
+			ratingDeviation: Math.round(GLICKO2_SCALE * newPhi * 100) / 100,
+			volatility: Math.round(newVolatility * 1000000) / 1000000,
+			expectedScore: expected,
+		};
+	}
+
+	inflateRatingDeviation(player, inactiveSeconds) {
+		const result = this.calculateGlicko2Rating({ ...player, ratingDeviation: 350 }, { rating: player.rating }, 0.5, 0);
+		const current = Number(player.ratingDeviation ?? player.rating_deviation ?? 350);
+		const volatility = Number(player.volatility ?? 0.06);
+		return { ...player, ratingDeviation: Math.min(350, Math.sqrt(current ** 2 + (GLICKO2_SCALE * volatility) ** 2 * Math.max(0, inactiveSeconds / (14 * 24 * 60 * 60)))), volatility: Number(player.volatility ?? 0.06), rating: player.rating ?? result.rating };
+	}
+
+	async updateGlicko2Ratings(player1Id, player2Id, winnerId, db = supabase) {
+		if (!player1Id || !player2Id || player1Id === player2Id) throw new Error("Two different player IDs are required");
+		const fetch = (id) => db.from("players").select("wallet_address, elo_rating, rating_deviation, volatility").eq("wallet_address", id).single();
+		const [{ data: player1, error: error1 }, { data: player2, error: error2 }] = await Promise.all([fetch(player1Id), fetch(player2Id)]);
+		if (error1) throw new Error(`Failed to fetch player 1: ${error1.message}`);
+		if (error2) throw new Error(`Failed to fetch player 2: ${error2.message}`);
+		const score1 = winnerId == null ? 0.5 : winnerId === player1Id ? 1 : winnerId === player2Id ? 0 : null;
+		if (score1 === null) throw new Error("Winner ID must match one of the players");
+		const next1 = this.calculateGlicko2Rating({ rating: player1.elo_rating, ratingDeviation: player1.rating_deviation, volatility: player1.volatility }, { rating: player2.elo_rating, ratingDeviation: player2.rating_deviation }, score1);
+		const next2 = this.calculateGlicko2Rating({ rating: player2.elo_rating, ratingDeviation: player2.rating_deviation, volatility: player2.volatility }, { rating: player1.elo_rating, ratingDeviation: player1.rating_deviation }, 1 - score1);
+		await Promise.all([
+			db.from("players").update({ elo_rating: next1.rating, rating_deviation: next1.ratingDeviation, volatility: next1.volatility }).eq("wallet_address", player1Id),
+			db.from("players").update({ elo_rating: next2.rating, rating_deviation: next2.ratingDeviation, volatility: next2.volatility }).eq("wallet_address", player2Id),
+		]);
+		return { player1: next1, player2: next2 };
+	}
 	/**
 	 * Calculate the expected score for player A against player B.
 	 * @param {number} ratingA - Current rating of player A
