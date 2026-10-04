@@ -1,3 +1,10 @@
+# [1.36.0](https://github.com/Kaycee276/Chesster/compare/v1.35.0...v1.36.0) (2026-10-04)
+
+
+### Features
+
+* **backend:** migrate from Supabase to Neon PostgreSQL and Prisma ([dae00f8](https://github.com/Kaycee276/Chesster/commit/dae00f86f67a29a83cfc89bc19c93f5f393fadd0))
+
 # [1.35.0](https://github.com/Kaycee276/Chesster/compare/v1.34.0...v1.35.0) (2026-10-04)
 
 
