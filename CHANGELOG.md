@@ -1,3 +1,24 @@
+# [1.34.0](https://github.com/Kaycee276/Chesster/compare/v1.33.0...v1.34.0) (2026-10-04)
+
+
+### Bug Fixes
+
+* **auth:** bound challenge store with expiry sweep and capacity policy ([#391](https://github.com/Kaycee276/Chesster/issues/391)) ([81fa366](https://github.com/Kaycee276/Chesster/commit/81fa3661aa5b697b49bbfcd4c0ebba04b6808806))
+* resolve build and test failures across frontend, backend, and contracts ([aff2196](https://github.com/Kaycee276/Chesster/commit/aff219652ea062df677cef2b42f580e7e1dff089))
+* resolve issue [#225](https://github.com/Kaycee276/Chesster/issues/225) ([#270](https://github.com/Kaycee276/Chesster/issues/270)) ([6f36f74](https://github.com/Kaycee276/Chesster/commit/6f36f74e0e26ace0dd167325cf41dd9c7952cf63))
+
+
+### Features
+
+* **backend:** export rich PGN game records ([#393](https://github.com/Kaycee276/Chesster/issues/393)) ([5a6cdb5](https://github.com/Kaycee276/Chesster/commit/5a6cdb5953cf1bb562f388bda7030785987cf400))
+* **chess:** add blindfold and fog-of-war variants ([#395](https://github.com/Kaycee276/Chesster/issues/395)) ([626a824](https://github.com/Kaycee276/Chesster/commit/626a8241dcacf8758e61981ef754dca555cf5ee5))
+* **contracts:** Implement Time-Based Escrow Forfeit Protocol for Inactive Players ([5b1d670](https://github.com/Kaycee276/Chesster/commit/5b1d67027dbd7a1960cdc81ceea6029a2fea5dd5)), closes [#231](https://github.com/Kaycee276/Chesster/issues/231)
+* **contracts:** Support Soroban SAC Token Allowances for Multi-Asset Wagers (USDC / EURC) ([4b75a87](https://github.com/Kaycee276/Chesster/commit/4b75a878298ffa381f3e9e5aa18e3818bcbb067f)), closes [#232](https://github.com/Kaycee276/Chesster/issues/232)
+* coordinate lobby expiry with Soroban escrow refund ([#396](https://github.com/Kaycee276/Chesster/issues/396)) ([5a7a6c1](https://github.com/Kaycee276/Chesster/commit/5a7a6c1eca39348cbd70803cf4f94e3891afa93c)), closes [#lobby-escrow-expiry](https://github.com/Kaycee276/Chesster/issues/lobby-escrow-expiry)
+* **frontend:** Build Tournament Match Ready Queue Modal and Auto-Redirect Flow ([#273](https://github.com/Kaycee276/Chesster/issues/273)) ([3ee2cc1](https://github.com/Kaycee276/Chesster/commit/3ee2cc10fc9db17db960924df60574094d838bfa)), closes [#230](https://github.com/Kaycee276/Chesster/issues/230)
+* **metrics:** expose websocket telemetry for issue 294 ([#392](https://github.com/Kaycee276/Chesster/issues/392)) ([4cc634e](https://github.com/Kaycee276/Chesster/commit/4cc634e6098f1712626c04e7d5aec3dedd796fcd))
+* **rating:** add Glicko-2 player updates ([#394](https://github.com/Kaycee276/Chesster/issues/394)) ([9d48da0](https://github.com/Kaycee276/Chesster/commit/9d48da0d50e13a1517b6642ccb73affd0e3f62ba))
+
 # [1.33.0](https://github.com/Kaycee276/Chesster/compare/v1.32.0...v1.33.0) (2026-09-28)
 
 
