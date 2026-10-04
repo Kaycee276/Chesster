@@ -1,3 +1,10 @@
+# [1.37.0](https://github.com/Kaycee276/Chesster/compare/v1.36.1...v1.37.0) (2026-10-04)
+
+
+### Features
+
+* **backend:** implement GET /api/leaderboard endpoint and player stats synchronization ([ab62776](https://github.com/Kaycee276/Chesster/commit/ab62776d63787cc9492be5347b56b8ed85438dda))
+
 ## [1.36.1](https://github.com/Kaycee276/Chesster/compare/v1.36.0...v1.36.1) (2026-10-04)
 
 
