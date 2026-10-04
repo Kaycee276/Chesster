@@ -1,3 +1,10 @@
+# [1.35.0](https://github.com/Kaycee276/Chesster/compare/v1.34.0...v1.35.0) (2026-10-04)
+
+
+### Features
+
+* **backend:** configure Prisma ORM with Supabase connection pooling and schema sync ([154e3ee](https://github.com/Kaycee276/Chesster/commit/154e3eee0f8502b73ab8fc31b2dbdeaeb267dd7b))
+
 # [1.34.0](https://github.com/Kaycee276/Chesster/compare/v1.33.0...v1.34.0) (2026-10-04)
 
 
