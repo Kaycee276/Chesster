@@ -30,15 +30,23 @@ const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> 
 	{ key: "retro", name: "Retro 8-bit", description: "Classic chiptune sounds" },
 ];
 
-export default function ThemeSelector() {
+export default function ThemeSelector({ hideFloating = false }: { hideFloating?: boolean } = {}) {
 	const boardTheme = useThemeStore((s) => s.boardTheme);
 	const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
 	const pieceSet = useThemeStore((s) => s.pieceSet);
 	const setPieceSet = useThemeStore((s) => s.setPieceSet);
 	const colorMode = useThemeStore((s) => s.colorMode);
 	const setColorMode = useThemeStore((s) => s.setColorMode);
-	const [open, setOpen] = useState(false);
+	const isThemePickerOpen = useThemeStore((s) => s.isThemePickerOpen);
+	const setThemePickerOpen = useThemeStore((s) => s.setThemePickerOpen);
+	const [localOpen, setLocalOpen] = useState(false);
 	const [soundPack, setSoundPack] = useState<SoundPack>(soundService.getSoundPack());
+
+	const open = isThemePickerOpen || localOpen;
+	const setOpen = (val: boolean) => {
+		setLocalOpen(val);
+		setThemePickerOpen(val);
+	};
 
 	useApplyThemeOnMount();
 
@@ -63,19 +71,34 @@ export default function ThemeSelector() {
 		}, 200);
 	};
 
+	let isGameRoute = false;
+	if (typeof window !== "undefined" && window.location) {
+		const p = window.location.pathname;
+		isGameRoute =
+			p.startsWith("/overlay") ||
+			p.startsWith("/spectate") ||
+			(p !== "/" &&
+				!["/tournaments", "/puzzles", "/referrals", "/leaderboard", "/analysis"].includes(p) &&
+				!p.startsWith("/profile") &&
+				!p.startsWith("/tournaments/"));
+	}
+	const showFloating = !hideFloating && !isGameRoute;
+
 	return (
 		<>
 			{/* Floating trigger button (bottom-right, above other UI) */}
-			<button
-				type="button"
-				onClick={() => setOpen(true)}
-				title="Board theme"
-				aria-label="Open board theme picker"
-				className="fixed bottom-4 right-4 z-40 flex items-center gap-2 px-3 py-2 rounded-full bg-(--bg-secondary) border border-(--border) text-(--text-secondary) hover:text-(--text) shadow-lg hover:border-(--accent-primary)/60 transition-colors"
-			>
-				<Palette size={16} />
-				<span className="hidden sm:inline text-xs font-semibold">Theme</span>
-			</button>
+			{showFloating && (
+				<button
+					type="button"
+					onClick={() => setOpen(true)}
+					title="Board theme"
+					aria-label="Open board theme picker"
+					className="fixed bottom-4 right-4 z-40 flex items-center gap-2 px-3 py-2 rounded-full bg-(--bg-secondary) border border-(--border) text-(--text-secondary) hover:text-(--text) shadow-lg hover:border-(--accent-primary)/60 transition-colors"
+				>
+					<Palette size={16} />
+					<span className="hidden sm:inline text-xs font-semibold">Theme</span>
+				</button>
+			)}
 
 			{open && (
 				<div
@@ -226,11 +249,18 @@ export default function ThemeSelector() {
 							{SOUND_PACKS.map((pack) => {
 								const active = pack.key === soundPack;
 								return (
-									<button
-										type="button"
+									<div
 										key={pack.key}
+										role="button"
+										tabIndex={0}
 										onClick={() => handleSoundPackChange(pack.key)}
-										className={`relative flex flex-col gap-1.5 rounded-xl border p-3 text-left transition-colors ${
+										onKeyDown={(e) => {
+											if (e.key === "Enter" || e.key === " ") {
+												e.preventDefault();
+												handleSoundPackChange(pack.key);
+											}
+										}}
+										className={`cursor-pointer relative flex flex-col gap-1.5 rounded-xl border p-3 text-left transition-colors ${
 											active
 												? "border-(--accent-primary) ring-1 ring-(--accent-primary)/50"
 												: "border-(--border) hover:border-(--accent-primary)/40"
@@ -252,12 +282,12 @@ export default function ThemeSelector() {
 												e.stopPropagation();
 												handleSoundPreview(pack.key);
 											}}
-											className="mt-1 px-2 py-1 rounded bg-(--bg-tertiary) hover:bg-(--bg-tertiary)/80 text-xs font-semibold text-(--text-secondary) hover:text-(--text) transition-colors border border-(--border) hover:border-(--accent-primary)/40"
+											className="mt-1 px-2 py-1 rounded bg-(--bg-tertiary) hover:bg-(--bg-tertiary)/80 text-xs font-semibold text-(--text-secondary) hover:text-(--text) transition-colors border border-(--border) hover:border-(--accent-primary)/40 cursor-pointer"
 											title="Preview this sound pack"
 										>
 											Test Sound
 										</button>
-									</button>
+									</div>
 								);
 							})}
 						</div>

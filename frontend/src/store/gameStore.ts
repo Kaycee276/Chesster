@@ -87,6 +87,9 @@ interface GameStore {
   // Streamer mode for broadcasting matches securely
   isStreamerMode: boolean;
   toggleStreamerMode: () => void;
+  // Settings modal visibility
+  isSettingsOpen: boolean;
+  setSettingsOpen: (open: boolean) => void;
 
   createGame: (
     walletAddress: string,
@@ -154,11 +157,14 @@ export const useGameStore = create<GameStore>()(
       chatOpen: false,
       isBlindfoldMode: false,
       isStreamerMode: false,
+      isSettingsOpen: false,
 
       toggleBlindfoldMode: () =>
         set((s) => ({ isBlindfoldMode: !s.isBlindfoldMode })),
       toggleStreamerMode: () =>
         set((s) => ({ isStreamerMode: !s.isStreamerMode })),
+      setSettingsOpen: (open: boolean) =>
+        set({ isSettingsOpen: open }),
 
       createGame: async (
         walletAddress: string,

@@ -1,6 +1,6 @@
 import { useGameStore, useGameNotifications, useSoundEffects } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
-import { soundService } from "../services/soundService";
+import { soundService, type SoundPack } from "../services/soundService";
 import { friendlyError } from "../utils/errorMessages";
 import {
 	Copy,
@@ -25,7 +25,27 @@ import {
 	ChevronRight,
 	Eye,
 	Download,
+	MessageCircle,
+	ListOrdered,
+	Settings as SettingsIcon,
+	Palette,
+	Crown,
+	Sun,
+	Moon,
+	Laptop,
 } from "lucide-react";
+import {
+	BOARD_THEMES,
+	PIECE_SETS,
+	useThemeStore,
+} from "../store/themeStore";
+
+const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> = [
+	{ key: "wood", name: "Wood", description: "Classic wooden piece sounds" },
+	{ key: "plastic", name: "Plastic", description: "Modern plastic piece sounds" },
+	{ key: "arcade", name: "Arcade", description: "Retro arcade synth sounds" },
+	{ key: "retro", name: "Retro 8-bit", description: "Classic chiptune sounds" },
+];
 
 const NATIVE_XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 const EXPLORER_BASE = "https://stellar.expert/explorer/testnet/tx/";
@@ -327,12 +347,72 @@ function ChessBoardInner() {
 	const [showPayoutModal, setShowPayoutModal] = useState(false);
 	const [showResultModal, setShowResultModal] = useState(false);
 	const [confirmAction, setConfirmAction] = useState<"resign" | "leave" | null>(null);
-	const [soundEnabled, setSoundEnabled] = useState(() => soundService.isEnabled());
-	const [volume, setVolume] = useState(() => soundService.getVolume());
+	const [soundEnabled, setSoundEnabled] = useState(() => (typeof soundService?.isEnabled === "function" ? soundService.isEnabled() : true));
+	const [volume, setVolume] = useState(() => (typeof soundService?.getVolume === "function" ? soundService.getVolume() : 0.8));
 	const [showVolumeSlider, setShowVolumeSlider] = useState(false);
 	const [flipped, setFlipped] = useState(false);
 	const [isPeeking, setIsPeeking] = useState(false);
 	const peekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const [desktopTab, setDesktopTab] = useState<"moves" | "chat" | "settings">("moves");
+	const [mobileTab, setMobileTab] = useState<"moves" | "chat" | "settings" | null>(null);
+
+	const unreadCount = useGameStore((s) => s.unreadCount);
+	const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
+	const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
+
+	const boardTheme = useThemeStore((s) => s.boardTheme);
+	const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
+	const pieceSet = useThemeStore((s) => s.pieceSet);
+	const setPieceSet = useThemeStore((s) => s.setPieceSet);
+	const colorMode = useThemeStore((s) => s.colorMode);
+	const setColorMode = useThemeStore((s) => s.setColorMode);
+	const [soundPack, setSoundPack] = useState<SoundPack>(() => {
+		return typeof soundService?.getSoundPack === "function" ? soundService.getSoundPack() : "wood";
+	});
+
+	const handleSoundPackChange = (pack: SoundPack) => {
+		setSoundPack(pack);
+		if (typeof soundService?.setSoundPack === "function") {
+			soundService.setSoundPack(pack);
+		}
+	};
+
+	const handleSoundPreview = (pack: SoundPack) => {
+		if (typeof soundService?.getSoundPack !== "function" || typeof soundService?.setSoundPack !== "function") {
+			soundService?.move?.();
+			return;
+		}
+		const originalPack = soundService.getSoundPack();
+		soundService.setSoundPack(pack);
+		soundService.move?.();
+		setTimeout(() => {
+			if (typeof soundService?.setSoundPack === "function") {
+				soundService.setSoundPack(originalPack);
+			}
+		}, 200);
+	};
+
+	const movePairs = useMemo(() => {
+		const pairs: Array<{
+			turnNumber: number;
+			white?: (typeof moveHistory)[0];
+			black?: (typeof moveHistory)[0];
+			whiteIndex: number;
+			blackIndex: number;
+		}> = [];
+		for (let i = 0; i < moveHistory.length; i += 2) {
+			pairs.push({
+				turnNumber: Math.floor(i / 2) + 1,
+				white: moveHistory[i],
+				black: moveHistory[i + 1],
+				whiteIndex: i,
+				blackIndex: i + 1,
+			});
+		}
+		return pairs;
+	}, [moveHistory]);
+
 	// Focusable board grid container — receives keyboard focus for arrow-key
 	// navigation/annotation shortcuts and drag/right-drag pointer tracking.
 	const boardGridRef = useRef<HTMLDivElement>(null);
@@ -545,7 +625,9 @@ function ChessBoardInner() {
 			// "/" or "M" jumps to the quick-move command bar (#315).
 			if (key === "/" || key === "m") {
 				e.preventDefault();
-				moveInputRef.current?.focus();
+				setDesktopTab("moves");
+				setMobileTab("moves");
+				setTimeout(() => moveInputRef.current?.focus(), 50);
 				return;
 			}
 
@@ -1023,8 +1105,270 @@ function ChessBoardInner() {
 	const opponentColor = playerColor === "white" ? "black" : "white";
 	const isMyTurn = currentTurn === playerColor;
 
+	// ── Render Settings Content (shared between Desktop tab and Mobile drawer) ──
+	const renderSettingsContent = () => (
+		<div className="flex flex-col gap-4 p-3 text-xs overflow-y-auto">
+			{/* Board Themes */}
+			<div className="flex flex-col gap-2">
+				<span className="font-semibold text-(--text-secondary) flex items-center gap-1.5">
+					<Palette size={13} /> Board Theme
+				</span>
+				<div className="grid grid-cols-2 gap-1.5">
+					{BOARD_THEMES.map((theme) => (
+						<button
+							key={theme.key}
+							onClick={() => setBoardTheme(theme.key)}
+							className={`flex items-center gap-2 p-2 rounded-xl border text-left transition-all ${
+								boardTheme === theme.key
+									? "border-(--accent-primary) bg-(--accent-primary)/10 text-(--text)"
+									: "border-(--border) bg-(--bg) text-(--text-secondary) hover:text-(--text) hover:border-gray-500/50"
+							}`}
+						>
+							<span
+								className="w-4 h-4 rounded-md shrink-0 border border-black/20"
+								style={{ background: theme.preview }}
+							/>
+							<span className="truncate font-medium">{theme.name}</span>
+						</button>
+					))}
+				</div>
+			</div>
+
+			{/* Piece Sets */}
+			<div className="flex flex-col gap-2">
+				<span className="font-semibold text-(--text-secondary) flex items-center gap-1.5">
+					<Crown size={13} /> Piece Set
+				</span>
+				<div className="grid grid-cols-2 gap-1.5">
+					{PIECE_SETS.map((set) => (
+						<button
+							key={set.key}
+							onClick={() => setPieceSet(set.key)}
+							className={`flex items-center justify-between p-2 rounded-xl border text-left transition-all ${
+								pieceSet === set.key
+									? "border-(--accent-primary) bg-(--accent-primary)/10 text-(--text)"
+									: "border-(--border) bg-(--bg) text-(--text-secondary) hover:text-(--text) hover:border-gray-500/50"
+							}`}
+						>
+							<span className="truncate font-medium">{set.name}</span>
+							<span className="text-sm font-serif">{set.pieces.K}</span>
+						</button>
+					))}
+				</div>
+			</div>
+
+			{/* Sound Pack */}
+			<div className="flex flex-col gap-2">
+				<span className="font-semibold text-(--text-secondary) flex items-center gap-1.5">
+					<Volume2 size={13} /> Sound Pack
+				</span>
+				<div className="flex flex-col gap-1.5">
+					{SOUND_PACKS.map((pack) => (
+						<div
+							key={pack.key}
+							className={`flex items-center justify-between p-2 rounded-xl border transition-all ${
+								soundPack === pack.key
+									? "border-(--accent-primary) bg-(--accent-primary)/10 text-(--text)"
+									: "border-(--border) bg-(--bg) text-(--text-secondary) hover:text-(--text)"
+							}`}
+						>
+							<button
+								onClick={() => handleSoundPackChange(pack.key)}
+								className="flex-1 text-left flex flex-col min-w-0"
+							>
+								<span className="font-medium">{pack.name}</span>
+								<span className="text-[10px] text-(--text-tertiary) truncate">{pack.description}</span>
+							</button>
+							<button
+								onClick={() => handleSoundPreview(pack.key)}
+								title="Preview sound"
+								className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors shrink-0"
+							>
+								<Volume2 size={13} />
+							</button>
+						</div>
+					))}
+				</div>
+			</div>
+
+			{/* Game Mode Toggles */}
+			<div className="flex flex-col gap-2 pt-2 border-t border-(--border)">
+				<span className="font-semibold text-(--text-secondary)">Display & Options</span>
+
+				{/* Blindfold Mode */}
+				<div className="flex items-center justify-between p-2 rounded-xl bg-(--bg) border border-(--border)">
+					<div className="flex flex-col">
+						<span className="font-medium text-(--text)">Blindfold Mode</span>
+						<span className="text-[10px] text-(--text-tertiary)">Hide pieces to train visualization</span>
+					</div>
+					<button
+						onClick={toggleBlindfoldMode}
+						className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors ${
+							isBlindfoldMode ? "bg-(--accent-primary) justify-end" : "bg-gray-600 justify-start"
+						}`}
+					>
+						<span className="w-4 h-4 rounded-full bg-white shadow-sm" />
+					</button>
+				</div>
+
+				{/* Streamer Mode */}
+				<div className="flex items-center justify-between p-2 rounded-xl bg-(--bg) border border-(--border)">
+					<div className="flex flex-col">
+						<span className="font-medium text-(--text)">Streamer Mode</span>
+						<span className="text-[10px] text-(--text-tertiary)">Large coordinates & high visibility</span>
+					</div>
+					<button
+						onClick={toggleStreamerMode}
+						className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors ${
+							isStreamerMode ? "bg-(--accent-primary) justify-end" : "bg-gray-600 justify-start"
+						}`}
+					>
+						<span className="w-4 h-4 rounded-full bg-white shadow-sm" />
+					</button>
+				</div>
+
+				{/* Color Mode */}
+				<div className="flex items-center justify-between p-2 rounded-xl bg-(--bg) border border-(--border)">
+					<span className="font-medium text-(--text)">Theme Mode</span>
+					<div className="flex items-center gap-1 bg-(--bg-secondary) p-1 rounded-lg border border-(--border)">
+						<button
+							onClick={() => setColorMode("light")}
+							className={`p-1 rounded ${colorMode === "light" ? "bg-(--accent-primary) text-white" : "text-(--text-tertiary)"}`}
+							title="Light"
+						>
+							<Sun size={12} />
+						</button>
+						<button
+							onClick={() => setColorMode("dark")}
+							className={`p-1 rounded ${colorMode === "dark" ? "bg-(--accent-primary) text-white" : "text-(--text-tertiary)"}`}
+							title="Dark"
+						>
+							<Moon size={12} />
+						</button>
+						<button
+							onClick={() => setColorMode("system")}
+							className={`p-1 rounded ${colorMode === "system" ? "bg-(--accent-primary) text-white" : "text-(--text-tertiary)"}`}
+							title="System"
+						>
+							<Laptop size={12} />
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+	);
+
+	// ── Render Moves Content (shared between Desktop tab and Mobile drawer) ──
+	const formatNotation = (m?: (typeof moveHistory)[0] | null) => {
+		if (!m) return "";
+		return `${moveToAlgebraic(m.from_position, m.to_position, m.promotion)}${m.is_checkmate ? "#" : m.is_check ? "+" : ""}`;
+	};
+
+	const renderMovesContent = (isMobile = false) => (
+		<div className="flex flex-col h-full overflow-hidden">
+			{/* Moves Table */}
+			<div className="flex-1 min-h-0 overflow-y-auto p-2">
+				{movePairs.length === 0 ? (
+					<div className="h-full flex items-center justify-center text-xs text-(--text-tertiary)">
+						No moves yet. Make the first move!
+					</div>
+				) : (
+					<div className="flex flex-col text-xs font-mono">
+						{movePairs.map((pair) => (
+							<div key={pair.turnNumber} className="flex items-center py-1 px-2 rounded hover:bg-(--bg-tertiary) transition-colors">
+								<span className="w-8 text-(--text-tertiary) font-semibold select-none">{pair.turnNumber}.</span>
+								<button
+									onClick={() => setViewingIndex(pair.whiteIndex)}
+									className={`flex-1 text-left px-1.5 py-0.5 rounded transition-colors ${
+										viewingIndex === pair.whiteIndex ? "bg-(--accent-primary) text-white font-bold" : "text-(--text) hover:bg-(--bg)"
+									}`}
+								>
+									{formatNotation(pair.white)}
+								</button>
+								{pair.black ? (
+									<button
+										onClick={() => setViewingIndex(pair.blackIndex)}
+										className={`flex-1 text-left px-1.5 py-0.5 rounded transition-colors ${
+											viewingIndex === pair.blackIndex ? "bg-(--accent-primary) text-white font-bold" : "text-(--text) hover:bg-(--bg)"
+										}`}
+									>
+										{formatNotation(pair.black)}
+									</button>
+								) : (
+									<span className="flex-1" />
+								)}
+							</div>
+						))}
+					</div>
+				)}
+			</div>
+
+			{/* Playback Controls Toolbar */}
+			<div className="shrink-0 flex items-center justify-center gap-1.5 p-2 border-t border-(--border) bg-(--bg)">
+				<button
+					onClick={() => setViewingIndex(0)}
+					disabled={viewingIndex === 0 || moveHistory.length === 0}
+					title="Jump to start (first move)"
+					className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+				>
+					<SkipBack size={13} />
+				</button>
+				<button
+					onClick={() =>
+						setViewingIndex(
+							viewingIndex === null
+								? moveHistory.length - 1
+								: Math.max(0, viewingIndex - 1),
+						)
+					}
+					disabled={viewingIndex === 0 || moveHistory.length === 0}
+					title="Previous move (←)"
+					className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+				>
+					<ChevronLeft size={13} />
+				</button>
+				<span className="text-[11px] font-mono text-(--text-tertiary) tabular-nums px-2 shrink-0">
+					{viewingIndex === null ? moveHistory.length : viewingIndex + 1} / {moveHistory.length}
+				</span>
+				<button
+					onClick={() =>
+						setViewingIndex(
+							viewingIndex === null
+								? null
+								: Math.min(moveHistory.length - 1, viewingIndex + 1),
+						)
+					}
+					disabled={viewingIndex === null}
+					title="Next move (→)"
+					className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+				>
+					<ChevronRight size={13} />
+				</button>
+				<button
+					onClick={() => setViewingIndex(null)}
+					disabled={viewingIndex === null}
+					title="Return to live position"
+					className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+				>
+					<SkipForward size={13} />
+				</button>
+			</div>
+
+			{/* Docked MoveInputBar */}
+			<div className="shrink-0 p-2 border-t border-(--border)">
+				<MoveInputBar
+					board={board}
+					turn={playerColor!}
+					isPlayerTurn={isMyTurn && status === "active" && viewingIndex === null}
+					onMove={commitMove}
+					focusRef={isMobile ? undefined : moveInputRef}
+				/>
+			</div>
+		</div>
+	);
+
 	return (
-		<div className="h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg) select-none p-1 gap-1">
+		<div className="h-full w-full max-h-dvh max-w-dvw overflow-hidden flex flex-col bg-(--bg) select-none p-1 sm:p-2 gap-1 sm:gap-2">
 			{promotionMove && (
 				<PromotionModal onSelect={handlePromotion} color={playerColor!} />
 			)}
@@ -1159,43 +1503,176 @@ function ChessBoardInner() {
 				/>
 			)}
 
-			{/* ── Opponent Bar ── */}
-			<div className="shrink-0 flex items-center justify-between px-3 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) min-w-0 gap-2 overflow-hidden">
-				<div className="flex items-center gap-2 min-w-0 overflow-hidden">
-					<PlayerAvatar color={opponentColor as "white" | "black"} />
-					<span className="text-xs font-semibold uppercase tracking-wider text-(--text-secondary) truncate">
-						Opponent · {opponentColor}
-					</span>
-					<MaterialChip
-						advantage={
-							opponentColor === "white"
-								? whiteMaterial - blackMaterial
-								: blackMaterial - whiteMaterial
-						}
-						label={opponentColor}
-					/>
-					<CapturedIcons
-						captured={
-							opponentColor === "white" ? capturedByWhite : capturedByBlack
-						}
-					/>
-				</div>
-				{status === "active" && isMyTurn && (
-					<span className="text-xs text-(--text-tertiary) italic shrink-0">thinking…</span>
-				)}
-			</div>
 
 			{/* ── Screen-reader announcements (#315) ── */}
 			<div role="status" aria-live="polite" className="sr-only">{boardAnnouncement}</div>
 
-			{/* ── Move input bar (#315) ── */}
-			<MoveInputBar
-				board={board}
-				turn={playerColor!}
-				isPlayerTurn={isMyTurn && status === "active" && viewingIndex === null}
-				onMove={commitMove}
-				focusRef={moveInputRef}
-			/>
+			{/* ── Top Header Bar ── */}
+			<header className="shrink-0 h-11 sm:h-12 px-2.5 sm:px-3 rounded-xl bg-(--bg-secondary) border border-(--border) flex items-center justify-between gap-2 min-w-0 overflow-hidden shadow-xs">
+				{/* Left: Brand, Game Code, Escrow Badge */}
+				<div className="flex items-center gap-2 min-w-0">
+					<div className="flex items-center gap-1.5 shrink-0">
+						<span className="text-base sm:text-lg select-none">♟️</span>
+						<span className="hidden sm:inline font-black text-xs sm:text-sm tracking-widest text-(--text-primary)">
+							CHESSTER
+						</span>
+					</div>
+
+					<button
+						onClick={copyGameCode}
+						disabled={!gameCode}
+						title="Copy game code"
+						className="flex items-center gap-1.5 px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600/40 text-(--text-secondary) hover:text-(--text) rounded-lg text-xs font-mono transition-colors disabled:opacity-40 shrink-0"
+					>
+						{copied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+						<span>{gameCode}</span>
+					</button>
+
+					{/* Escrow status badge (wagered games only) */}
+					{wagerAmount && (
+						escrowStatus === "failed" ? (
+							<span className="flex items-center gap-1 text-xs text-red-400 font-semibold px-2 py-0.5 rounded-md bg-red-500/10 border border-red-500/20 shrink-0">
+								<AlertTriangle size={11} />
+								<span className="hidden md:inline">Escrow failed</span>
+							</span>
+						) : escrowStatus === "settled" ? (
+							<a
+								href={escrowResolveTx ? `${EXPLORER_BASE}${escrowResolveTx}` : undefined}
+								target="_blank"
+								rel="noopener noreferrer"
+								className="flex items-center gap-1 text-xs text-green-400 font-semibold px-2 py-0.5 rounded-md bg-green-500/10 border border-green-500/20 shrink-0"
+							>
+								<CheckCircle2 size={11} />
+								<span className="hidden md:inline">Settled</span>
+							</a>
+						) : willReceiveTokens ? (
+							<span className="flex items-center gap-1 text-xs text-yellow-400 px-2 py-0.5 rounded-md bg-yellow-500/10 border border-yellow-500/20 shrink-0">
+								<Loader2 size={11} className="animate-spin" />
+								<span className="hidden md:inline">Sending…</span>
+							</span>
+						) : (
+							<span
+								title={`Total pot: ${potDisplay}`}
+								className="flex items-center gap-1 text-xs text-yellow-400/90 border border-yellow-500/25 rounded-md px-2 py-0.5 bg-yellow-500/10 font-medium shrink-0"
+							>
+								<Lock size={10} />
+								<span>{potDisplay}</span>
+							</span>
+						)
+					)}
+				</div>
+
+				{/* Right: Quick Controls */}
+				<div className="flex items-center gap-1 shrink-0">
+					{/* Peek button - only show when blindfold mode is active */}
+					{isBlindfoldMode && (
+						<button
+							onClick={handlePeekClick}
+							disabled={isPeeking}
+							title={isPeeking ? "Peeking... (2 seconds)" : "Peek at pieces (2 seconds)"}
+							className={`p-1.5 sm:p-2 rounded-lg transition-colors ${
+								isPeeking
+									? "bg-(--accent-primary) text-white"
+									: "text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary)"
+							}`}
+						>
+							<Eye size={15} />
+						</button>
+					)}
+
+					<button
+						onClick={() => setFlipped((f) => !f)}
+						title="Flip board"
+						className="p-1.5 sm:p-2 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+					>
+						<RefreshCw size={15} />
+					</button>
+
+					<div className="relative flex items-center">
+						<button
+							onClick={() => setSoundEnabled(soundService.toggle())}
+							onContextMenu={(e) => { e.preventDefault(); setShowVolumeSlider((v) => !v); }}
+							title={soundEnabled ? "Mute sounds (right-click for volume)" : "Unmute sounds"}
+							className="p-1.5 sm:p-2 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+						>
+							{soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+						</button>
+						{showVolumeSlider && (
+							<div className="absolute top-full right-0 mt-1.5 bg-(--bg-secondary) border border-(--border) rounded-xl p-2.5 shadow-2xl z-50 flex flex-col items-center gap-1.5 min-w-[120px]">
+								<div className="flex items-center justify-between w-full text-[10px] text-(--text-tertiary)">
+									<span>Volume</span>
+									<span className="font-mono">{Math.round(volume * 100)}%</span>
+								</div>
+								<input
+									type="range"
+									min={0}
+									max={1}
+									step={0.05}
+									value={volume}
+									onChange={(e) => {
+										const v = parseFloat(e.target.value);
+										soundService.setVolume(v);
+										setVolume(v);
+									}}
+									className="w-full accent-(--accent-primary)"
+								/>
+							</div>
+						)}
+					</div>
+
+					<button
+						onClick={toggleFullscreen}
+						title={isFullscreen ? "Exit fullscreen (f)" : "Fullscreen (f)"}
+						className="p-1.5 sm:p-2 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+					>
+						{isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+					</button>
+
+					<button
+						onClick={() => {
+							setDesktopTab("settings");
+							setMobileTab("settings");
+						}}
+						title="Settings & Themes"
+						className="p-1.5 sm:p-2 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+					>
+						<SettingsIcon size={15} />
+					</button>
+				</div>
+			</header>
+
+			{/* ── Main Workspace Area ── */}
+			<div className="flex-1 min-h-0 min-w-0 flex flex-col lg:flex-row gap-2 lg:gap-3 overflow-hidden">
+				{/* Center Chess Arena */}
+				<div className="flex-1 min-h-0 min-w-0 flex flex-col items-center justify-between overflow-hidden gap-1 sm:gap-1.5">
+					{/* Opponent Bar */}
+					<div
+						className="shrink-0 flex items-center justify-between px-3 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) min-w-0 gap-2 transition-[width] duration-150"
+						style={{ width: boardPx > 0 ? `${boardPx}px` : "100%", maxWidth: "100%" }}
+					>
+						<div className="flex items-center gap-2 min-w-0 overflow-hidden">
+							<PlayerAvatar color={opponentColor as "white" | "black"} />
+							<span className="text-xs font-semibold uppercase tracking-wider text-(--text-secondary) truncate">
+								Opponent · {opponentColor}
+							</span>
+							<MaterialChip
+								advantage={
+									opponentColor === "white"
+										? whiteMaterial - blackMaterial
+										: blackMaterial - whiteMaterial
+								}
+								label={opponentColor}
+							/>
+							<CapturedIcons
+								captured={
+									opponentColor === "white" ? capturedByWhite : capturedByBlack
+								}
+							/>
+						</div>
+						{status === "active" && isMyTurn && (
+							<span className="text-xs text-(--text-tertiary) italic shrink-0">thinking…</span>
+						)}
+					</div>
 
 			{/* ── Board (fills remaining height) ── */}
 			<div
@@ -1493,265 +1970,355 @@ function ChessBoardInner() {
 				)}
 			</div>
 
-			{/* ── Player Bar ── */}
-			<div className="shrink-0 flex items-center justify-between px-3 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) min-w-0 gap-2 overflow-hidden">
-				<div className="flex items-center gap-2 min-w-0 overflow-hidden">
-					<PlayerAvatar color={playerColor as "white" | "black"} />
-					<span className="text-xs font-semibold uppercase tracking-wider truncate">
-						You · {playerColor}
-					</span>
-					<MaterialChip
-						advantage={
-							playerColor === "white"
-								? whiteMaterial - blackMaterial
-								: blackMaterial - whiteMaterial
-						}
-						label={playerColor ?? "your"}
-					/>
-					<CapturedIcons
-						captured={playerColor === "white" ? capturedByWhite : capturedByBlack}
-					/>
-				</div>
-				<div className="flex items-center gap-2 shrink-0">
-					{inCheck && isMyTurn && status === "active" && (
-						<span className="flex items-center gap-1 text-red-500 font-bold text-xs animate-pulse">
-							<AlertTriangle size={10} />
-							CHECK!
-						</span>
-					)}
-					{status === "active" && !isMyTurn && (
-						<span className="text-xs text-(--text-tertiary) italic">your turn next</span>
-					)}
-					{status === "finished" && (
-						<span className="font-bold text-(--info) uppercase text-xs tracking-wide">
-							{winner === "draw" ? "Draw!" : winner === playerColor ? "You win!" : "You lose"}
-						</span>
-					)}
-				</div>
-			</div>
 
-			{/* ── Chat Panel ── */}
-			<ChatPanel />
-
-			{/* ── Action Bar ── */}
-			<div className="shrink-0 flex items-center justify-between px-2.5 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) gap-1.5 min-w-0 overflow-hidden">
-				{/* Left: game actions */}
-				<div className="flex items-center gap-1 shrink-0">
-					<button
-						onClick={() => setFlipped((f) => !f)}
-						title="Flip board"
-						className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+					{/* Player Bar */}
+					<div
+						className="shrink-0 flex items-center justify-between px-3 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) min-w-0 gap-2 transition-[width] duration-150"
+						style={{ width: boardPx > 0 ? `${boardPx}px` : "100%", maxWidth: "100%" }}
 					>
-						<RefreshCw size={13} />
-					</button>
-					{/* Move history playback (#112) */}
-					{moveHistory.length > 0 && (
-						<>
-							<span className="w-px h-4 bg-(--border) mx-0.5" />
-							<button
-								onClick={() => setViewingIndex(0)}
-								disabled={viewingIndex === 0}
-								title="Jump to start (first move)"
-								className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-							>
-								<SkipBack size={13} />
-							</button>
-							<button
-								onClick={() =>
-									setViewingIndex(
-										viewingIndex === null
-											? moveHistory.length - 1
-											: Math.max(0, viewingIndex - 1),
-									)
-								}
-								disabled={viewingIndex === 0}
-								title="Previous move (←)"
-								className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-							>
-								<ChevronLeft size={13} />
-							</button>
-							<span className="text-[10px] font-mono text-(--text-tertiary) tabular-nums shrink-0">
-								{viewingIndex === null ? moveHistory.length : viewingIndex + 1}/
-								{moveHistory.length}
+						<div className="flex items-center gap-2 min-w-0 overflow-hidden">
+							<PlayerAvatar color={playerColor as "white" | "black"} />
+							<span className="text-xs font-semibold uppercase tracking-wider truncate">
+								You · {playerColor}
 							</span>
-							<button
-								onClick={() =>
-									setViewingIndex(
-										viewingIndex === null
-											? null
-											: Math.min(moveHistory.length - 1, viewingIndex + 1),
-									)
+							<MaterialChip
+								advantage={
+									playerColor === "white"
+										? whiteMaterial - blackMaterial
+										: blackMaterial - whiteMaterial
 								}
-								disabled={viewingIndex === null}
-								title="Next move (→)"
-								className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-							>
-								<ChevronRight size={13} />
-							</button>
+								label={playerColor ?? "your"}
+							/>
+							<CapturedIcons
+								captured={playerColor === "white" ? capturedByWhite : capturedByBlack}
+							/>
+						</div>
+						<div className="flex items-center gap-2 shrink-0">
+							{inCheck && isMyTurn && status === "active" && (
+								<span className="flex items-center gap-1 text-red-500 font-bold text-xs animate-pulse">
+									<AlertTriangle size={11} />
+									CHECK!
+								</span>
+							)}
+							{status === "active" && !isMyTurn && (
+								<span className="text-xs text-(--text-tertiary) italic">your turn next</span>
+							)}
+							{status === "finished" && (
+								<span className="font-bold text-(--info) uppercase text-xs tracking-wide">
+									{winner === "draw" ? "Draw!" : winner === playerColor ? "You win!" : "You lose"}
+								</span>
+							)}
+						</div>
+					</div>
+
+					{/* Mobile Quick Controls Bar */}
+					<div
+						className="lg:hidden shrink-0 flex items-center justify-between px-2 h-10 rounded-xl bg-(--bg-secondary) border border-(--border) gap-1.5 transition-[width] duration-150"
+						style={{ width: boardPx > 0 ? `${boardPx}px` : "100%", maxWidth: "100%" }}
+					>
+						{status === "active" ? (
+							<TurnTimer 
+								secondsLeft={secondsLeft} 
+								totalSeconds={timeControlSeconds}
+								isCurrentTurn={playerColor === currentTurn}
+							/>
+						) : (
+							<span className="text-xs font-semibold uppercase text-(--text-tertiary) px-2">
+								{status === "finished" ? "Game Over" : "Ready"}
+							</span>
+						)}
+
+						<div className="flex items-center gap-1">
+							{status === "active" && (
+								<>
+									<button
+										onClick={handleResign}
+										title="Resign game"
+										className="px-2 py-1 bg-red-500/15 hover:bg-red-500 text-red-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
+									>
+										<Flag size={11} />
+										<span className="hidden sm:inline">Resign</span>
+									</button>
+									{drawOffer !== playerColor && (
+										<button
+											onClick={handleOfferDraw}
+											title="Offer draw"
+											className="px-2 py-1 bg-blue-500/15 hover:bg-blue-500 text-blue-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
+										>
+											<Handshake size={11} />
+											<span className="hidden sm:inline">Draw</span>
+										</button>
+									)}
+									{drawOffer && drawOffer !== playerColor && (
+										<button
+											onClick={handleAcceptDraw}
+											title="Accept draw"
+											className="px-2 py-1 bg-green-500 hover:bg-green-600 text-white rounded-lg flex items-center gap-1 text-xs transition-colors animate-pulse"
+										>
+											<Handshake size={11} />
+											<span>Accept</span>
+										</button>
+									)}
+								</>
+							)}
+
+							{status === "finished" && (
+								<>
+									<button
+										onClick={() => setShowResultModal(true)}
+										className="px-2 py-1 bg-purple-500/15 hover:bg-purple-500 text-purple-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
+									>
+										<Download size={11} />
+										<span>Share</span>
+									</button>
+									<button
+										onClick={handleLeaveGame}
+										className="px-2.5 py-1 bg-(--accent-dark) hover:bg-(--accent-primary) text-white rounded-lg flex items-center gap-1 text-xs font-semibold transition-colors"
+									>
+										<LogOut size={11} />
+										<span>Leave</span>
+									</button>
+								</>
+							)}
+
 							<button
-								onClick={() => setViewingIndex(null)}
-								disabled={viewingIndex === null}
-								title="Return to live position"
-								className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+								onClick={() => setMobileTab("moves")}
+								title="Move History"
+								className={`p-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors ${
+									mobileTab === "moves"
+										? "bg-(--accent-primary) text-white"
+										: "text-(--text-secondary) hover:text-(--text) hover:bg-(--bg-tertiary)"
+								}`}
 							>
-								<SkipForward size={13} />
+								<ListOrdered size={14} />
+								<span className="text-[11px] font-mono">{moveHistory.length}</span>
 							</button>
-						</>
-					)}
-					{status === "finished" ? (
-						<div className="flex items-center gap-1.5">
+
 							<button
-								onClick={() => setShowResultModal(true)}
-								className="px-2.5 py-1 bg-purple-500/15 hover:bg-purple-500 text-purple-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
-								title="Share this game's board position as an image"
+								onClick={() => setMobileTab("chat")}
+								title="Chat"
+								className={`relative p-1.5 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors ${
+									mobileTab === "chat"
+										? "bg-(--accent-primary) text-white"
+										: "text-(--text-secondary) hover:text-(--text) hover:bg-(--bg-tertiary)"
+								}`}
 							>
-								<Download size={11} />
-								Share
-							</button>
-							<button
-								onClick={handleLeaveGame}
-								className="px-3 py-1.5 bg-(--accent-dark) hover:bg-(--accent-primary) text-white rounded-lg flex items-center gap-1.5 text-xs font-semibold transition-colors"
-							>
-								<LogOut size={11} />
-								Leave
+								<MessageCircle size={14} />
+								{unreadCount > 0 && (
+									<span className="absolute -top-1 -right-1 px-1 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold bg-red-500 text-white rounded-full">
+										{unreadCount}
+									</span>
+								)}
 							</button>
 						</div>
-					) : status === "active" ? (
-						<>
-							<button
-								onClick={handleResign}
-								className="px-2.5 py-1 bg-red-500/15 hover:bg-red-500 text-red-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
-							>
-								<Flag size={11} />
-								Resign
-							</button>
-							{drawOffer !== playerColor && (
-								<button
-									onClick={handleOfferDraw}
-									className="px-2.5 py-1 bg-blue-500/15 hover:bg-blue-500 text-blue-400 hover:text-white rounded-lg flex items-center gap-1 text-xs transition-colors"
-								>
-									<Handshake size={11} />
-									Draw
-								</button>
-							)}
-							{drawOffer && drawOffer !== playerColor && (
-								<button
-									onClick={handleAcceptDraw}
-									className="px-2.5 py-1 bg-green-500 hover:bg-green-600 text-white rounded-lg flex items-center gap-1 text-xs transition-colors animate-pulse"
-								>
-									<Handshake size={11} />
-									Accept
-								</button>
-							)}
-						</>
-					) : null}
+					</div>
 				</div>
 
-				{/* Centre: timer */}
-				{status === "active" && (
-					<TurnTimer 
-						secondsLeft={secondsLeft} 
-						totalSeconds={timeControlSeconds}
-						isCurrentTurn={playerColor === currentTurn}
-					/>
-				)}
+				{/* Right Desktop Sidebar */}
+				<aside className="hidden lg:flex flex-col w-80 xl:w-96 rounded-2xl bg-(--bg-secondary) border border-(--border) overflow-hidden shadow-lg shrink-0">
+					{/* Turn Status & TurnTimer Card */}
+					<div className="shrink-0 p-3 border-b border-(--border) flex flex-col gap-2 bg-(--bg)/50">
+						<div className="flex items-center justify-between">
+							<div className="flex items-center gap-2">
+								<span className={`w-3 h-3 rounded-full ${currentTurn === "white" ? "bg-white border border-gray-400" : "bg-black border border-gray-600"}`} />
+								<span className="text-xs font-bold uppercase tracking-wider text-(--text-primary)">
+									{status === "active" ? (currentTurn === playerColor ? "Your Turn" : "Opponent's Turn") : "Game Over"}
+								</span>
+							</div>
+							{inCheck && status === "active" && (
+								<span className="text-xs font-bold text-red-500 animate-pulse flex items-center gap-1">
+									<AlertTriangle size={12} />
+									CHECK
+								</span>
+							)}
+							{status === "finished" && (
+								<span className="text-xs font-bold uppercase text-(--accent-primary)">
+									{winner === "draw" ? "Draw" : winner === playerColor ? "Victory!" : "Defeat"}
+								</span>
+							)}
+						</div>
 
-				{/* Right: escrow badge · sound · game code */}
-				<div className="flex items-center gap-1 shrink-0 ml-auto">
-					{/* Escrow status badge (wagered games only) */}
-					{wagerAmount && (
-						escrowStatus === "failed" ? (
-							<span className="flex items-center gap-1 text-xs text-red-400 font-semibold">
-								<AlertTriangle size={9} />
-								<span className="hidden sm:inline">Escrow failed</span>
-							</span>
-						) : escrowStatus === "settled" ? (
-							<a
-								href={escrowResolveTx ? `${EXPLORER_BASE}${escrowResolveTx}` : undefined}
-								target="_blank"
-								rel="noopener noreferrer"
-								className="flex items-center gap-1 text-xs text-green-400 font-semibold"
-							>
-								<CheckCircle2 size={9} />
-								<span className="hidden sm:inline">Settled</span>
-							</a>
-						) : willReceiveTokens ? (
-							<span className="flex items-center gap-1 text-xs text-yellow-400">
-								<Loader2 size={9} className="animate-spin" />
-								<span className="hidden sm:inline">Sending…</span>
-							</span>
-						) : (
-							<span
-								title={`Total pot: ${potDisplay}`}
-								className="flex items-center gap-1 text-xs text-yellow-400/80 border border-yellow-500/25 rounded-md px-1.5 py-0.5"
-							>
-								<Lock size={8} />
-								{potDisplay}
-							</span>
-						)
-					)}
-					<button
-						onClick={toggleFullscreen}
-						title={isFullscreen ? "Exit fullscreen (f)" : "Fullscreen (f)"}
-						className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
-					>
-						{isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-					</button>
-					<div className="relative flex items-center">
-						<button
-							onClick={() => setSoundEnabled(soundService.toggle())}
-							onContextMenu={(e) => { e.preventDefault(); setShowVolumeSlider((v) => !v); }}
-							title={soundEnabled ? "Mute sounds (right-click for volume)" : "Unmute sounds"}
-							className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
-						>
-							{soundEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
-						</button>
-						{showVolumeSlider && (
-							<div className="absolute bottom-full right-0 mb-1 bg-(--bg-secondary) border border-(--border) rounded-lg p-2 shadow-xl z-50 flex flex-col items-center gap-1">
-								<span className="text-[10px] text-(--text-tertiary)">Volume</span>
-								<input
-									type="range"
-									min={0}
-									max={1}
-									step={0.05}
-									value={volume}
-									onChange={(e) => {
-										const v = parseFloat(e.target.value);
-										soundService.setVolume(v);
-										setVolume(v);
-									}}
-									className="w-20 accent-(--accent-primary)"
+						{status === "active" && (
+							<div className="flex items-center justify-center py-0.5">
+								<TurnTimer 
+									secondsLeft={secondsLeft} 
+									totalSeconds={timeControlSeconds}
+									isCurrentTurn={playerColor === currentTurn}
 								/>
-								<span className="text-[10px] text-(--text-tertiary)">{Math.round(volume * 100)}%</span>
 							</div>
 						)}
 					</div>
-					{/* Peek button - only show when blindfold mode is active */}
-					{isBlindfoldMode && (
+
+					{/* Sidebar Tabs */}
+					<div className="shrink-0 flex items-center border-b border-(--border) bg-(--bg-secondary)">
 						<button
-							onClick={handlePeekClick}
-							disabled={isPeeking}
-							title={isPeeking ? "Peeking... (2 seconds)" : "Peek at pieces (2 seconds)"}
-							className={`p-1.5 rounded-lg transition-colors ${
-								isPeeking
-									? "bg-(--accent-primary) text-white"
-									: "text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary)"
+							onClick={() => setDesktopTab("moves")}
+							className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+								desktopTab === "moves"
+									? "border-(--accent-primary) text-(--accent-primary)"
+									: "border-transparent text-(--text-secondary) hover:text-(--text)"
 							}`}
 						>
-							<Eye size={13} />
+							<ListOrdered size={14} />
+							<span>Moves ({moveHistory.length})</span>
 						</button>
-					)}
-					<button
-						onClick={copyGameCode}
-						disabled={!gameCode}
-						title="Copy game code"
-						className="flex items-center gap-1.5 px-2.5 py-1 bg-(--bg-tertiary) hover:bg-gray-600 text-(--text-secondary) hover:text-white rounded-lg text-xs font-mono transition-colors disabled:opacity-40"
-					>
-						{copied ? <Check size={11} /> : <Copy size={11} />}
-						{gameCode}
-					</button>
-				</div>
+						<button
+							onClick={() => setDesktopTab("chat")}
+							className={`relative flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+								desktopTab === "chat"
+									? "border-(--accent-primary) text-(--accent-primary)"
+									: "border-transparent text-(--text-secondary) hover:text-(--text)"
+							}`}
+						>
+							<MessageCircle size={14} />
+							<span>Chat</span>
+							{unreadCount > 0 && (
+								<span className="px-1.5 py-0.2 min-w-[16px] text-[10px] font-bold bg-red-500 text-white rounded-full">
+									{unreadCount}
+								</span>
+							)}
+						</button>
+						<button
+							onClick={() => setDesktopTab("settings")}
+							className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+								desktopTab === "settings"
+									? "border-(--accent-primary) text-(--accent-primary)"
+									: "border-transparent text-(--text-secondary) hover:text-(--text)"
+							}`}
+						>
+							<SettingsIcon size={14} />
+							<span>Settings</span>
+						</button>
+					</div>
+
+					{/* Tab Body */}
+					<div className="flex-1 min-h-0 overflow-y-auto">
+						{desktopTab === "moves" && renderMovesContent(false)}
+						{desktopTab === "chat" && <ChatPanel inline={true} activeTab="chat" />}
+						{desktopTab === "settings" && renderSettingsContent()}
+					</div>
+
+					{/* Footer Actions */}
+					<div className="shrink-0 p-2.5 border-t border-(--border) flex items-center justify-between gap-2 bg-(--bg)">
+						{status === "active" ? (
+							<>
+								<button
+									onClick={handleResign}
+									className="flex-1 py-2 px-3 rounded-xl bg-red-500/15 hover:bg-red-500 text-red-400 hover:text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
+								>
+									<Flag size={12} />
+									<span>Resign</span>
+								</button>
+								{drawOffer !== playerColor && (
+									<button
+										onClick={handleOfferDraw}
+										className="flex-1 py-2 px-3 rounded-xl bg-blue-500/15 hover:bg-blue-500 text-blue-400 hover:text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
+									>
+										<Handshake size={12} />
+										<span>Draw</span>
+									</button>
+								)}
+								{drawOffer && drawOffer !== playerColor && (
+									<button
+										onClick={handleAcceptDraw}
+										className="flex-1 py-2 px-3 rounded-xl bg-green-500 hover:bg-green-600 text-white text-xs font-semibold transition-colors animate-pulse flex items-center justify-center gap-1.5"
+									>
+										<Handshake size={12} />
+										<span>Accept</span>
+									</button>
+								)}
+							</>
+						) : status === "finished" ? (
+							<>
+								<button
+									onClick={() => setShowResultModal(true)}
+									className="flex-1 py-2 px-3 rounded-xl bg-purple-500/15 hover:bg-purple-500 text-purple-400 hover:text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
+									title="Share this game's board position as an image"
+								>
+									<Download size={12} />
+									<span>Share</span>
+								</button>
+								<button
+									onClick={handleLeaveGame}
+									className="flex-1 py-2 px-3 rounded-xl bg-(--accent-dark) hover:bg-(--accent-primary) text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1.5"
+								>
+									<LogOut size={12} />
+									<span>Leave</span>
+								</button>
+							</>
+						) : null}
+					</div>
+				</aside>
 			</div>
+
+			{/* ── Mobile Slide-up Drawer Modal ── */}
+			{mobileTab && (
+				<div
+					className="fixed inset-0 z-50 lg:hidden flex flex-col justify-end bg-black/60 backdrop-blur-xs animate-fade-in"
+					onClick={() => setMobileTab(null)}
+				>
+					<div
+						className="w-full max-h-[80vh] bg-(--bg-secondary) border-t border-(--border) rounded-t-2xl flex flex-col overflow-hidden shadow-2xl"
+						onClick={(e) => e.stopPropagation()}
+					>
+						<div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-(--border)">
+							<div className="flex items-center gap-1.5 bg-(--bg) p-1 rounded-xl border border-(--border)">
+								<button
+									onClick={() => setMobileTab("moves")}
+									className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+										mobileTab === "moves"
+											? "bg-(--accent-primary) text-white"
+											: "text-(--text-secondary) hover:text-(--text)"
+									}`}
+								>
+									<ListOrdered size={13} />
+									<span>Moves</span>
+								</button>
+								<button
+									onClick={() => setMobileTab("chat")}
+									className={`relative flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+										mobileTab === "chat"
+											? "bg-(--accent-primary) text-white"
+											: "text-(--text-secondary) hover:text-(--text)"
+									}`}
+								>
+									<MessageCircle size={13} />
+									<span>Chat</span>
+									{unreadCount > 0 && (
+										<span className="ml-1 px-1 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold bg-red-500 text-white rounded-full">
+											{unreadCount}
+										</span>
+									)}
+								</button>
+								<button
+									onClick={() => setMobileTab("settings")}
+									className={`flex items-center gap-1 px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+										mobileTab === "settings"
+											? "bg-(--accent-primary) text-white"
+											: "text-(--text-secondary) hover:text-(--text)"
+									}`}
+								>
+									<SettingsIcon size={13} />
+									<span>Settings</span>
+								</button>
+							</div>
+
+							<button
+								onClick={() => setMobileTab(null)}
+								className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+							>
+								<X size={16} />
+							</button>
+						</div>
+
+						<div className="flex-1 min-h-0 overflow-y-auto">
+							{mobileTab === "moves" && renderMovesContent(true)}
+							{mobileTab === "chat" && <ChatPanel inline={true} activeTab="chat" />}
+							{mobileTab === "settings" && renderSettingsContent()}
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

@@ -1,6 +1,4 @@
-const BACKEND_URL =
-	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
-const API_URL = `${BACKEND_URL}api`;
+import { API_URL } from "./gameApi";
 
 /** A single ranked player as returned by the leaderboard endpoint. */
 export interface LeaderboardEntry {

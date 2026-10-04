@@ -128,9 +128,11 @@ interface ThemeState {
 	boardTheme: BoardThemeKey;
 	pieceSet: PieceSetKey;
 	colorMode: ColorMode;
+	isThemePickerOpen: boolean;
 	setBoardTheme: (key: BoardThemeKey) => void;
 	setPieceSet: (key: PieceSetKey) => void;
 	setColorMode: (mode: ColorMode) => void;
+	setThemePickerOpen: (open: boolean) => void;
 }
 
 export const useThemeStore = create<ThemeState>()(
@@ -139,6 +141,7 @@ export const useThemeStore = create<ThemeState>()(
 			boardTheme: DEFAULT_BOARD_THEME,
 			pieceSet: "standard" as PieceSetKey,
 			colorMode: "system" as ColorMode,
+			isThemePickerOpen: false,
 			setBoardTheme: (key) => {
 				applyBoardTheme(key);
 				set({ boardTheme: key });
@@ -148,6 +151,7 @@ export const useThemeStore = create<ThemeState>()(
 				applyColorMode(mode);
 				set({ colorMode: mode });
 			},
+			setThemePickerOpen: (open) => set({ isThemePickerOpen: open }),
 		}),
 		{
 			name: "chesster_theme",

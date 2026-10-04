@@ -1,8 +1,13 @@
-const BACKEND_URL =
-	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
-const API_URL = `${BACKEND_URL}api`;
+const RAW_BACKEND_URL =
+	(import.meta.env.VITE_BACKEND_URL as string | undefined) || "http://localhost:3000";
+export const BACKEND_URL = RAW_BACKEND_URL.replace(/\/+$/, "");
+export const API_URL = `${BACKEND_URL}/api`;
 
-function getCsrfToken() {
+let inMemoryCsrfToken: string | null = null;
+let pendingCsrfPromise: Promise<string | null> | null = null;
+
+function getCookieCsrfToken(): string | undefined {
+	if (typeof document === "undefined") return undefined;
 	return document.cookie
 		.split(";")
 		.map((cookie) => cookie.trim())
@@ -10,15 +15,63 @@ function getCsrfToken() {
 		?.split("=")[1];
 }
 
-export async function csrfFetch(url: string, init: RequestInit = {}) {
-	let token = getCsrfToken();
-	if (!token) {
-		await fetch(`${API_URL}/csrf-token`, { credentials: "include" });
-		token = getCsrfToken();
+export async function fetchCsrfToken(): Promise<string | null> {
+	if (pendingCsrfPromise) return pendingCsrfPromise;
+
+	pendingCsrfPromise = (async () => {
+		try {
+			const res = await fetch(`${API_URL}/csrf-token`, { credentials: "include" });
+			if (res.ok) {
+				const data = await res.json();
+				const token = data.token || data.csrfToken || getCookieCsrfToken() || null;
+				if (token) {
+					inMemoryCsrfToken = token;
+				}
+				return inMemoryCsrfToken;
+			}
+		} catch (err) {
+			console.warn("Failed to fetch CSRF token:", err);
+		} finally {
+			pendingCsrfPromise = null;
+		}
+		return inMemoryCsrfToken || getCookieCsrfToken() || null;
+	})();
+
+	return pendingCsrfPromise;
+}
+
+export async function getCsrfToken(): Promise<string | null> {
+	if (inMemoryCsrfToken) return inMemoryCsrfToken;
+	const cookieToken = getCookieCsrfToken();
+	if (cookieToken) {
+		inMemoryCsrfToken = cookieToken;
+		return inMemoryCsrfToken;
 	}
+	return await fetchCsrfToken();
+}
+
+export async function csrfFetch(url: string, init: RequestInit = {}): Promise<Response> {
+	let token = await getCsrfToken();
+
 	const headers = new Headers(init.headers);
-	headers.set("X-XSRF-TOKEN", decodeURIComponent(token ?? ""));
-	return fetch(url, { ...init, headers, credentials: "include" });
+	if (token) {
+		headers.set("X-XSRF-TOKEN", decodeURIComponent(token));
+	}
+
+	let response = await fetch(url, { ...init, headers, credentials: "include" });
+
+	// If 403 Forbidden, token might be expired or missing in cross-origin setting; retry once with a freshly fetched token
+	if (response.status === 403) {
+		inMemoryCsrfToken = null;
+		const freshToken = await fetchCsrfToken();
+		if (freshToken) {
+			const retryHeaders = new Headers(init.headers);
+			retryHeaders.set("X-XSRF-TOKEN", decodeURIComponent(freshToken));
+			response = await fetch(url, { ...init, headers: retryHeaders, credentials: "include" });
+		}
+	}
+
+	return response;
 }
 
 export const api = {

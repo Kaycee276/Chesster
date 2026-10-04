@@ -1,5 +1,4 @@
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
-const API_URL = `${BACKEND_URL}api`;
+import { API_URL } from "./gameApi";
 
 export const GAME_MODES = ["bullet", "blitz", "rapid", "tournament"] as const;
 export type GameMode = (typeof GAME_MODES)[number];

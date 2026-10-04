@@ -1,7 +1,4 @@
-import { csrfFetch } from "./gameApi";
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
-const API_URL = `${BACKEND_URL}api`;
+import { csrfFetch, API_URL } from "./gameApi";
 
 /** Lifecycle status of a tournament, matching the planned backend schema. */
 export type TournamentStatus = "open" | "active" | "completed" | "cancelled";
@@ -59,12 +56,21 @@ interface ApiResponse<T> {
 export const fetchTournaments = async (
   status: TournamentStatus | "all" = "all",
 ): Promise<Tournament[]> => {
-  const res = await fetch(
-    status !== "all" ? `${API_URL}/tournaments?status=${status}` : `${API_URL}/tournaments`,
-  );
-  const json: ApiResponse<Tournament[]> = await res.json();
+  const url = status !== "all" ? `${API_URL}/tournaments?status=${status}` : `${API_URL}/tournaments`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    let errorMsg = `Server error (${res.status})`;
+    try {
+      const errJson = await res.json();
+      if (errJson.error) errorMsg = errJson.error;
+    } catch {
+      // not JSON
+    }
+    throw new Error(errorMsg);
+  }
+  const json = (await res.json()) as ApiResponse<Tournament[]> & { tournaments?: Tournament[] };
   if (!json.success) throw new Error(json.error || "Failed to fetch tournaments");
-  return json.data;
+  return json.data || json.tournaments || [];
 };
 
 /** Fetch a single tournament with its registered participants. */
@@ -77,14 +83,29 @@ export const fetchTournamentById = async (
   }
 > => {
   const res = await fetch(`${API_URL}/tournaments/${tournamentId}`);
-  const json: ApiResponse<
+  if (!res.ok) {
+    let errorMsg = `Server error (${res.status})`;
+    try {
+      const errJson = await res.json();
+      if (errJson.error) errorMsg = errJson.error;
+    } catch {
+      // not JSON
+    }
+    throw new Error(errorMsg);
+  }
+  const json = (await res.json()) as ApiResponse<
     Tournament & {
       participants?: TournamentParticipant[];
       bracket_matches?: TournamentBracketMatch[];
     }
-  > = await res.json();
+  > & {
+    tournament?: Tournament & {
+      participants?: TournamentParticipant[];
+      bracket_matches?: TournamentBracketMatch[];
+    };
+  };
   if (!json.success) throw new Error(json.error || "Failed to fetch tournament");
-  return json.data;
+  return json.data || json.tournament!;
 };
 
 /**
@@ -100,7 +121,17 @@ export const joinTournament = async (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ walletAddress }),
   });
-  const json: ApiResponse<TournamentParticipant> = await res.json();
+  if (!res.ok) {
+    let errorMsg = `Server error (${res.status})`;
+    try {
+      const errJson = await res.json();
+      if (errJson.error) errorMsg = errJson.error;
+    } catch {
+      // not JSON
+    }
+    throw new Error(errorMsg);
+  }
+  const json = (await res.json()) as ApiResponse<TournamentParticipant> & { participant?: TournamentParticipant };
   if (!json.success) throw new Error(json.error || "Failed to join tournament");
-  return json.data;
+  return json.data || json.participant!;
 };

@@ -2,25 +2,48 @@ import { useState } from "react";
 import { Settings } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 
-export default function GameSettings() {
+export default function GameSettings({ hideFloating = false }: { hideFloating?: boolean } = {}) {
 	const isBlindfoldMode = useGameStore((s) => s.isBlindfoldMode);
 	const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
 	const isStreamerMode = useGameStore((s) => s.isStreamerMode);
 	const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
-	const [open, setOpen] = useState(false);
+	const isSettingsOpen = useGameStore((s) => s.isSettingsOpen);
+	const setSettingsOpen = useGameStore((s) => s.setSettingsOpen);
+	const [localOpen, setLocalOpen] = useState(false);
+
+	const open = isSettingsOpen || localOpen;
+	const setOpen = (val: boolean) => {
+		setLocalOpen(val);
+		setSettingsOpen(val);
+	};
+
+	let isGameRoute = false;
+	if (typeof window !== "undefined" && window.location) {
+		const p = window.location.pathname;
+		isGameRoute =
+			p.startsWith("/overlay") ||
+			p.startsWith("/spectate") ||
+			(p !== "/" &&
+				!["/tournaments", "/puzzles", "/referrals", "/leaderboard", "/analysis"].includes(p) &&
+				!p.startsWith("/profile") &&
+				!p.startsWith("/tournaments/"));
+	}
+	const showFloating = !hideFloating && !isGameRoute;
 
 	return (
 		<>
 			{/* Floating trigger button */}
-			<button
-				type="button"
-				onClick={() => setOpen(true)}
-				title="Game settings"
-				aria-label="Open game settings"
-				className="fixed bottom-20 right-4 z-40 flex items-center justify-center w-10 h-10 rounded-full bg-(--bg-secondary) border border-(--border) text-(--text-secondary) hover:text-(--text) shadow-lg hover:border-(--accent-primary)/60 transition-colors"
-			>
-				<Settings size={16} />
-			</button>
+			{showFloating && (
+				<button
+					type="button"
+					onClick={() => setOpen(true)}
+					title="Game settings"
+					aria-label="Open game settings"
+					className="fixed bottom-20 right-4 z-40 flex items-center justify-center w-10 h-10 rounded-full bg-(--bg-secondary) border border-(--border) text-(--text-secondary) hover:text-(--text) shadow-lg hover:border-(--accent-primary)/60 transition-colors"
+				>
+					<Settings size={16} />
+				</button>
+			)}
 
 			{open && (
 				<div

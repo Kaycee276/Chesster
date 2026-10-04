@@ -438,7 +438,6 @@ export default function GameLobby() {
 	const { address, isConnected, connect } = useWalletStore();
 
 	const isLoading = step !== "idle";
-    const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
 	const effectiveTimeControl = isCustomTimeControl
 		? {
 				seconds: customTimeControl.baseMinutes * 60,
@@ -556,8 +555,7 @@ export default function GameLobby() {
 		setGameCode(trimmed);
 		let wagerInfo: { wager_amount?: number | null } = {};
 		try {
-			const res = await fetch(`${BACKEND_URL}api/games/${trimmed}`);
-			const json = await res.json();
+			const json = await api.getGame(trimmed);
 			if (!json.success) throw new Error(json.error || "Game not found");
 			wagerInfo = json.data;
 		} catch (err: unknown) {

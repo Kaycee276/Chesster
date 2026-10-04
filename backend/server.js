@@ -15,6 +15,7 @@ const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
 const referralRoutes = require("./routes/referralRoutes");
 const puzzleRoutes = require("./routes/puzzleRoutes");
+const tournamentRoutes = require("./routes/tournamentRoutes");
 const metricsRoutes = require("./routes/metricsRoutes");
 const chessEngine = require("./services/chessEngine");
 const timerService = require("./services/timerService");
@@ -35,7 +36,7 @@ const { sanitizeInput } = require("./middleware/sanitizeInput");
 const { moderateMessage, checkSlowMode } = require("./services/chatService");
 const { JWT_SECRET } = require("./middleware/authMiddleware");
 const { createSocketRateLimiter } = require("./middleware/socketRateLimiter");
-const { csrfProtection } = require("./middleware/csrfMiddleware");
+const { csrfProtection, generateSignedToken, setCsrfCookie } = require("./middleware/csrfMiddleware");
 const {
   validateSocketPayload,
   JoinRoomPayload,
@@ -139,7 +140,9 @@ app.use(express.json());
 app.use(csrfProtection);
 
 app.get("/api/csrf-token", (req, res) => {
-  res.json({ success: true });
+  const token = req.csrfToken || generateSignedToken();
+  setCsrfCookie(res, token);
+  res.json({ success: true, token, csrfToken: token });
 });
 
 // Swagger API documentation (Issue #152)
@@ -163,12 +166,24 @@ app.use("/api", botRoutes);
 app.use("/api", healthRoutes);
 app.use("/api/referrals", referralRoutes);
 app.use("/api/puzzles", puzzleRoutes);
+app.use("/api", tournamentRoutes);
 app.use(metricsRoutes);
 
 // Legacy health endpoint
 app.get("/health", (req, res) => {
   logger.info("Legacy health endpoint called");
   res.json({ status: "ok", message: "Chesster backend running" });
+});
+
+// API 404 handler: return JSON instead of default Express HTML for unmatched /api routes
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api")) {
+    return res.status(404).json({
+      success: false,
+      error: `API route not found: ${req.method} ${req.originalUrl}`,
+    });
+  }
+  next();
 });
 
 // Global error handler (must be registered after all routes)

@@ -14,7 +14,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 // Stellar ed25519 public keys are 56-char base32 strings starting with "G".
 const STELLAR_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/;
 
-const TOURNAMENT_STATUSES = ["draft", "open", "in_progress", "completed", "cancelled"];
+const TOURNAMENT_STATUSES = ["draft", "open", "active", "in_progress", "completed", "cancelled"];
 
 /** Validate a single value against a rule, returning an error string or null. */
 function validateValue(value, rule, field) {

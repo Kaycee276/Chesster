@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 import { useWalletStore } from "../store/walletStore";
+import { api } from "../api/gameApi";
 import ChessBoard from "../components/ChessBoard";
 import DisconnectBanner from "../components/DisconnectBanner";
 import { useGraceCountdown } from "../hooks/useGraceCountdown";
@@ -169,10 +170,7 @@ export default function GamePage() {
 		const fetchInfo = async () => {
 			setFetchingInfo(true);
 			try {
-				const BACKEND_URL =
-					import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
-				const res = await fetch(`${BACKEND_URL}api/games/${gameCode}`);
-				const json = await res.json();
+				const json = await api.getGame(gameCode);
 				if (json.success) setGameInfo(json.data);
 			} catch {
 				// silently fail — join prompt will still show, just without wager info
@@ -225,11 +223,11 @@ export default function GamePage() {
 	// Already a player → show board
 	if (storedGameCode === gameCode && playerColor) {
 		return (
-			<>
+			<div className="h-dvh max-h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg)">
 				{/* Opponent disconnect/reconnect banner above the board (#317). */}
 				<OpponentDisconnectBanner />
 				<ChessBoard />
-			</>
+			</div>
 		);
 	}
 

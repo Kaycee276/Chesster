@@ -1,6 +1,4 @@
-const BACKEND_URL =
-	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
-const API_URL = `${BACKEND_URL}api`;
+import { csrfFetch, API_URL } from "./gameApi";
 
 export interface ReferralStats {
 	referral_code: string;
@@ -42,7 +40,7 @@ export const referralApi = {
 	claimReferralEarnings: async (
 		request: ClaimReferralEarningsRequest,
 	): Promise<ClaimReferralEarningsResponse> => {
-		const res = await fetch(`${API_URL}/referrals/claim`, {
+		const res = await csrfFetch(`${API_URL}/referrals/claim`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(request),

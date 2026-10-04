@@ -2,13 +2,27 @@ import { useState, useRef, useEffect } from "react";
 import { MessageCircle, X, Send, Smile, Download, Check } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 import { boardToFen, moveToAlgebraic } from "../utils/chessUtils";
-import { sanitizeChatMessage, sanitizeHtml } from "../utils/sanitize";
+import { sanitizeChatMessage } from "../utils/sanitize";
 
 const MAX_CHARS = 50;
 const QUICK_REACTIONS = ["Good luck!", "Nice move", "Well played", "Good game"];
 const EMOJI_REACTIONS = ["😀", "🔥", "👏", "🤝", "♟️", "🏆"];
 
-export default function ChatPanel() {
+interface ChatPanelProps {
+	inline?: boolean;
+	activeTab?: "chat" | "moves";
+	onTabChange?: (tab: "chat" | "moves") => void;
+	onClose?: () => void;
+	showCloseButton?: boolean;
+}
+
+export default function ChatPanel({
+	inline = false,
+	activeTab: externalTab,
+	onTabChange,
+	onClose,
+	showCloseButton,
+}: ChatPanelProps = {}) {
 	const playerColor = useGameStore((s) => s.playerColor);
 	const chatMessages = useGameStore((s) => s.chatMessages);
 	const unreadCount = useGameStore((s) => s.unreadCount);
@@ -22,36 +36,49 @@ export default function ChatPanel() {
 	const [input, setInput] = useState("");
 	const [emojiOpen, setEmojiOpen] = useState(false);
 	const [copiedFen, setCopiedFen] = useState(false);
-	const [activeTab, setActiveTab] = useState<"chat" | "moves">("chat");
+	const [internalTab, setInternalTab] = useState<"chat" | "moves">("chat");
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+
+	const activeTab = externalTab ?? internalTab;
+	const setActiveTab = (tab: "chat" | "moves") => {
+		setInternalTab(tab);
+		onTabChange?.(tab);
+	};
 
 	const moveHistory = useGameStore((s) => s.moveHistory);
 	const viewingIndex = useGameStore((s) => s.viewingIndex);
 	const setViewingIndex = useGameStore((s) => s.setViewingIndex);
 
+	const isOpen = inline || chatOpen;
+
+	const handleClose = () => {
+		setChatOpen(false);
+		onClose?.();
+	};
+
 	// Scroll to bottom when new messages arrive or panel opens
 	useEffect(() => {
-		if (chatOpen) {
+		if (isOpen && activeTab === "chat") {
 			messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 		}
-	}, [chatMessages, chatOpen]);
+	}, [chatMessages, isOpen, activeTab]);
 
 	// Keep the active move in view while browsing the history panel
 	useEffect(() => {
-		if (chatOpen && activeTab === "moves" && viewingIndex !== null) {
+		if (isOpen && activeTab === "moves" && viewingIndex !== null) {
 			document
 				.getElementById(`move-${viewingIndex}`)
 				?.scrollIntoView({ block: "nearest" });
 		}
-	}, [chatOpen, activeTab, viewingIndex, moveHistory.length]);
+	}, [isOpen, activeTab, viewingIndex, moveHistory.length]);
 
 	// Focus input when panel opens
 	useEffect(() => {
-		if (chatOpen) {
+		if (isOpen && activeTab === "chat") {
 			setTimeout(() => inputRef.current?.focus(), 50);
 		}
-	}, [chatOpen]);
+	}, [isOpen, activeTab]);
 
 	const sendMessage = (message: string) => {
 		const trimmed = message.trim().slice(0, MAX_CHARS);
@@ -77,71 +104,69 @@ export default function ChatPanel() {
 	// Only show during active or finished games
 	if (status !== "active" && status !== "finished") return null;
 
-	return (
-		<div className="fixed bottom-[52px] right-2 z-40 flex flex-col items-end gap-2">
-			{/* Chat panel */}
-			{chatOpen && (
-				<div className="w-72 sm:w-80 bg-(--bg-secondary) border border-(--border) rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-					style={{ height: "320px" }}
-				>
-					{/* Header */}
-					<div className="flex items-center justify-between px-3 py-2 border-b border-(--border) shrink-0 gap-1">
-						<div className="flex items-center gap-1">
-							<button
-								type="button"
-								onClick={() => setActiveTab("chat")}
-								className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wider transition-colors ${
-									activeTab === "chat"
-										? "bg-(--bg-tertiary) text-(--text)"
-										: "text-(--text-tertiary) hover:text-(--text)"
-								}`}
-							>
-								<MessageCircle size={11} />
-								Chat
-								{unreadCount > 0 && activeTab === "chat" && (
-									<span className="min-w-[14px] h-3.5 px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
-										{unreadCount > 9 ? "9+" : unreadCount}
-									</span>
-								)}
-							</button>
-							<button
-								type="button"
-								onClick={() => setActiveTab("moves")}
-								className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wider transition-colors ${
-									activeTab === "moves"
-										? "bg-(--bg-tertiary) text-(--text)"
-										: "text-(--text-tertiary) hover:text-(--text)"
-								}`}
-							>
-								Moves
-							</button>
-						</div>
-						<div className="flex items-center gap-1">
-							{activeTab === "chat" && (
-								<button
-									title="Copy FEN to clipboard"
-									onClick={() => {
-										if (!board.length) return;
-										const fen = boardToFen(board, currentTurn);
-										navigator.clipboard.writeText(fen).then(() => {
-											setCopiedFen(true);
-											setTimeout(() => setCopiedFen(false), 1500);
-										}).catch(() => {});
-									}}
-									className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
-								>
-									{copiedFen ? <Check size={11} className="text-green-400" /> : <Download size={11} />}
-									FEN
-								</button>
-							)}
-							<button
-								onClick={() => setChatOpen(false)}
-								className="text-(--text-tertiary) hover:text-(--text) transition-colors p-0.5 rounded"
-							>
-								<X size={13} />
-							</button>
-						</div>
-					</div>
+	const panelContent = (
+		<div className={`flex flex-col overflow-hidden ${inline ? "w-full h-full flex-1 min-h-0" : "w-full h-full"}`}>
+			{/* Header */}
+			<div className="flex items-center justify-between px-3 py-2 border-b border-(--border) shrink-0 gap-1 bg-(--bg-secondary)">
+				<div className="flex items-center gap-1">
+					<button
+						type="button"
+						onClick={() => setActiveTab("chat")}
+						className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors ${
+							activeTab === "chat"
+								? "bg-(--bg-tertiary) text-(--text)"
+								: "text-(--text-tertiary) hover:text-(--text)"
+						}`}
+					>
+						<MessageCircle size={13} />
+						Chat
+						{unreadCount > 0 && activeTab === "chat" && (
+							<span className="min-w-[14px] h-3.5 px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+								{unreadCount > 9 ? "9+" : unreadCount}
+							</span>
+						)}
+					</button>
+					<button
+						type="button"
+						onClick={() => setActiveTab("moves")}
+						className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold uppercase tracking-wider transition-colors ${
+							activeTab === "moves"
+								? "bg-(--bg-tertiary) text-(--text)"
+								: "text-(--text-tertiary) hover:text-(--text)"
+						}`}
+					>
+						Moves ({moveHistory.length})
+					</button>
+				</div>
+				<div className="flex items-center gap-1">
+					{activeTab === "chat" && (
+						<button
+							title="Copy FEN to clipboard"
+							onClick={() => {
+								if (!board.length) return;
+								const fen = boardToFen(board, currentTurn);
+								navigator.clipboard.writeText(fen).then(() => {
+									setCopiedFen(true);
+									setTimeout(() => setCopiedFen(false), 1500);
+								}).catch(() => {});
+							}}
+							className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+						>
+							{copiedFen ? <Check size={12} className="text-green-400" /> : <Download size={12} />}
+							FEN
+						</button>
+					)}
+					{(showCloseButton || !inline) && (
+						<button
+							onClick={handleClose}
+							className="text-(--text-tertiary) hover:text-(--text) transition-colors p-1 rounded-lg hover:bg-(--bg-tertiary)"
+							aria-label="Close"
+						>
+							<X size={15} />
+						</button>
+					)}
+				</div>
+			</div>
 
 					{activeTab === "chat" ? (
 						<>
@@ -178,7 +203,6 @@ export default function ChatPanel() {
 												</span>
 											)}
 											{sanitizeChatMessage(msg.message)}
-											<span dangerouslySetInnerHTML={{ __html: sanitizeHtml(msg.message) }} />
 										</div>
 									</div>
 								);
@@ -315,21 +339,25 @@ export default function ChatPanel() {
 						</div>
 					)}
 				</div>
-			)}
+	);
 
-			{/* Toggle button */}
-			<button
-				onClick={() => setChatOpen(!chatOpen)}
-				className="relative w-10 h-10 rounded-full bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 flex items-center justify-center text-(--text-secondary) hover:text-(--text) transition-colors shadow-lg"
-				title={chatOpen ? "Close chat" : "Open chat"}
+	if (inline) {
+		return panelContent;
+	}
+
+	if (!chatOpen) return null;
+
+	return (
+		<div
+			className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4"
+			onClick={handleClose}
+		>
+			<div
+				className="w-full sm:max-w-md bg-(--bg-secondary) border-t sm:border border-(--border) rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col h-[75vh] sm:h-[480px] overflow-hidden"
+				onClick={(e) => e.stopPropagation()}
 			>
-				<MessageCircle size={16} />
-				{unreadCount > 0 && !chatOpen && (
-					<span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-						{unreadCount > 9 ? "9+" : unreadCount}
-					</span>
-				)}
-			</button>
+				{panelContent}
+			</div>
 		</div>
 	);
 }
