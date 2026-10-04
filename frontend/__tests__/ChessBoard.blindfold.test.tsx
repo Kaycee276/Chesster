@@ -9,7 +9,7 @@ vi.mock("../src/api/gameApi", () => ({
 	api: {
 		makeMove: vi.fn(),
 		getMoves: vi.fn().mockResolvedValue({ success: true, data: [] }),
-		getGame: vi.fn(),
+		getGame: vi.fn().mockResolvedValue({ success: true, data: { status: "active", time_control_seconds: 600 } }),
 		createGame: vi.fn(),
 		joinGame: vi.fn(),
 		resignGame: vi.fn(),
@@ -30,6 +30,20 @@ vi.mock("../src/api/socket", () => ({
 		offGameUpdate: vi.fn(),
 		offChatMessage: vi.fn(),
 		sendChatMessage: vi.fn(),
+		onRematchRequested: vi.fn(),
+		offRematchRequested: vi.fn(),
+		requestRematch: vi.fn(),
+		onOpponentReconnecting: vi.fn(),
+		offOpponentReconnecting: vi.fn(),
+		onOpponentReconnected: vi.fn(),
+		offOpponentReconnected: vi.fn(),
+		sendReaction: vi.fn(),
+		onReaction: vi.fn(),
+		offReaction: vi.fn(),
+		onTournamentMatchCompleted: vi.fn(),
+		offTournamentMatchCompleted: vi.fn(),
+		onTournamentMatchReady: vi.fn(),
+		offTournamentMatchReady: vi.fn(),
 	},
 }));
 
@@ -70,8 +84,12 @@ const renderChessBoard = () => {
 };
 
 describe("ChessBoard - Blindfold Mode Rendering", () => {
+	const hasPiecesOnBoard = (container: HTMLElement) => {
+		return container.querySelectorAll(".board-square span.leading-none").length > 0;
+	};
+
 	beforeEach(() => {
-		vi.useFakeTimers();
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		useGameStore.setState({
 			gameCode: "TEST123",
 			playerColor: "white",
@@ -80,6 +98,7 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 			status: "active",
 			isBlindfoldMode: false,
 			moveHistory: [],
+			selectedSquare: null,
 		});
 	});
 
@@ -91,18 +110,16 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 	it("renders normal piece SVGs when blindfold mode is false", () => {
 		const { container } = renderChessBoard();
 
-		// Should render piece symbols (Unicode characters)
-		expect(screen.queryByText("♚")).toBeTruthy(); // Black king
-		expect(screen.queryByText("♔")).toBeTruthy(); // White king
+		// Should render piece symbols on board
+		expect(hasPiecesOnBoard(container)).toBe(true);
 	});
 
 	it("hides piece SVGs and shows placeholder dots when blindfold mode is true", () => {
 		useGameStore.setState({ isBlindfoldMode: true });
 		const { container } = renderChessBoard();
 
-		// Should NOT render piece symbols
-		expect(screen.queryByText("♚")).toBeFalsy();
-		expect(screen.queryByText("♔")).toBeFalsy();
+		// Should NOT render piece symbols on board
+		expect(hasPiecesOnBoard(container)).toBe(false);
 
 		// Should render placeholder dots (divs with specific dimensions)
 		const dots = container.querySelectorAll(
@@ -116,21 +133,21 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 		const { container } = renderChessBoard();
 
 		// Initially hidden
-		expect(screen.queryByText("♚")).toBeFalsy();
+		expect(hasPiecesOnBoard(container)).toBe(false);
 
 		// Trigger peek
 		const peekButton = screen.getByTitle(/Peek at pieces/i);
 		fireEvent.click(peekButton);
 
-		// After peek is triggered, pieces should be visible
+		// After peek is triggered, pieces should be visible on board
 		await waitFor(() => {
-			expect(screen.queryByText("♚")).toBeTruthy();
+			expect(hasPiecesOnBoard(container)).toBe(true);
 		});
 	});
 
 	it("hides pieces again after peek duration (2 seconds)", async () => {
 		useGameStore.setState({ isBlindfoldMode: true });
-		renderChessBoard();
+		const { container } = renderChessBoard();
 
 		// Trigger peek
 		const peekButton = screen.getByTitle(/Peek at pieces/i);
@@ -138,7 +155,7 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 
 		// Pieces should be visible immediately
 		await waitFor(() => {
-			expect(screen.queryByText("♚")).toBeTruthy();
+			expect(hasPiecesOnBoard(container)).toBe(true);
 		});
 
 		// Advance timers by 2 seconds
@@ -146,7 +163,7 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 
 		// Pieces should be hidden again
 		await waitFor(() => {
-			expect(screen.queryByText("♚")).toBeFalsy();
+			expect(hasPiecesOnBoard(container)).toBe(false);
 		});
 	});
 
@@ -184,14 +201,14 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 
 	it("rapid double-click on peek button doesn't produce competing timers", async () => {
 		useGameStore.setState({ isBlindfoldMode: true });
-		renderChessBoard();
+		const { container } = renderChessBoard();
 
 		const peekButton = screen.getByTitle(/Peek at pieces/i);
 
 		// First click
 		fireEvent.click(peekButton);
 		await waitFor(() => {
-			expect(screen.queryByText("♚")).toBeTruthy();
+			expect(hasPiecesOnBoard(container)).toBe(true);
 		});
 
 		// Advance to 1 second (before original 2s ends)
@@ -205,7 +222,7 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 
 		// Pieces should still be visible (2s from the second click hasn't elapsed)
 		await waitFor(() => {
-			expect(screen.queryByText("♚")).toBeTruthy();
+			expect(hasPiecesOnBoard(container)).toBe(true);
 		});
 
 		// Advance another 1 second (total 2s from second click)
@@ -213,15 +230,16 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 
 		// Now pieces should be hidden
 		await waitFor(() => {
-			expect(screen.queryByText("♚")).toBeFalsy();
+			expect(hasPiecesOnBoard(container)).toBe(false);
 		});
 	});
 
 	it("peek button is only visible when blindfold mode is active", () => {
 		useGameStore.setState({ isBlindfoldMode: false });
-		renderChessBoard();
+		const { unmount } = renderChessBoard();
 
 		expect(screen.queryByTitle(/Peek at pieces/i)).toBeFalsy();
+		unmount();
 
 		// Enable blindfold mode
 		useGameStore.setState({ isBlindfoldMode: true });
@@ -271,31 +289,31 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 
 	it("isPeeking resets to false on component remount", async () => {
 		useGameStore.setState({ isBlindfoldMode: true });
-		const { unmount } = renderChessBoard();
+		const { container, unmount } = renderChessBoard();
 
 		const peekButton = screen.getByTitle(/Peek at pieces/i);
 		fireEvent.click(peekButton);
 
 		await waitFor(() => {
-			expect(screen.queryByText("♚")).toBeTruthy();
+			expect(hasPiecesOnBoard(container)).toBe(true);
 		});
 
 		unmount();
 
 		// Remount component
-		renderChessBoard();
+		const { container: newContainer } = renderChessBoard();
 
 		// Pieces should be hidden again (isPeeking reset to false)
 		await waitFor(() => {
-			expect(screen.queryByText("♚")).toBeFalsy();
+			expect(hasPiecesOnBoard(newContainer)).toBe(false);
 		});
 	});
 
 	it("toggles between blindfold and normal rendering modes", async () => {
-		const { rerender } = renderChessBoard();
+		const { container, rerender } = renderChessBoard();
 
 		// Initially in normal mode
-		expect(screen.queryByText("♚")).toBeTruthy();
+		expect(hasPiecesOnBoard(container)).toBe(true);
 
 		// Switch to blindfold mode
 		useGameStore.setState({ isBlindfoldMode: true });
@@ -305,7 +323,7 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 			</BrowserRouter>,
 		);
 
-		expect(screen.queryByText("♚")).toBeFalsy();
+		expect(hasPiecesOnBoard(container)).toBe(false);
 
 		// Switch back to normal mode
 		useGameStore.setState({ isBlindfoldMode: false });
@@ -315,7 +333,7 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 			</BrowserRouter>,
 		);
 
-		expect(screen.queryByText("♚")).toBeTruthy();
+		expect(hasPiecesOnBoard(container)).toBe(true);
 	});
 
 	it("move interaction is not affected by blindfold mode", async () => {
@@ -323,6 +341,7 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 			isBlindfoldMode: true,
 			playerColor: "white",
 			currentTurn: "white",
+			selectedSquare: null,
 		});
 		const { container } = renderChessBoard();
 
@@ -332,7 +351,8 @@ describe("ChessBoard - Blindfold Mode Rendering", () => {
 
 		// Square should be selected
 		await waitFor(() => {
-			expect(e2Square?.className).toContain("bg-yellow");
+			const selected = container.querySelector('[data-testid="square-6-4"]');
+			expect(selected?.className).toContain("bg-yellow");
 		});
 
 		// Click on e3 to move there ([5, 4])
@@ -371,7 +391,7 @@ describe("ChessBoard - Peek Button Position and Styling", () => {
 	});
 
 	it("peek button shows eye icon", () => {
-		const { container } = renderChessBoard();
+		renderChessBoard();
 		const peekButton = screen.getByTitle(/Peek at pieces/i);
 		const svg = peekButton.querySelector("svg");
 		expect(svg).toBeTruthy();

@@ -5,10 +5,7 @@ import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 import { ChevronDown, LogOut, RefreshCw, UserRound, Wallet, Gift } from "lucide-react";
 import { Link } from "react-router-dom";
-import { rpc } from "@stellar/stellar-sdk";
-
-const RPC_URL = import.meta.env.VITE_STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
-const server = new rpc.Server(RPC_URL);
+import { fetchAccountBalances } from "../services/stellarService";
 
 const WALLET_OPTIONS: { type: WalletType; label: string; hint: string }[] = [
   { type: "freighter", label: "Freighter", hint: "Official Stellar wallet" },
@@ -28,12 +25,9 @@ export default function WalletDropdown() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!address) {
-      setBalance("0");
-      return;
-    }
-    server.getAccount(address).then((acc) => {
-      const native = acc.balances.find((b) => b.asset_type === "native");
+    if (!address) return;
+    fetchAccountBalances(address).then((balances) => {
+      const native = balances.find((b) => b.assetCode === "XLM");
       if (native) setBalance(parseFloat(native.balance).toFixed(2));
     }).catch(() => {
       setBalance("0");
@@ -63,7 +57,8 @@ export default function WalletDropdown() {
     }
   };
 
-  const displayBalance = isStreamerMode ? "•••• XLM" : `${balance} XLM`;
+  const activeBalance = address ? balance : "0";
+  const displayBalance = isStreamerMode ? "•••• XLM" : `${activeBalance} XLM`;
   const displayAddress = isStreamerMode && address ? `${address.slice(0, 4)}...${address.slice(-4)}` : address;
 
   // Not connected — show wallet picker button

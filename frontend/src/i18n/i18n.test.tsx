@@ -1,3 +1,4 @@
+import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { I18nextProvider } from "react-i18next";

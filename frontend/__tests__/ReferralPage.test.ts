@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { act } from "@testing-library/react";
 import { useWalletStore } from "../src/store/walletStore";
 import { useToastStore } from "../src/store/toastStore";
 import { referralApi, type ReferralStats } from "../src/api/referralApi";
@@ -56,7 +56,7 @@ describe("Referral Dashboard", () => {
 				success: true,
 				data: mockReferralStats,
 			});
-			(referralApi.getReferralStats as any) = mockGetStats;
+			(referralApi.getReferralStats as unknown as ReturnType<typeof vi.fn>) = mockGetStats;
 
 			await referralApi.getReferralStats(mockAddress);
 
@@ -69,7 +69,7 @@ describe("Referral Dashboard", () => {
 				success: false,
 				error: "Failed to fetch stats",
 			});
-			(referralApi.getReferralStats as any) = mockGetStats;
+			(referralApi.getReferralStats as unknown as ReturnType<typeof vi.fn>) = mockGetStats;
 
 			const result = await referralApi.getReferralStats(mockAddress);
 
@@ -83,7 +83,7 @@ describe("Referral Dashboard", () => {
 				transaction_id: "tx123",
 				amount_xlm: 3.5,
 			});
-			(referralApi.claimReferralEarnings as any) = mockClaim;
+			(referralApi.claimReferralEarnings as unknown as ReturnType<typeof vi.fn>) = mockClaim;
 
 			const payload = {
 				signed_payload: "mock_signature_12345",
@@ -101,7 +101,7 @@ describe("Referral Dashboard", () => {
 				success: false,
 				error: "Claim already processed",
 			});
-			(referralApi.claimReferralEarnings as any) = mockClaim;
+			(referralApi.claimReferralEarnings as unknown as ReturnType<typeof vi.fn>) = mockClaim;
 
 			const result = await referralApi.claimReferralEarnings({
 				signed_payload: "mock_signature",
@@ -129,9 +129,8 @@ describe("Referral Dashboard", () => {
 		});
 
 		it("should copy link to clipboard on button click", async () => {
-			// Mock document.execCommand
-			const mockExecCommand = vi.spyOn(document, "execCommand");
-			mockExecCommand.mockReturnValue(true);
+			const mockExecCommand = vi.fn().mockReturnValue(true);
+			document.execCommand = mockExecCommand;
 
 			const referralLink = "https://example.com/join?ref=REF123456";
 
@@ -147,14 +146,15 @@ describe("Referral Dashboard", () => {
 			expect(mockExecCommand).toHaveBeenCalledWith("copy");
 
 			document.body.removeChild(input);
-			mockExecCommand.mockRestore();
 		});
 
 		it("should show success toast when copy succeeds", () => {
-			const { addToast } = useToastStore.getState();
 			const addToastSpy = vi.spyOn(useToastStore.getState(), "addToast");
 
-			addToast("Referral link copied to clipboard!", "success");
+			useToastStore.getState().addToast(
+				"Referral link copied to clipboard!",
+				"success",
+			);
 
 			expect(addToastSpy).toHaveBeenCalledWith(
 				"Referral link copied to clipboard!",
@@ -165,10 +165,9 @@ describe("Referral Dashboard", () => {
 		});
 
 		it("should show error toast when copy fails", () => {
-			const { addToast } = useToastStore.getState();
 			const addToastSpy = vi.spyOn(useToastStore.getState(), "addToast");
 
-			addToast("Failed to copy link", "error");
+			useToastStore.getState().addToast("Failed to copy link", "error");
 
 			expect(addToastSpy).toHaveBeenCalledWith("Failed to copy link", "error");
 
@@ -305,7 +304,7 @@ describe("Referral Dashboard", () => {
 				success: true,
 				transaction_id: "tx123",
 			});
-			(referralApi.claimReferralEarnings as any) = mockClaim;
+			(referralApi.claimReferralEarnings as unknown as ReturnType<typeof vi.fn>) = mockClaim;
 
 			// Simulate button state during claim
 			let claimingState = false;
@@ -325,7 +324,7 @@ describe("Referral Dashboard", () => {
 				transaction_id: "tx123",
 				amount_xlm: 3.5,
 			});
-			(referralApi.claimReferralEarnings as any) = mockClaim;
+			(referralApi.claimReferralEarnings as unknown as ReturnType<typeof vi.fn>) = mockClaim;
 
 			const result = await referralApi.claimReferralEarnings({
 				signed_payload: "mock_sig",
@@ -341,7 +340,7 @@ describe("Referral Dashboard", () => {
 				success: false,
 				error: "Insufficient balance",
 			});
-			(referralApi.claimReferralEarnings as any) = mockClaim;
+			(referralApi.claimReferralEarnings as unknown as ReturnType<typeof vi.fn>) = mockClaim;
 
 			const result = await referralApi.claimReferralEarnings({
 				signed_payload: "mock_sig",
@@ -399,7 +398,7 @@ describe("Referral Dashboard", () => {
 	describe("Error Handling", () => {
 		it("should handle network error gracefully", async () => {
 			const mockGetStats = vi.fn().mockRejectedValue(new Error("Network error"));
-			(referralApi.getReferralStats as any) = mockGetStats;
+			(referralApi.getReferralStats as unknown as ReturnType<typeof vi.fn>) = mockGetStats;
 
 			try {
 				await referralApi.getReferralStats(mockAddress);
@@ -421,7 +420,7 @@ describe("Referral Dashboard", () => {
 				.mockRejectedValueOnce(new Error("Network error"))
 				.mockResolvedValueOnce({ success: true, data: mockReferralStats });
 
-			(referralApi.getReferralStats as any) = mockGetStats;
+			(referralApi.getReferralStats as unknown as ReturnType<typeof vi.fn>) = mockGetStats;
 
 			try {
 				await referralApi.getReferralStats(mockAddress);

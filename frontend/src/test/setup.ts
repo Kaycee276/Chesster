@@ -28,3 +28,11 @@ if (typeof globalThis.localStorage === "undefined") {
 		},
 	} as Storage;
 }
+
+if (typeof globalThis.ResizeObserver === "undefined") {
+	globalThis.ResizeObserver = class ResizeObserver {
+		observe() {}
+		unobserve() {}
+		disconnect() {}
+	};
+}

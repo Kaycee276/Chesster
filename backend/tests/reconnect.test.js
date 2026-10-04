@@ -299,6 +299,7 @@ describe("socket.io reconnect_game handler", () => {
     await waitFor(client, "connect");
 
     // Emit reconnect_game
+    const rehydratedPromise = waitFor(client, "game:rehydrated");
     const response = await new Promise((resolve) => {
       client.emit("reconnect_game", { gameId: gameCode, walletAddress: whiteAddress, token: whiteToken }, resolve);
     });
@@ -309,7 +310,7 @@ describe("socket.io reconnect_game handler", () => {
     expect(response.data.playerColor).toBe("white");
 
     // Verify game:rehydrated event is received
-    const rehydrated = await waitFor(client, "game:rehydrated");
+    const rehydrated = await rehydratedPromise;
     expect(rehydrated).toMatchObject({
       gameId: gameCode,
       currentTurn: "white",
@@ -363,11 +364,12 @@ describe("socket.io reconnect_game handler", () => {
     // Simulate a 3-second delay
     await new Promise((resolve) => setTimeout(resolve, 100)); // 100ms for test speed
 
+    const rehydratedPromise = waitFor(client, "game:rehydrated");
     const response = await new Promise((resolve) => {
       client.emit("reconnect_game", { gameId: gameCode, walletAddress: whiteAddress, token: whiteToken }, resolve);
     });
 
-    const rehydrated = await waitFor(client, "game:rehydrated");
+    const rehydrated = await rehydratedPromise;
 
     // Clock should be ~100ms less than the original
     expect(rehydrated.whiteTimeMs).toBeLessThan(baseMs);
@@ -684,11 +686,12 @@ describe("socket.io reconnect_game handler", () => {
     clients.push(client);
     await waitFor(client, "connect");
 
+    const rehydratedPromise = waitFor(client, "game:rehydrated");
     const response = await new Promise((resolve) => {
       client.emit("reconnect_game", { gameId: gameCode, walletAddress: whiteAddress, token: whiteToken }, resolve);
     });
 
-    const rehydrated = await waitFor(client, "game:rehydrated");
+    const rehydrated = await rehydratedPromise;
 
     expect(rehydrated.recentChat.length).toBeLessThanOrEqual(20);
     // Should be the last 20 messages

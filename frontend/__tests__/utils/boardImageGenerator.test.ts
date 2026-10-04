@@ -12,6 +12,23 @@ describe("boardImageGenerator", () => {
 				setTimeout(() => callback(blob), 0);
 			}
 		);
+
+		const mockContext = {
+			fillStyle: "",
+			fillRect: vi.fn(),
+			font: "",
+			fillText: vi.fn(),
+			strokeStyle: "",
+			lineWidth: 1,
+			strokeRect: vi.fn(),
+			textAlign: "left",
+			textBaseline: "alphabetic",
+			measureText: vi.fn((text: string) => ({ width: text.length * 8 })),
+		};
+		HTMLCanvasElement.prototype.getContext = vi.fn((contextId: string) => {
+			if (contextId === "2d") return mockContext as unknown as CanvasRenderingContext2D;
+			return null;
+		}) as unknown as typeof HTMLCanvasElement.prototype.getContext;
 	});
 
 	afterEach(() => {

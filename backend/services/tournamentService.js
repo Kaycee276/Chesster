@@ -284,6 +284,108 @@ class TournamentService {
 
 		return roundMatches.every((m) => m.status === "completed" || m.status === "bye");
 	}
+
+	/**
+	 * Build hierarchical round-by-round bracket tree for tournament visualization.
+	 * @param {string} tournamentId
+	 * @returns {Promise<object>} { totalRounds, rounds }
+	 */
+	async getBracketTree(tournamentId) {
+		const [matches, participants] = await Promise.all([
+			tournamentModel.getBracketMatches(tournamentId),
+			tournamentModel.getParticipants(tournamentId),
+		]);
+
+		const participantMap = new Map();
+		for (const p of participants || []) {
+			const addr = p.wallet_address || p.walletAddress || p.address;
+			participantMap.set(addr, {
+				walletAddress: addr,
+				username: p.username || null,
+				rating: p.rating ?? p.elo ?? null,
+				seed: p.seed ?? null,
+			});
+		}
+
+		const roundsMap = new Map();
+		for (const m of matches || []) {
+			const roundNum = m.round;
+			if (!roundsMap.has(roundNum)) {
+				roundsMap.set(roundNum, []);
+			}
+			roundsMap.get(roundNum).push({
+				id: m.id,
+				matchNumber: m.match_number ?? m.match_order,
+				round: m.round,
+				status: m.status,
+				gameCode: m.game_code || null,
+				winner: m.winner || null,
+				playerOne: m.player_one || m.player1_address ? (participantMap.get(m.player_one || m.player1_address) || { walletAddress: m.player_one || m.player1_address, username: null, rating: null, seed: null }) : null,
+				playerTwo: m.player_two || m.player2_address ? (participantMap.get(m.player_two || m.player2_address) || { walletAddress: m.player_two || m.player2_address, username: null, rating: null, seed: null }) : null,
+			});
+		}
+
+		const totalRounds = roundsMap.size;
+		const sortedRoundNums = Array.from(roundsMap.keys()).sort((a, b) => a - b);
+		const rounds = sortedRoundNums.map((roundNum) => {
+			let name = `Round ${roundNum}`;
+			if (roundNum === totalRounds) {
+				name = "Final";
+			} else if (roundNum === totalRounds - 1 && totalRounds > 1) {
+				name = "Semi-Final";
+			}
+			return {
+				round: roundNum,
+				name,
+				matches: roundsMap.get(roundNum),
+			};
+		});
+
+		return { totalRounds, rounds };
+	}
 }
 
-module.exports = new TournamentService();
+function broadcastTournamentEvent(io, tournamentId, eventName, payload) {
+	if (!io) return;
+	io.to(`tournament:${tournamentId}`).emit(eventName, {
+		tournamentId,
+		timestamp: new Date().toISOString(),
+		...payload,
+	});
+}
+
+function emitPlayerJoined(io, tournamentId, payload) {
+	broadcastTournamentEvent(io, tournamentId, "tournament:player_joined", payload);
+}
+
+function emitBracketGenerated(io, tournamentId, payload) {
+	broadcastTournamentEvent(io, tournamentId, "tournament:bracket_generated", payload);
+}
+
+function emitMatchReady(io, tournamentId, payload) {
+	broadcastTournamentEvent(io, tournamentId, "tournament:match_ready", payload);
+}
+
+function emitMatchCompleted(io, tournamentId, payload) {
+	broadcastTournamentEvent(io, tournamentId, "tournament:match_completed", payload);
+}
+
+function emitTournamentCompleted(io, tournamentId, payload) {
+	broadcastTournamentEvent(io, tournamentId, "tournament:completed", payload);
+}
+
+const tournamentService = new TournamentService();
+tournamentService.broadcastTournamentEvent = broadcastTournamentEvent;
+tournamentService.emitPlayerJoined = emitPlayerJoined;
+tournamentService.emitBracketGenerated = emitBracketGenerated;
+tournamentService.emitMatchReady = emitMatchReady;
+tournamentService.emitMatchCompleted = emitMatchCompleted;
+tournamentService.emitTournamentCompleted = emitTournamentCompleted;
+
+module.exports = tournamentService;
+module.exports.broadcastTournamentEvent = broadcastTournamentEvent;
+module.exports.emitPlayerJoined = emitPlayerJoined;
+module.exports.emitBracketGenerated = emitBracketGenerated;
+module.exports.emitMatchReady = emitMatchReady;
+module.exports.emitMatchCompleted = emitMatchCompleted;
+module.exports.emitTournamentCompleted = emitTournamentCompleted;

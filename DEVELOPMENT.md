@@ -50,25 +50,38 @@ npm install
   cargo build
   ```
 
-### 4. Running Local CI Checks
+### 4. Running CI Checks Locally
 
-Before opening a Pull Request, make sure all local checks pass:
+Before opening a Pull Request targeting `master`, run the checks relevant to your changes. These commands mirror the repository's existing GitHub Actions workflows:
 
-- **Frontend Linting**:
+- **Frontend lint, type check, tests, and build**:
   ```bash
-  cd frontend && npm run lint
+  cd frontend
+  npm ci
+  npm run lint
+  npx tsc --noEmit
+  npm run test:coverage
+  npm run build
   ```
-- **Backend Unit Tests & Coverage**:
+- **Backend tests and coverage**:
   ```bash
-  cd backend && npm run test:coverage
+  cd backend
+  npm ci
+  npm run test:coverage
   ```
-- **Frontend Unit Tests & Coverage**:
+- **Soroban formatting, lint, tests, and optimized build**:
   ```bash
-  cd frontend && npm run test:coverage
+  cd contracts/soroban
+  cargo fmt --all -- --check
+  cargo clippy --all-targets --all-features -- -D warnings
+  cargo test
+  make optimize
   ```
-- **Smart Contract Tests**:
+
+- **Repository formatting** (for Prettier-managed files):
   ```bash
-  cd contracts/soroban && cargo test
+  npm ci
+  npm run format:check
   ```
 
 ---

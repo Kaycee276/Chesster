@@ -73,19 +73,23 @@ describe("Game Store - Blindfold Mode", () => {
 		expect(stored).toBeTruthy();
 
 		const parsed = JSON.parse(stored!);
-		expect(parsed.isBlindfoldMode).toBe(true);
+		const state = parsed.state ?? parsed;
+		expect(state.isBlindfoldMode).toBe(true);
 	});
 
-	it("loads isBlindfoldMode from localStorage on store init", () => {
+	it("loads isBlindfoldMode from localStorage on store init", async () => {
 		// Simulate persisted state
 		const persisted = {
-			gameCode: null,
-			playerColor: null,
-			isBlindfoldMode: true,
+			state: {
+				gameCode: null,
+				playerColor: null,
+				isBlindfoldMode: true,
+			},
+			version: 0,
 		};
 		localStorage.setItem("chesster-game", JSON.stringify(persisted));
 
-		// Create a new store instance (simulating page reload)
+		await useGameStore.persist.rehydrate();
 		const newState = useGameStore.getState();
 		// After hydration from persist, isBlindfoldMode should be true
 		expect(newState.isBlindfoldMode).toBe(true);
@@ -102,12 +106,13 @@ describe("Game Store - Blindfold Mode", () => {
 
 		const stored = localStorage.getItem("chesster-game");
 		const parsed = JSON.parse(stored!);
+		const state = parsed.state ?? parsed;
 
-		expect(parsed).toHaveProperty("gameCode", "TEST123");
-		expect(parsed).toHaveProperty("playerColor", "white");
-		expect(parsed).toHaveProperty("isBlindfoldMode", true);
-		expect(parsed).not.toHaveProperty("capturedWhite");
-		expect(parsed).not.toHaveProperty("selectedSquare");
+		expect(state).toHaveProperty("gameCode", "TEST123");
+		expect(state).toHaveProperty("playerColor", "white");
+		expect(state).toHaveProperty("isBlindfoldMode", true);
+		expect(state).not.toHaveProperty("capturedWhite");
+		expect(state).not.toHaveProperty("selectedSquare");
 	});
 
 	it("multiple rapid toggles work correctly", () => {
@@ -137,9 +142,10 @@ describe("Game Store - Blindfold Mode", () => {
 
 		const stored = localStorage.getItem("chesster-game");
 		const parsed = JSON.parse(stored!);
+		const state = parsed.state ?? parsed;
 
-		expect(parsed.gameCode).toBe("GAME1");
-		expect(parsed.isBlindfoldMode).toBe(true);
-		expect(parsed).not.toHaveProperty("selectedSquare");
+		expect(state.gameCode).toBe("GAME1");
+		expect(state.isBlindfoldMode).toBe(true);
+		expect(state).not.toHaveProperty("selectedSquare");
 	});
 });

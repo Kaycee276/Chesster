@@ -108,7 +108,11 @@ const puzzlesData = [
 	{ fen: "r1bq1rk1/pp1nbppp/2p1pn2/3p4/2PP4/2N1PN2/PP2BPPP/R1BQ1RK1 w - - 0 8", solution_moves: "b2b3 b7b6 c1b2 c8b7", rating: 1810, rating_deviation: 45, theme_tags: ["solid-meran", "development"] },
 	{ fen: "r2q1rk1/pb1nbppp/1p2pn2/2pp4/2PP4/1PNBPN2/PB3PPP/R2Q1RK1 b - - 0 10", solution_moves: "c5d4 e3d4 d5c4 b3c4 a8c8", rating: 1940, rating_deviation: 55, theme_tags: ["active-rook", "c4-target"] },
 	{ fen: "r2qk2r/1b1nbppp/ppn1p3/2ppP3/3P4/2PB1NN1/PP3PPP/R1BQR1K1 b kq - 2 12", solution_moves: "c5d4 c3d4 c6b4 d3b1", rating: 2020, rating_deviation: 65, theme_tags: ["central-containment", "bishop-redeploy"] },
-	{ fen: "r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/1PNB1N2/P4PPP/R1BQ1RK1 b - - 0 9", solution_moves: "b7b6 c1b2 c8b7 d1e2", rating: 1870, rating_deviation: 50, theme_tags: ["iqp-classic", "fianchetto"] }
+	{ fen: "r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/1PNB1N2/P4PPP/R1BQ1RK1 b - - 0 9", solution_moves: "b7b6 c1b2 c8b7 d1e2", rating: 1870, rating_deviation: 50, theme_tags: ["iqp-classic", "fianchetto"] },
+	{ fen: "6k1/pp3ppp/8/8/8/8/PP3PPP/4R1K1 w - - 0 1", solution_moves: "e1e8", rating: 850, rating_deviation: 25, theme_tags: ["back-rank", "mate-in-1"] },
+	{ fen: "r1bqk2r/pppp1ppp/2n2n2/4p3/1bB1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 4 5", solution_moves: "c3d5", rating: 1250, rating_deviation: 35, theme_tags: ["opening", "knight-hop"] },
+	{ fen: "r1b2rk1/pp1p1ppp/2n1pn2/q5B1/2PP4/2PB1N2/P4PPP/R2QK2R b KQ - 3 10", solution_moves: "a5c3", rating: 1450, rating_deviation: 40, theme_tags: ["queen-fork", "hanging-pawn"] },
+	{ fen: "r2q1rk1/1b2bppp/ppn1p3/2ppP3/3P4/2PB1NN1/PP3PPP/R1BQ1RK1 w - - 0 13", solution_moves: "d4c5", rating: 1910, rating_deviation: 50, theme_tags: ["advanced-clash", "center-break"] }
 ];
 
 async function seed() {

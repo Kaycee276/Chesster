@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
 // The stellar SDK and Freighter wallet API are mocked so importing the service
 // never performs network or wallet I/O. Freighter's signTransaction is the only
@@ -65,7 +65,9 @@ describe("depositXLM secret-key isolation", () => {
 		await expect(
 			depositXLM("join_match", "GAME1", "1.0", "not-a-key"),
 		).rejects.toThrow("Invalid Stellar public key");
-import { describe, it, expect, vi, afterEach } from "vitest";
+	});
+});
+
 import { fetchAccountBalances } from "../src/services/stellarService";
 
 const ADDRESS = "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV";

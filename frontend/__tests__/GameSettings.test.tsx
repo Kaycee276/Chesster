@@ -67,7 +67,7 @@ describe("GameSettings Component", () => {
 		});
 
 		// Click on the backdrop
-		const backdrop = screen.getByText("Game Settings").closest("div")?.parentElement;
+		const backdrop = screen.getByText("Game Settings").closest(".fixed.inset-0");
 		if (backdrop) {
 			fireEvent.click(backdrop);
 		}
@@ -99,7 +99,7 @@ describe("GameSettings Component", () => {
 		fireEvent.click(triggerButton);
 
 		await waitFor(() => {
-			const toggle = screen.getByRole("switch") as HTMLElement;
+			const toggle = screen.getByRole("switch", { name: /toggle blindfold mode/i }) as HTMLElement;
 			expect(toggle.getAttribute("aria-checked")).toBe("false");
 		});
 
@@ -107,7 +107,7 @@ describe("GameSettings Component", () => {
 		useGameStore.setState({ isBlindfoldMode: true });
 
 		await waitFor(() => {
-			const toggle = screen.getByRole("switch") as HTMLElement;
+			const toggle = screen.getByRole("switch", { name: /toggle blindfold mode/i }) as HTMLElement;
 			expect(toggle.getAttribute("aria-checked")).toBe("true");
 		});
 	});
@@ -156,7 +156,7 @@ describe("GameSettings Component", () => {
 		fireEvent.click(triggerButton);
 
 		await waitFor(() => {
-			const toggle = screen.getByRole("switch") as HTMLElement;
+			const toggle = screen.getByRole("switch", { name: /toggle blindfold mode/i }) as HTMLElement;
 			// When blindfold mode is on, the toggle should have the accent color
 			expect(toggle.className).toContain("bg-(--accent-primary)");
 		});
@@ -170,7 +170,7 @@ describe("GameSettings Component", () => {
 		fireEvent.click(triggerButton);
 
 		await waitFor(() => {
-			const toggle = screen.getByRole("switch") as HTMLElement;
+			const toggle = screen.getByRole("switch", { name: /toggle blindfold mode/i }) as HTMLElement;
 			// When blindfold mode is off, the toggle should have the tertiary color
 			expect(toggle.className).toContain("bg-(--bg-tertiary)");
 		});
@@ -183,7 +183,7 @@ describe("GameSettings Component", () => {
 		fireEvent.click(triggerButton);
 
 		await waitFor(() => {
-			const toggle = screen.getByRole("switch");
+			const toggle = screen.getByRole("switch", { name: /toggle blindfold mode/i });
 			fireEvent.click(toggle);
 		});
 
@@ -191,7 +191,8 @@ describe("GameSettings Component", () => {
 			const stored = localStorage.getItem("chesster-game");
 			expect(stored).toBeTruthy();
 			const parsed = JSON.parse(stored!);
-			expect(parsed.isBlindfoldMode).toBe(true);
+			const state = parsed.state ?? parsed;
+			expect(state.isBlindfoldMode).toBe(true);
 		});
 	});
 

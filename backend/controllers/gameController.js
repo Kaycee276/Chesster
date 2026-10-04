@@ -12,6 +12,14 @@ const chessEngine = require("../services/chessEngine");
 const AUDIT_FORMATS = new Set(["json", "csv"]);
 
 class GameController {
+	constructor() {
+		for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(this))) {
+			if (typeof this[key] === "function" && key !== "constructor") {
+				this[key] = this[key].bind(this);
+			}
+		}
+	}
+
 	publishGameEnded(game, endReason) {
 		if (!game || game.status !== "finished") return;
 		const winnerAddress = game.winner === "white"

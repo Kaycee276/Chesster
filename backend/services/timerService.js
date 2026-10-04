@@ -58,6 +58,7 @@ class TimerService {
 
 		// `${gameCode}:${color}` -> { timeout, expiresAt }
 		this.player_disconnect_timers = new Map();
+		this.reconnectTimers = this.player_disconnect_timers;
 	}
 
 	init(io) {

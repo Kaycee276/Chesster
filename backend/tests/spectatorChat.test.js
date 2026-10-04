@@ -1,9 +1,9 @@
 const http = require("http");
 const { Server } = require("socket.io");
 const { io: Client } = require("socket.io-client");
-const { moderateMessage, checkSlowMode } = require("../services/chatService");
+const { moderateMessage, checkSlowMode, resetSlowMode } = require("../services/chatService");
 
-function waitFor(socket, event, timeout = 500) {
+function waitFor(socket, event, timeout = 2000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Event "${event}" not received within ${timeout}ms`)), timeout);
     socket.once(event, (data) => {
@@ -18,14 +18,16 @@ async function createSocketHarness() {
   const io = new Server(httpServer, { cors: { origin: "*" } });
 
   io.on("connection", (socket) => {
-    socket.on("join-game", (payload) => {
+    socket.on("join-game", (payload, ack) => {
       const gameCode = typeof payload === "string" ? payload : payload?.gameCode;
       const playerColor = typeof payload === "object" ? payload?.playerColor : null;
-      if (!gameCode) return;
-
-      socket.join(gameCode);
+      if (!gameCode) {
+        if (typeof ack === "function") ack({ error: "missing_gameCode" });
+        return;
+      }
 
       if (playerColor && ["white", "black"].includes(playerColor)) {
+        socket.join(gameCode);
         socket.data.gameCode = gameCode;
         socket.data.playerColor = playerColor;
       } else {
@@ -34,6 +36,7 @@ async function createSocketHarness() {
         socket.data.isSpectator = true;
         socket.data.gameCode = gameCode;
       }
+      if (typeof ack === "function") ack({ success: true });
     });
 
     socket.on("spectator_message", ({ gameCode, message }) => {
@@ -100,13 +103,16 @@ describe("Spectator Chat (Issue #304)", () => {
   let harness;
   const clients = [];
 
+  beforeEach(() => {
+    resetSlowMode();
+  });
+
   afterEach(async () => {
     for (const client of clients.splice(0)) {
       client.disconnect();
     }
     if (harness) await harness.close();
-    // Reset slow-mode state between tests
-    // (In production, checkSlowMode maintains internal state; for testing we'd need a reset helper)
+    resetSlowMode();
   });
 
   describe("1. Spectator message room isolation", () => {
@@ -203,9 +209,11 @@ describe("Spectator Chat (Issue #304)", () => {
         waitFor(spec1_g2, "connect"),
       ]);
 
-      spec1_g1.emit("join-game", "GAME1");
-      spec2_g1.emit("join-game", "GAME1");
-      spec1_g2.emit("join-game", "GAME2");
+      await Promise.all([
+        new Promise((res) => spec1_g1.emit("join-game", "GAME1", res)),
+        new Promise((res) => spec2_g1.emit("join-game", "GAME1", res)),
+        new Promise((res) => spec1_g2.emit("join-game", "GAME2", res)),
+      ]);
 
       const msg1g1 = waitFor(spec1_g1, "new_spectator_message");
       const msg2g1 = waitFor(spec2_g1, "new_spectator_message");

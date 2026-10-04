@@ -10,6 +10,14 @@ const cores = typeof os.availableParallelism === "function" ? os.availableParall
 function isAlive(pid) {
 	try {
 		process.kill(pid, 0);
+		if (process.platform === "linux") {
+			try {
+				const status = require("fs").readFileSync(`/proc/${pid}/status`, "utf8");
+				if (/State:\s+Z/i.test(status)) return false;
+			} catch (_) {
+				return false;
+			}
+		}
 		return true;
 	} catch (_) {
 		return false;

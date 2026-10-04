@@ -15,6 +15,14 @@ const REGISTRATION_OPEN_STATUSES = ["open"];
  *   POST /api/tournaments/:id/register -> registerPlayer
  */
 class TournamentController {
+	constructor() {
+		for (const key of Object.getOwnPropertyNames(Object.getPrototypeOf(this))) {
+			if (typeof this[key] === "function" && key !== "constructor") {
+				this[key] = this[key].bind(this);
+			}
+		}
+	}
+
 	/** GET /api/tournaments?status=open&limit=20 */
 	async listTournaments(req, res, next) {
 		try {

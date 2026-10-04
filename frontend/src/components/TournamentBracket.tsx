@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef, useLayoutEffect } from "react";
-import { BracketRound, BracketMatch } from "../types/tournament";
+import React, { useEffect, useState, useRef, useLayoutEffect, useCallback } from "react";
+import type { BracketRound, BracketMatch } from "../types/tournament";
 import { socketService } from "../api/socket";
 import { useNavigate } from "react-router-dom";
 
@@ -20,7 +20,7 @@ const BracketNode: React.FC<{
 	const isBlackWinner = match.winner && match.playerBlack && match.winner === match.playerBlack.walletAddress;
 
 	return (
-		<div ref={nodeRef} className="relative bg-slate-800 border border-slate-700 rounded-lg p-3 w-64 shadow-md z-10 m-4 flex-shrink-0">
+		<div ref={nodeRef} className={`relative bg-slate-800 border ${isCurrentUser ? "border-amber-500 ring-1 ring-amber-500" : "border-slate-700"} rounded-lg p-3 w-64 shadow-md z-10 m-4 flex-shrink-0`}>
 			{isActive && (
 				<div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full animate-pulse border border-slate-900" title="Match is Live"></div>
 			)}
@@ -51,14 +51,15 @@ const BracketNode: React.FC<{
 
 export const TournamentBracket: React.FC<TournamentBracketProps> = ({ rounds: initialRounds, currentUserAddress, onSpectate }) => {
 	const [rounds, setRounds] = useState<BracketRound[]>(initialRounds);
+	const [prevInitialRounds, setPrevInitialRounds] = useState(initialRounds);
+	if (initialRounds !== prevInitialRounds) {
+		setPrevInitialRounds(initialRounds);
+		setRounds(initialRounds);
+	}
 	const navigate = useNavigate();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [lines, setLines] = useState<{ x1: number; y1: number; x2: number; y2: number }[]>([]);
 	const nodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-
-	useEffect(() => {
-		setRounds(initialRounds);
-	}, [initialRounds]);
 
 	useEffect(() => {
 		const handleMatchCompleted = (completedMatch: BracketMatch) => {
@@ -78,15 +79,16 @@ export const TournamentBracket: React.FC<TournamentBracketProps> = ({ rounds: in
 			});
 		};
 
-		socketService.onTournamentMatchCompleted(handleMatchCompleted);
+		socketService.onTournamentMatchCompleted((data) => handleMatchCompleted(data as BracketMatch));
 		return () => {
 			socketService.offTournamentMatchCompleted();
 		};
 	}, []);
 
-	const drawLines = () => {
-		if (!containerRef.current) return;
-		const containerRect = containerRef.current.getBoundingClientRect();
+	const drawLines = useCallback(() => {
+		const container = containerRef.current;
+		if (!container) return;
+		const containerRect = container.getBoundingClientRect();
 		const newLines: { x1: number; y1: number; x2: number; y2: number }[] = [];
 
 		rounds.forEach((round, roundIndex) => {
@@ -109,12 +111,12 @@ export const TournamentBracket: React.FC<TournamentBracketProps> = ({ rounds: in
 					const rect2 = el2.getBoundingClientRect();
 
 					// Calculate center right of current node
-					const x1 = rect1.right - containerRect.left + containerRef.current.scrollLeft;
-					const y1 = rect1.top + rect1.height / 2 - containerRect.top + containerRef.current.scrollTop;
+					const x1 = rect1.right - containerRect.left + container.scrollLeft;
+					const y1 = rect1.top + rect1.height / 2 - containerRect.top + container.scrollTop;
 
 					// Calculate center left of next node
-					const x2 = rect2.left - containerRect.left + containerRef.current.scrollLeft;
-					const y2 = rect2.top + rect2.height / 2 - containerRect.top + containerRef.current.scrollTop;
+					const x2 = rect2.left - containerRect.left + container.scrollLeft;
+					const y2 = rect2.top + rect2.height / 2 - containerRect.top + container.scrollTop;
 
 					newLines.push({ x1, y1, x2, y2 });
 				}
@@ -122,13 +124,13 @@ export const TournamentBracket: React.FC<TournamentBracketProps> = ({ rounds: in
 		});
 
 		setLines(newLines);
-	};
+	}, [rounds]);
 
 	useLayoutEffect(() => {
 		drawLines();
 		window.addEventListener('resize', drawLines);
 		return () => window.removeEventListener('resize', drawLines);
-	}, [rounds]);
+	}, [drawLines]);
 
 	const handleSpectate = (gameCode: string) => {
 		if (onSpectate) {

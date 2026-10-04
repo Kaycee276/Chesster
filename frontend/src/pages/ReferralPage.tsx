@@ -293,7 +293,7 @@ export default function ReferralPage() {
 				document.execCommand("copy");
 				addToast("Referral link copied to clipboard!", "success");
 			}
-		} catch (err) {
+		} catch {
 			addToast("Failed to copy link", "error");
 		}
 	};

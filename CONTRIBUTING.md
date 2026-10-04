@@ -116,7 +116,9 @@ git push --force-with-lease
 
 If Git reports a conflict, resolve the marked files, run `git add <resolved-file>`, then continue with `git rebase --continue`. Ask in the PR if you are unsure which version is correct.
 
-### Development branch rules
+## 🌿 Branching & Pull Request Workflow
+
+Chesster currently uses `master` as its default development branch. Branch from the latest `master` and open pull requests targeting `master`; the existing semantic-release workflow manages production releases.
 
 - Branch from the current `upstream/master`; PRs target `master`.
 - Keep one issue or tightly related change per branch and PR.

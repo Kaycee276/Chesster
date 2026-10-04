@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Settings, X } from "lucide-react";
+import { Settings } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 
 export default function GameSettings() {

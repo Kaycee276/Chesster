@@ -47,4 +47,9 @@ function checkSlowMode(key, windowMs) {
   return { allowed: false, nextAvailableIn };
 }
 
-module.exports = { moderateMessage, MAX_MESSAGE_LENGTH, checkSlowMode };
+function resetSlowMode() {
+  spectatorSlowMode.clear();
+}
+
+module.exports = { moderateMessage, MAX_MESSAGE_LENGTH, checkSlowMode, resetSlowMode };
+

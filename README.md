@@ -132,6 +132,10 @@ The project includes comprehensive test suites:
 - **Smart Contract**: `cd contracts/soroban && cargo test`
 - **Backend**: `cd backend && npm test`
 
+## 🤝 Contributing
+
+Contributions are welcome. Chesster currently uses `master` as its default branch; open pull requests against `master`. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the branch workflow and [DEVELOPMENT.md](./DEVELOPMENT.md) for local CI checks.
+
 ## 📄 License
 
 This project is licensed under the MIT License.

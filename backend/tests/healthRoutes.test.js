@@ -11,6 +11,14 @@ jest.mock("@stellar/stellar-sdk", () => ({
   rpc: { Server: jest.fn(() => ({ getLatestLedger: jest.fn().mockResolvedValue({ sequence: 1 }) })) },
 }));
 
+jest.mock("../config/supabase", () => ({
+  from: jest.fn(() => ({
+    select: jest.fn(() => ({
+      limit: jest.fn().mockResolvedValue({ data: [{ count: 1 }], error: null }),
+    })),
+  })),
+}));
+
 const healthRoutes = require("../routes/healthRoutes");
 
 describe("Health Check Routes", () => {

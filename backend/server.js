@@ -194,7 +194,7 @@ function getPresenceEntry(gameCode) {
 function broadcastPresence(gameCode, color, status) {
   const presence = getPresenceEntry(gameCode);
   presence[color].status = status;
-  io.to(gameCode).emit("presence-update", { gameCode, color, status });
+  io.to(gameCode).to(`spectator_chat:${gameCode}`).emit("presence-update", { gameCode, color, status });
 }
 
 function maskGameForViewer(game, playerColor) {
@@ -206,11 +206,19 @@ function maskGameForViewer(game, playerColor) {
 
 function broadcastGameUpdate(gameCode, game) {
   const room = io.sockets.adapter.rooms.get(gameCode);
-  if (!room) return;
-  for (const socketId of room) {
-    const target = io.sockets.sockets.get(socketId);
-    const color = target?.data?.playerColor;
-    target?.emit("game-update", maskGameForViewer(game, color || "white"));
+  if (room) {
+    for (const socketId of room) {
+      const target = io.sockets.sockets.get(socketId);
+      const color = target?.data?.playerColor;
+      target?.emit("game-update", maskGameForViewer(game, color || "white"));
+    }
+  }
+  const spectatorRoom = io.sockets.adapter.rooms.get(`spectator_chat:${gameCode}`);
+  if (spectatorRoom) {
+    for (const socketId of spectatorRoom) {
+      const target = io.sockets.sockets.get(socketId);
+      target?.emit("game-update", maskGameForViewer(game, "white"));
+    }
   }
 }
 
@@ -218,14 +226,16 @@ io.on("connection", (socket) => {
   metricsRoutes.setConnectedClients(io.engine.clientsCount);
   // Accepts either a bare gameCode string (spectator join) or
   // { gameCode, playerColor } so we can track presence / handle reconnects.
-  socket.on("join-game", validateSocketPayload(JoinRoomPayload, async (payload) => {
+  socket.on("join-game", validateSocketPayload(JoinRoomPayload, async (payload, ack) => {
     const gameCode = typeof payload === "string" ? payload : payload?.gameCode || payload?.gameId;
     const playerColor = typeof payload === "object" ? payload?.playerColor : null;
     const requestedColor = playerColor;
     const token = typeof payload === "object" ? payload?.token : null;
-    if (!gameCode) return;
+    if (!gameCode) {
+      if (typeof ack === "function") ack({ error: "missing-game-code" });
+      return;
+    }
 
-    socket.join(gameCode);
     metricsRoutes.markGameConnected(gameCode);
 
     if (requestedColor && ["white", "black"].includes(requestedColor)) {
@@ -245,6 +255,7 @@ io.on("connection", (socket) => {
       }
 
       if (boundColor === requestedColor) {
+        socket.join(gameCode);
         socket.data.gameCode = gameCode;
         socket.data.playerColor = boundColor;
         socket.data.address = claims.address;
@@ -265,6 +276,9 @@ io.on("connection", (socket) => {
       } else {
         // Requested a color the caller cannot prove ownership of: stay a
         // spectator and let the client know the color binding was refused.
+        socket.join(`spectator_chat:${gameCode}`);
+        socket.data.isSpectator = true;
+        socket.data.gameCode = gameCode;
         socket.emit("auth-error", { gameCode, reason: "color-authentication-failed" });
       }
     } else {
@@ -282,6 +296,7 @@ io.on("connection", (socket) => {
       white: presence.white.status,
       black: presence.black.status,
     });
+    if (typeof ack === "function") ack({ success: true });
   }));
 
   // Server-authoritative move channel. The move is applied only when the socket

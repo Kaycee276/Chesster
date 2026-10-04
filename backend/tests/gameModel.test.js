@@ -40,6 +40,7 @@ jest.mock("../services/chessEngine", () => {
   return {
     initBoard: jest.fn().mockReturnValue(emptyBoard),
     isValidMove: jest.fn().mockReturnValue({ valid: true }),
+    isValidVariantMove: jest.fn().mockReturnValue({ valid: true }),
     makeMove: jest.fn().mockReturnValue(emptyBoard),
     isKingInCheck: jest.fn().mockReturnValue(false),
     isCheckmate: jest.fn().mockReturnValue(false),

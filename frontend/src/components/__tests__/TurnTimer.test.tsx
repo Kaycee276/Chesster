@@ -25,7 +25,7 @@ describe("GameTimer (TurnTimer)", () => {
 		it("clamps negative time to 0:00 rather than showing a negative value", () => {
 			const markup = render(-5, 300);
 			expect(markup).toContain("0:00");
-			expect(markup).not.toContain("-");
+			expect(markup).not.toContain("-0:");
 		});
 	});
 

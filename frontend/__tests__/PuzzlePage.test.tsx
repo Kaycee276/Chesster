@@ -67,7 +67,7 @@ describe("Puzzle utilities", () => {
 			expect(board[0][0]).toBe("r");
 			expect(board[0][1]).toBe(".");
 			expect(board[0][2]).toBe("b");
-			expect(board[4][4]).toBe("p");
+			expect(board[4][4]).toBe("P");
 		});
 	});
 

@@ -2180,13 +2180,25 @@ impl ChessterEscrow {
         }
     }
 
-    fn verify_token_allowance(env: &Env, token: &Address, owner: &Address, amount: i128) -> Result<(), EscrowError> {
+    fn verify_token_allowance(
+        env: &Env,
+        token: &Address,
+        owner: &Address,
+        amount: i128,
+    ) -> Result<(), EscrowError> {
         let token_client = token::Client::new(env, token);
         let allowance = token_client.allowance(owner, &env.current_contract_address());
         if allowance < amount {
             return Err(EscrowError::InsufficientAllowance);
         }
         Ok(())
+    }
+
+    fn validate_player_funds(env: &Env, token: &Address, owner: &Address, amount: i128) {
+        let token_client = token::Client::new(env, token);
+        if token_client.balance(owner) < amount {
+            panic_with_error!(env, EscrowError::InsufficientFunds);
+        }
     }
 
     fn deposit_wager(env: &Env, token: &Address, from: &Address, amount: i128) {
@@ -2211,7 +2223,12 @@ impl ChessterEscrow {
             panic_with_error!(env, EscrowError::InsufficientFunds);
         }
 
-        token_client.transfer_from(&env.current_contract_address(), from, &env.current_contract_address(), &amount);
+        token_client.transfer_from(
+            &env.current_contract_address(),
+            from,
+            &env.current_contract_address(),
+            &amount,
+        );
         Self::add_locked(env, token, amount);
     }
 
@@ -2291,8 +2308,6 @@ impl ChessterEscrow {
         if Self::is_paused(env.clone()) {
             panic_with_error!(&env, EscrowError::ContractPaused);
         }
-
-
 
         if env.storage().persistent().has(&game_code) {
             panic_with_error!(&env, EscrowError::MatchAlreadyExists);
@@ -2879,13 +2894,24 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::InvalidWinner);
         }
 
+        let duration = if m.max_duration_seconds > 0 {
+            m.max_duration_seconds
+        } else {
+            Self::get_match_timeout(env.clone())
+        };
         let current_time = env.ledger().timestamp();
-        if current_time < m.last_activity_timestamp + m.timeout_seconds {
+        if current_time < m.created_at + duration {
             panic_with_error!(&env, EscrowError::TimeoutNotExpired);
         }
 
         let coordinator = Self::get_coordinator(env.clone());
-        Self::settle_match(&env, &coordinator, &game_code, &mut m, Some(claimant.clone()));
+        Self::settle_match(
+            &env,
+            &coordinator,
+            &game_code,
+            &mut m,
+            Some(claimant.clone()),
+        );
 
         env.events().publish(
             (symbol_short!("timeout"), game_code.clone()),
@@ -4098,7 +4124,9 @@ impl ChessterEscrow {
         }
 
         let token_client = token::Client::new(&env, &tournament.token);
-        if let Err(e) = Self::verify_token_allowance(&env, &tournament.token, &player, tournament.buy_in_amount) {
+        if let Err(e) =
+            Self::verify_token_allowance(&env, &tournament.token, &player, tournament.buy_in_amount)
+        {
             panic_with_error!(&env, e);
         }
         if token_client.balance(&player) < tournament.buy_in_amount {

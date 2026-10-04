@@ -23,6 +23,14 @@ export interface OpponentStatusEvent {
 	forfeited?: boolean;
 }
 
+export interface MatchReadyEvent {
+	gameCode: string;
+	round: number | string;
+	opponentName: string;
+	opponentRating?: number | string;
+	color: "white" | "black";
+}
+
 const BACKEND_URL =
 	import.meta.env.VITE_BACKEND_URL || "http://localhost:3000/";
 
@@ -94,12 +102,22 @@ class SocketService {
 		this.socket?.off("chat-message");
 	}
 
-	onTournamentMatchCompleted(callback: (data: any) => void) {
+	onTournamentMatchCompleted(callback: (data: unknown) => void) {
 		this.socket?.on("tournament:match_completed", callback);
 	}
 
 	offTournamentMatchCompleted() {
 		this.socket?.off("tournament:match_completed");
+	}
+
+	onTournamentMatchReady(callback: (data: MatchReadyEvent) => void) {
+		this.socket?.on("tournament:match_ready", callback);
+	}
+
+	offTournamentMatchReady() {
+		this.socket?.off("tournament:match_ready");
+	}
+
 	requestRematch(gameCode: string, playerColor: string) {
 		this.socket?.emit("request-rematch", { gameCode, playerColor });
 	}

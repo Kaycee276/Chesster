@@ -1139,5 +1139,3 @@ const gameModel = new GameModel();
 // default export contract used across the codebase.
 gameModel.assertValidStellarAddress = assertValidStellarAddress;
 module.exports = gameModel;
-
-module.exports = new GameModel();

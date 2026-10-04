@@ -42,6 +42,8 @@ export function assertValidPublicKey(publicKey: string): string {
         throw new Error("Invalid Stellar public key");
     }
     return publicKey;
+}
+
 export interface WalletBalance {
     /** "XLM" for the native asset, otherwise the SAC's asset code. */
     assetCode: string;
