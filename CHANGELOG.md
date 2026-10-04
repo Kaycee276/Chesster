@@ -1,3 +1,10 @@
+## [1.36.1](https://github.com/Kaycee276/Chesster/compare/v1.36.0...v1.36.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* resolve cross-origin CSRF validation in production and refine game layout ([69bec13](https://github.com/Kaycee276/Chesster/commit/69bec138161cf66797a4463de73792507ab0866f))
+
 # [1.36.0](https://github.com/Kaycee276/Chesster/compare/v1.35.0...v1.36.0) (2026-10-04)
 
 
