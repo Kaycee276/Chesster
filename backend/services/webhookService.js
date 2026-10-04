@@ -101,12 +101,7 @@ const supabaseDeadLetterStore = {
 
   _client() {
     if (!this._supabase) {
-      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      this._supabase = serviceKey
-        ? require("@supabase/supabase-js").createClient(process.env.SUPABASE_URL, serviceKey, {
-            auth: { persistSession: false },
-          })
-        : require("../config/supabase");
+      this._supabase = require("../config/supabase");
     }
     return this._supabase;
   },

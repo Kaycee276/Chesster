@@ -4,9 +4,6 @@ process.env.WEBHOOK_MAX_RETRIES = "2";
 process.env.WEBHOOK_RETRY_DELAY_MS = "50";
 
 jest.mock("../config/supabase", () => ({ from: jest.fn() }));
-jest.mock("@supabase/supabase-js", () => ({
-  createClient: jest.fn(() => ({ from: jest.fn() })),
-}));
 
 const {
   WebhookService,
@@ -529,23 +526,7 @@ describe("WebhookService", () => {
       supabase.from.mockReturnValue(query);
     });
 
-    it("uses a service-role client when SUPABASE_SERVICE_ROLE_KEY is set", () => {
-      const { createClient } = require("@supabase/supabase-js");
-      process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
-      try {
-        const client = store._client();
-        expect(createClient).toHaveBeenCalledWith(process.env.SUPABASE_URL, "service-role-key", {
-          auth: { persistSession: false },
-        });
-        expect(client).not.toBe(supabase);
-        expect(store._client()).toBe(client);
-      } finally {
-        delete process.env.SUPABASE_SERVICE_ROLE_KEY;
-        store._supabase = null;
-      }
-    });
-
-    it("falls back to the shared Supabase client", () => {
+    it("uses the shared database client", () => {
       expect(store._client()).toBe(supabase);
     });
 

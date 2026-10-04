@@ -1,12 +1,11 @@
-const { createClient } = require('@supabase/supabase-js');
+/**
+ * Compatibility alias: redirects legacy Supabase imports to the direct PostgreSQL / Neon
+ * connection pool and Prisma ORM client (config/db.js).
+ *
+ * This allows all existing service queries to run against Neon without requiring
+ * @supabase/supabase-js or proprietary PostgREST HTTP dependencies.
+ */
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+const db = require("./db");
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error('Missing Supabase credentials. Check .env file');
-}
-
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-module.exports = supabase;
+module.exports = db;

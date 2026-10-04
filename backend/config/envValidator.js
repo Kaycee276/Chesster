@@ -1,8 +1,7 @@
 const logger = require("../utils/logger");
 
 const REQUIRED_ENV_VARS = [
-  { key: "SUPABASE_URL", description: "Supabase Project URL" },
-  { key: "SUPABASE_KEY", description: "Supabase Service/Anon Key" },
+  { key: "DATABASE_URL", description: "PostgreSQL Database URL (Neon / Postgres)" },
   { key: "SOROBAN_RPC_URL", description: "Soroban RPC Endpoint URL" },
 ];
 
@@ -18,7 +17,6 @@ function validateEnv(options = {}) {
 
   for (const envVar of REQUIRED_ENV_VARS) {
     let value = process.env[envVar.key];
-    if (!value && envVar.key === "SUPABASE_KEY") value = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
     if (!value && envVar.key === "SOROBAN_RPC_URL") value = process.env.STELLAR_RPC_URL;
     if (!value || String(value).trim() === "") {
       missingKeys.push(envVar);

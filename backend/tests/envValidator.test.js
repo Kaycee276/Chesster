@@ -13,33 +13,21 @@ describe("Backend Environment Validator (envValidator)", () => {
   });
 
   it("passes validation when all required environment variables are set", () => {
-    process.env.SUPABASE_URL = "https://example.supabase.co";
-    process.env.SUPABASE_KEY = "test-key-123";
+    process.env.DATABASE_URL = "postgresql://user:pass@localhost:5432/db";
     process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
 
     expect(() => validateEnv({ skipExit: true })).not.toThrow();
   });
 
-  it("throws error when SUPABASE_URL is missing", () => {
-    delete process.env.SUPABASE_URL;
-    process.env.SUPABASE_KEY = "test-key-123";
+  it("throws error when DATABASE_URL is missing", () => {
+    delete process.env.DATABASE_URL;
     process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
 
-    expect(() => validateEnv({ skipExit: true })).toThrow(/SUPABASE_URL/);
-  });
-
-  it("throws error when SUPABASE_KEY is missing", () => {
-    process.env.SUPABASE_URL = "https://example.supabase.co";
-    delete process.env.SUPABASE_KEY;
-    delete process.env.SUPABASE_ANON_KEY;
-    process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
-
-    expect(() => validateEnv({ skipExit: true })).toThrow(/SUPABASE_KEY/);
+    expect(() => validateEnv({ skipExit: true })).toThrow(/DATABASE_URL/);
   });
 
   it("throws error when SOROBAN_RPC_URL is missing", () => {
-    process.env.SUPABASE_URL = "https://example.supabase.co";
-    process.env.SUPABASE_KEY = "test-key-123";
+    process.env.DATABASE_URL = "postgresql://user:pass@localhost:5432/db";
     delete process.env.SOROBAN_RPC_URL;
     delete process.env.STELLAR_RPC_URL;
 
@@ -48,8 +36,7 @@ describe("Backend Environment Validator (envValidator)", () => {
 
   it("lists all required environment variables in REQUIRED_ENV_VARS array", () => {
     const keys = REQUIRED_ENV_VARS.map((v) => v.key);
-    expect(keys).toContain("SUPABASE_URL");
-    expect(keys).toContain("SUPABASE_KEY");
+    expect(keys).toContain("DATABASE_URL");
     expect(keys).toContain("SOROBAN_RPC_URL");
   });
 });

@@ -23,23 +23,7 @@
 
 require("dotenv").config({ path: require("path").resolve(__dirname, "../.env") });
 
-const { createClient } = require("@supabase/supabase-js");
-
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
-
-if (!supabaseUrl || !supabaseKey) {
-  // eslint-disable-next-line no-console
-  console.error(
-    "Missing Supabase credentials. Set SUPABASE_URL and SUPABASE_ANON_KEY " +
-      "(e.g. in backend/.env) before running the seed script.",
-  );
-  process.exit(1);
-}
-
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { persistSession: false },
-});
+const supabase = require("../config/supabase");
 
 // Deterministic, easily recognisable keys so re-runs are idempotent.
 const SEED_GAME_CODE_PREFIX = "SEED";
