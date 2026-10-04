@@ -60,6 +60,35 @@ router.get('/time-controls', gameController.getTimeControls);
 
 /**
  * @openapi
+ * /api/leaderboard:
+ *   get:
+ *     summary: Get global player rankings
+ *     tags: [Leaderboard]
+ *     parameters:
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: [all, bullet, blitz, rapid]
+ *         description: Filter leaderboard by time control
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *     responses:
+ *       200:
+ *         description: Ranked list of players
+ */
+router.get('/leaderboard', gameController.getLeaderboard);
+
+/**
+ * @openapi
  * /api/games/pending:
  *   get:
  *     summary: Get pending open games in lobby

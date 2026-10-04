@@ -8,6 +8,7 @@ const replayService = require("../services/replayService");
 const REPLAY_HEARTBEAT_MS = 15000;
 const auditService = require("../services/auditService");
 const chessEngine = require("../services/chessEngine");
+const leaderboardService = require("../services/leaderboardService");
 
 const AUDIT_FORMATS = new Set(["json", "csv"]);
 
@@ -34,6 +35,7 @@ class GameController {
 			playerBlackAddress: game.player_black_address,
 			endReason: endReason || game.end_reason || "conclusion",
 		}).catch(() => {});
+		leaderboardService.syncPlayerStats(game).catch(() => {});
 	}
 
 	async createGame(req, res) {
@@ -573,6 +575,20 @@ class GameController {
 					tournamentAdvancement,
 				},
 			});
+		} catch (error) {
+			res.status(500).json({ success: false, error: error.message });
+		}
+	}
+
+	async getLeaderboard(req, res) {
+		try {
+			const { category, limit, offset } = req.query;
+			const leaderboard = await leaderboardService.getLeaderboard({
+				category,
+				limit: limit ? parseInt(limit, 10) : 50,
+				offset: offset ? parseInt(offset, 10) : 0,
+			});
+			res.json({ success: true, data: leaderboard });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });
 		}

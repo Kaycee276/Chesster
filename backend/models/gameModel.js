@@ -423,6 +423,11 @@ class GameModel {
 	 *                               through forfeit_match instead of resolve_match
 	 */
 	async _settleEscrow(gameCode, dbGame, winner, endReason = null) {
+		try {
+			const leaderboardService = require("../services/leaderboardService");
+			leaderboardService.syncPlayerStats(dbGame).catch(() => {});
+		} catch (_) {}
+
 		if (!dbGame.wager_amount) return; // free game, no escrow
 
 		// ── 1. Fetch on-chain match state ────────────────────────────────────
