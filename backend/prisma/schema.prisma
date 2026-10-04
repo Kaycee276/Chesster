@@ -1,0 +1,496 @@
+// Chesster Prisma Schema
+// Configured for Supabase PostgreSQL with Connection Pooling (Transaction Mode) and Direct URL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// 1. Core Games & Moves
+// ---------------------------------------------------------------------------
+
+model Game {
+  id                     String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  game_code              String    @unique @db.VarChar(10)
+  game_type              String?   @default("chess") @db.VarChar(50)
+  variant                String    @default("standard") @db.VarChar(20)
+  board_state            Json      @db.JsonB
+  current_turn           String    @db.VarChar(10)
+  status                 String?   @default("waiting") @db.VarChar(20)
+  player_white           Boolean?  @default(false)
+  player_black           Boolean?  @default(false)
+  player_white_address   String?
+  player_black_address   String?
+  move_count             Int?      @default(0)
+  winner                 String?   @db.VarChar(10)
+  turn_started_at        DateTime? @db.Timestamptz(6)
+  game_started_at        DateTime? @db.Timestamptz(6)
+  wager_amount           Decimal?  @db.Decimal
+  token_address          String?
+  escrow_status          String?   @default("pending")
+  escrow_create_tx       String?
+  escrow_join_tx         String?
+  escrow_resolve_tx      String?
+  escrow_tx_hash         String?
+  escrow_refund_status   String?   @db.VarChar(16)
+  escrow_refund_tx       String?
+  in_check               Boolean?  @default(false)
+  last_move              Json?     @db.JsonB
+  draw_offer             String?   @db.VarChar(10)
+  captured_white         Json?     @default("[]") @db.JsonB
+  captured_black         Json?     @default("[]") @db.JsonB
+  time_control_seconds   Int?      @default(600)
+  time_control_preset    String?   @db.VarChar(20)
+  time_increment_seconds Int?      @default(0)
+  undo_request           String?   @db.VarChar(10)
+  undo_request_at        DateTime? @db.Timestamptz(6)
+  deleted_at             DateTime? @db.Timestamptz(6)
+  archived_at            DateTime? @db.Timestamptz(6)
+  archival_status        String?   @default("active") @db.VarChar(20)
+  move_history           Json?     @default("[]") @db.JsonB
+  is_draw                Boolean?  @default(false)
+  draw_reason            String?   @db.VarChar(50)
+  consecutive_halfmoves  Int?      @default(0)
+  halfmove_clock         Int?      @default(0)
+  position_history       Json?     @default("[]") @db.JsonB
+  draw_claimable         Boolean?  @default(false)
+  draw_claim_reason      String?   @db.VarChar(30)
+  white_cheat_suspicion  Decimal?  @db.Decimal(5, 4)
+  black_cheat_suspicion  Decimal?  @db.Decimal(5, 4)
+  cheat_flagged          Boolean   @default(false)
+  anti_cheat_analyzed_at DateTime? @db.Timestamptz(6)
+  end_reason             String?
+  ended_at               DateTime? @db.Timestamptz(6)
+  created_at             DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime  @default(now()) @db.Timestamptz(6)
+
+  moves                 Move[]
+  audit_logs            MatchAuditLog[]
+  token_wagers          TokenWagerLedger[]
+  player_flags          PlayerFlag[]
+  rating_history        PlayerRatingHistory[]
+  referral_rewards      ReferralReward[]
+  claimable_commissions ClaimableCommissionLedger[]
+
+  @@index([game_code], map: "idx_games_code")
+  @@index([variant], map: "idx_games_variant")
+  @@map("games")
+}
+
+model Move {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  game_id           String   @db.Uuid
+  move_number       Int
+  player            String   @db.VarChar(10)
+  from_position     Json     @db.JsonB
+  to_position       Json     @db.JsonB
+  piece             String   @db.VarChar(5)
+  board_state_after Json     @db.JsonB
+  is_check          Boolean? @default(false)
+  is_checkmate      Boolean? @default(false)
+  promotion         String?  @db.VarChar(5)
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+
+  game Game @relation(fields: [game_id], references: [id], onDelete: Cascade)
+
+  @@index([game_id, move_number], map: "idx_moves_game")
+  @@map("moves")
+}
+
+model ChatMessage {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  game_code    String    @db.VarChar(10)
+  player_color String    @db.VarChar(10)
+  message      String
+  deleted_at   DateTime? @db.Timestamptz(6)
+  created_at   DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([game_code, created_at], map: "idx_chat_game_code")
+  @@map("chat_messages")
+}
+
+// ---------------------------------------------------------------------------
+// 2. Users, Players & Ratings
+// ---------------------------------------------------------------------------
+
+model User {
+  id                    String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  wallet_address        String        @unique @db.VarChar(255)
+  username              String?       @db.VarChar(50)
+  email                 String?
+  avatar_url            String?
+  bio                   String?       @db.VarChar(280)
+  country               String?       @db.VarChar(56)
+  puzzle_rating         Int           @default(0)
+  experience_points     Int           @default(0)
+  puzzle_solve_streak   Int           @default(0)
+  last_puzzle_solved_on DateTime?     @db.Date
+  rating_deviation      Float         @default(350.0)
+  volatility            Float         @default(0.06)
+  referral_code         String?       @unique @db.VarChar(8)
+  referred_by_wallet    String?       @db.VarChar(255)
+  claimable_commission  Decimal       @default(0) @db.Decimal(30, 0)
+  is_deleted            Boolean       @default(false)
+  deleted_at            DateTime?     @db.Timestamptz(6)
+  created_at            DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at            DateTime      @default(now()) @db.Timestamptz(6)
+
+  puzzle_solves PuzzleSolve[]
+
+  @@index([wallet_address], map: "idx_users_wallet_address")
+  @@index([referred_by_wallet], map: "idx_users_referred_by_wallet")
+  @@map("users")
+}
+
+model Player {
+  wallet_address   String    @id @db.VarChar(255)
+  username         String?   @db.VarChar(50)
+  email            String?
+  avatar_url       String?
+  bio              String?   @db.VarChar(280)
+  elo_rating       Int       @default(1200)
+  rating_deviation Float     @default(350.0)
+  volatility       Float     @default(0.06)
+  wins             Int       @default(0)
+  losses           Int       @default(0)
+  is_deleted       Boolean   @default(false)
+  deleted_at       DateTime? @db.Timestamptz(6)
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime  @default(now()) @db.Timestamptz(6)
+
+  rating_histories   PlayerRatingHistory[]
+  referrals_made     ReferralProgram[]           @relation("Referrer")
+  referrals_received ReferralProgram?            @relation("Referred")
+  commissions        ClaimableCommissionLedger[]
+
+  @@index([elo_rating(sort: Desc)], map: "idx_players_elo_rating")
+  @@index([rating_deviation], map: "idx_players_rating_deviation")
+  @@map("players")
+}
+
+model PlayerStats {
+  wallet_address String   @id @db.VarChar(255)
+  wins           Int      @default(0)
+  losses         Int      @default(0)
+  draws          Int      @default(0)
+  games_played   Int      @default(0)
+  updated_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([wins(sort: Desc)], map: "idx_player_stats_wins")
+  @@index([games_played(sort: Desc)], map: "idx_player_stats_games_played")
+  @@map("player_stats")
+}
+
+model PlayerRatingHistory {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  wallet_address String
+  game_id        String?  @db.Uuid
+  time_category  String
+  old_rating     Int
+  delta          Int
+  new_rating     Int
+  recorded_at    DateTime @default(now()) @db.Timestamptz(6)
+
+  player Player @relation(fields: [wallet_address], references: [wallet_address], onDelete: Cascade)
+  game   Game?  @relation(fields: [game_id], references: [id], onDelete: SetNull)
+
+  @@index([wallet_address, recorded_at(sort: Desc)], map: "idx_rating_history_player")
+  @@index([wallet_address, time_category, new_rating(sort: Desc)], map: "idx_rating_history_category")
+  @@map("player_rating_history")
+}
+
+// ---------------------------------------------------------------------------
+// 3. Security, Auditing & Escrow
+// ---------------------------------------------------------------------------
+
+model MatchAuditLog {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  game_id             String   @db.Uuid
+  event_type          String   @db.VarChar(50)
+  event_data          Json     @default("{}") @db.JsonB
+  player_address      String?  @db.VarChar(255)
+  coordinator_tx_hash String?
+  move_timestamp_ms   BigInt?
+  move_duration_ms    Int?
+  engine_top_move     String?  @db.VarChar(8)
+  centipawn_loss      Int?
+  created_at          DateTime @default(now()) @db.Timestamptz(6)
+
+  game Game @relation(fields: [game_id], references: [id], onDelete: Cascade)
+
+  @@index([game_id], map: "idx_audit_logs_game_id")
+  @@index([event_type], map: "idx_audit_logs_event_type")
+  @@index([created_at], map: "idx_audit_logs_created_at")
+  @@map("match_audit_logs")
+}
+
+model PlayerFlag {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  player_address String    @db.VarChar(255)
+  game_id        String    @db.Uuid
+  anomaly_score  Decimal   @db.Decimal(5, 4)
+  reasons        Json      @default("[]") @db.JsonB
+  status         String    @default("pending") @db.VarChar(20)
+  created_at     DateTime  @default(now()) @db.Timestamptz(6)
+  reviewed_at    DateTime? @db.Timestamptz(6)
+
+  game Game @relation(fields: [game_id], references: [id], onDelete: Cascade)
+
+  @@unique([game_id, player_address])
+  @@index([status, anomaly_score(sort: Desc), created_at], map: "idx_player_flags_review_queue")
+  @@map("player_flags")
+}
+
+model TokenWagerLedger {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  game_id          String   @db.Uuid
+  player_address   String   @db.VarChar(255)
+  transaction_type String   @db.VarChar(50)
+  token_mint       String   @db.VarChar(255)
+  amount           Decimal  @db.Decimal(38, 0)
+  tx_hash          String?
+  status           String   @default("pending") @db.VarChar(20)
+  metadata         Json     @default("{}") @db.JsonB
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime @default(now()) @db.Timestamptz(6)
+
+  game Game @relation(fields: [game_id], references: [id], onDelete: Cascade)
+
+  @@index([game_id], map: "idx_ledger_game_id")
+  @@index([player_address], map: "idx_ledger_player_address")
+  @@index([transaction_type], map: "idx_ledger_transaction_type")
+  @@index([token_mint], map: "idx_ledger_token_mint")
+  @@index([status], map: "idx_ledger_status")
+  @@index([player_address, game_id], map: "idx_ledger_player_game")
+  @@map("token_wager_ledger")
+}
+
+// ---------------------------------------------------------------------------
+// 4. Tournaments & Brackets
+// ---------------------------------------------------------------------------
+
+model Tournament {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                 String    @db.VarChar(120)
+  title                String?   @db.VarChar(160)
+  entry_fee            Decimal   @default(0) @db.Decimal(18, 7)
+  prize_pool           Decimal   @default(0) @db.Decimal(30, 7)
+  max_players          Int
+  status               String    @default("open") @db.VarChar(20)
+  current_round        Int       @default(0)
+  winner_address       String?
+  coordinator_address  String?
+  payout_tx_hash       String?
+  starts_at            DateTime? @db.Timestamptz(6)
+  reminder_15m_sent_at DateTime? @db.Timestamptz(6)
+  reminder_5m_sent_at  DateTime? @db.Timestamptz(6)
+  winner_announced_at  DateTime? @db.Timestamptz(6)
+  created_at           DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime  @default(now()) @db.Timestamptz(6)
+
+  participants    TournamentParticipant[]
+  bracket_matches BracketMatch[]
+
+  @@index([status], map: "idx_tournaments_status")
+  @@map("tournaments")
+}
+
+model TournamentParticipant {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tournament_id  String   @db.Uuid
+  wallet_address String
+  seed_number    Int?
+  seed           Int?
+  registered_at  DateTime @default(now()) @db.Timestamptz(6)
+  joined_at      DateTime @default(now()) @db.Timestamptz(6)
+  status         String   @default("active")
+
+  tournament Tournament @relation(fields: [tournament_id], references: [id], onDelete: Cascade)
+
+  @@unique([tournament_id, wallet_address])
+  @@index([tournament_id], map: "idx_tournament_participants_tournament_id")
+  @@index([wallet_address], map: "idx_tournament_participants_wallet")
+  @@map("tournament_participants")
+}
+
+model BracketMatch {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tournament_id      String   @db.Uuid
+  round              Int
+  match_number       Int
+  player_one         String?
+  player_two         String?
+  player_white       String?
+  player_black       String?
+  winner             String?
+  winner_address     String?
+  game_code          String?  @db.VarChar(10)
+  depends_on_match_a String?  @db.Uuid
+  depends_on_match_b String?  @db.Uuid
+  next_match_id      String?  @db.Uuid
+  status             String   @default("pending") @db.VarChar(20)
+  payout_tx_hash     String?
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime @default(now()) @db.Timestamptz(6)
+
+  tournament          Tournament     @relation(fields: [tournament_id], references: [id], onDelete: Cascade)
+  match_a             BracketMatch?  @relation("DependsMatchA", fields: [depends_on_match_a], references: [id])
+  matches_dependent_a BracketMatch[] @relation("DependsMatchA")
+  match_b             BracketMatch?  @relation("DependsMatchB", fields: [depends_on_match_b], references: [id])
+  matches_dependent_b BracketMatch[] @relation("DependsMatchB")
+  next_match          BracketMatch?  @relation("NextMatch", fields: [next_match_id], references: [id])
+  previous_matches    BracketMatch[] @relation("NextMatch")
+
+  @@unique([tournament_id, round, match_number])
+  @@index([tournament_id, round], map: "idx_bracket_tournament_round")
+  @@map("bracket_matches")
+}
+
+// ---------------------------------------------------------------------------
+// 5. Referrals & Commissions
+// ---------------------------------------------------------------------------
+
+model ReferralClaim {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  referrer_wallet String    @db.VarChar(255)
+  amount          Decimal   @db.Decimal(30, 0)
+  status          String    @default("pending") @db.VarChar(20)
+  payout_tx_hash  String?
+  failure_reason  String?
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  completed_at    DateTime? @db.Timestamptz(6)
+
+  rewards ReferralReward[]
+
+  @@map("referral_claims")
+}
+
+model ReferralReward {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  referrer_wallet String    @db.VarChar(255)
+  source_game_id  String    @unique @db.Uuid
+  amount          Decimal   @db.Decimal(30, 0)
+  status          String    @default("claimable") @db.VarChar(20)
+  claim_id        String?   @db.Uuid
+  created_at      DateTime  @default(now()) @db.Timestamptz(6)
+  claimed_at      DateTime? @db.Timestamptz(6)
+
+  game  Game           @relation(fields: [source_game_id], references: [id])
+  claim ReferralClaim? @relation(fields: [claim_id], references: [id])
+
+  @@index([referrer_wallet, status], map: "idx_referral_rewards_wallet_status")
+  @@map("referral_rewards")
+}
+
+model ReferralProgram {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  referrer_address String
+  referred_address String    @unique
+  referral_code    String
+  commission_bps   Int       @default(500)
+  status           String    @default("active")
+  referred_at      DateTime  @default(now()) @db.Timestamptz(6)
+  expires_at       DateTime? @db.Timestamptz(6)
+
+  referrer Player @relation("Referrer", fields: [referrer_address], references: [wallet_address], onDelete: Cascade)
+  referred Player @relation("Referred", fields: [referred_address], references: [wallet_address], onDelete: Cascade)
+
+  @@index([referrer_address, status], map: "idx_referral_referrer")
+  @@index([referral_code], map: "idx_referral_code")
+  @@map("referral_program")
+}
+
+model ClaimableCommissionLedger {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  referrer_address String
+  source_game_id   String?   @db.Uuid
+  amount_lumens    Decimal   @db.Decimal(20, 7)
+  status           String    @default("pending")
+  earned_at        DateTime  @default(now()) @db.Timestamptz(6)
+  claimed_at       DateTime? @db.Timestamptz(6)
+  expires_at       DateTime? @db.Timestamptz(6)
+
+  referrer Player @relation(fields: [referrer_address], references: [wallet_address], onDelete: Cascade)
+  game     Game?  @relation(fields: [source_game_id], references: [id], onDelete: SetNull)
+
+  @@index([referrer_address, status], map: "idx_commission_referrer_pending")
+  @@map("claimable_commission_ledger")
+}
+
+// ---------------------------------------------------------------------------
+// 6. Puzzles
+// ---------------------------------------------------------------------------
+
+model Puzzle {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fen            String
+  side_to_move   String   @db.VarChar(5)
+  rating         Int
+  solution_moves String[]
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  solves PuzzleSolve[]
+
+  @@map("puzzles")
+}
+
+model PuzzleSolve {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id        String   @db.Uuid
+  puzzle_id      String   @db.Uuid
+  solved_on      DateTime @db.Date
+  points_awarded Int      @default(0)
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  user   User   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  puzzle Puzzle @relation(fields: [puzzle_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, puzzle_id])
+  @@index([user_id, solved_on(sort: Desc)], map: "idx_puzzle_solves_user_date")
+  @@map("puzzle_solves")
+}
+
+model ChessPuzzle {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fen              String   @unique
+  solution_moves   String
+  rating           Int      @default(1500)
+  rating_deviation Int?     @default(50)
+  theme_tags       String[] @default([])
+  times_solved     Int?     @default(0)
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([rating, theme_tags], map: "idx_chess_puzzles_rating_theme")
+  @@map("chess_puzzles")
+}
+
+// ---------------------------------------------------------------------------
+// 7. System & Dead-Letter Queue
+// ---------------------------------------------------------------------------
+
+model WebhookDeadLetterQueue {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  url              String
+  event_type       String    @db.VarChar(100)
+  payload          Json      @db.JsonB
+  attempts         Int
+  last_error       String?
+  last_status_code Int?
+  status           String    @default("pending") @db.VarChar(20)
+  replay_count     Int       @default(0)
+  last_replayed_at DateTime? @db.Timestamptz(6)
+  replayed_at      DateTime? @db.Timestamptz(6)
+  created_at       DateTime  @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime  @default(now()) @db.Timestamptz(6)
+
+  @@index([status, created_at], map: "idx_webhook_dlq_status_created")
+  @@index([event_type], map: "idx_webhook_dlq_event_type")
+  @@map("webhook_dead_letter_queue")
+}

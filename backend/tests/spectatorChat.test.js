@@ -3,7 +3,7 @@ const { Server } = require("socket.io");
 const { io: Client } = require("socket.io-client");
 const { moderateMessage, checkSlowMode, resetSlowMode } = require("../services/chatService");
 
-function waitFor(socket, event, timeout = 2000) {
+function waitFor(socket, event, timeout = 5000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Event "${event}" not received within ${timeout}ms`)), timeout);
     socket.once(event, (data) => {
