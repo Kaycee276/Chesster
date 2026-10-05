@@ -7,11 +7,11 @@ on:
   pull_request:
     paths:
       - "package.json"
-      - "package-lock.json"
+      - "pnpm-lock.yaml"
       - "backend/package.json"
-      - "backend/package-lock.json"
+      - "backend/pnpm-lock.yaml"
       - "frontend/package.json"
-      - "frontend/package-lock.json"
+      - "frontend/pnpm-lock.yaml"
       - "contracts/soroban/Cargo.lock"
       - "contracts/soroban/Cargo.toml"
       - "backend/Dockerfile"
@@ -19,28 +19,33 @@ on:
       - ".github/workflows/security-audit.yml"
 
 jobs:
-  npm-audit:
-    name: NPM Dependency Audit
+  pnpm-audit:
+    name: PNPM Dependency Audit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
 
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: '.nvmrc'
 
-      - name: Run Root NPM Audit
-        run: npm audit --audit-level=high || true
+      - name: Run Root PNPM Audit
+        run: pnpm audit --audit-level=high || true
 
-      - name: Run Backend NPM Audit
+      - name: Run Backend PNPM Audit
         working-directory: ./backend
-        run: npm audit --audit-level=high || true
+        run: pnpm audit --audit-level=high || true
 
-      - name: Run Frontend NPM Audit
+      - name: Run Frontend PNPM Audit
         working-directory: ./frontend
-        run: npm audit --audit-level=high || true
+        run: pnpm audit --audit-level=high || true
 
   cargo-audit:
     name: Soroban Cargo Security Audit

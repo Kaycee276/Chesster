@@ -3,6 +3,7 @@
   "version": "1.37.0",
   "private": true,
   "description": "Chesster - Decentralized Chess Game on Stellar",
+  "packageManager": "pnpm@11.18.0",
   "scripts": {
     "prepare": "husky",
     "verify:branch-protection": "node scripts/verify-branch-protection.js",

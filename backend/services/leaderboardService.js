@@ -28,66 +28,78 @@ class LeaderboardService {
 
 	async getFinishedGames(category) {
 		if (this.db.prisma && this.db.prisma.game) {
-			const where = { status: "finished" };
-			if (category === "bullet") {
-				where.OR = [
-					{ time_control_seconds: { lt: 180 } },
-					{ time_control_preset: "bullet" },
-				];
-			} else if (category === "blitz") {
-				where.OR = [
-					{ time_control_seconds: { gte: 180, lte: 600 } },
-					{ time_control_preset: "blitz" },
-				];
-			} else if (category === "rapid") {
-				where.OR = [
-					{ time_control_seconds: { gt: 600 } },
-					{ time_control_preset: "rapid" },
-				];
+			try {
+				const where = { status: "finished" };
+				if (category === "bullet") {
+					where.OR = [
+						{ time_control_seconds: { lt: 180 } },
+						{ time_control_preset: "bullet" },
+					];
+				} else if (category === "blitz") {
+					where.OR = [
+						{ time_control_seconds: { gte: 180, lte: 600 } },
+						{ time_control_preset: "blitz" },
+					];
+				} else if (category === "rapid") {
+					where.OR = [
+						{ time_control_seconds: { gt: 600 } },
+						{ time_control_preset: "rapid" },
+					];
+				}
+
+				return await this.db.prisma.game.findMany({
+					where,
+					select: {
+						id: true,
+						game_code: true,
+						player_white_address: true,
+						player_black_address: true,
+						winner: true,
+						wager_amount: true,
+						time_control_seconds: true,
+						time_control_preset: true,
+						updated_at: true,
+					},
+				});
+			} catch (err) {
+				console.warn(`[LeaderboardService] prisma query failed: ${err.message}`);
 			}
-
-			return await this.db.prisma.game.findMany({
-				where,
-				select: {
-					id: true,
-					game_code: true,
-					player_white_address: true,
-					player_black_address: true,
-					winner: true,
-					wager_amount: true,
-					time_control_seconds: true,
-					time_control_preset: true,
-					updated_at: true,
-				},
-			});
 		}
 
-		let query = this.db.from("games").select("*").eq("status", "finished");
-		const { data, error } = await query;
-		if (error) throw error;
-		let games = data || [];
-		if (category === "bullet") {
-			games = games.filter(
-				(g) =>
-					(g.time_control_seconds && g.time_control_seconds < 180) ||
-					g.time_control_preset === "bullet",
-			);
-		} else if (category === "blitz") {
-			games = games.filter(
-				(g) =>
-					(g.time_control_seconds &&
-						g.time_control_seconds >= 180 &&
-						g.time_control_seconds <= 600) ||
-					g.time_control_preset === "blitz",
-			);
-		} else if (category === "rapid") {
-			games = games.filter(
-				(g) =>
-					(g.time_control_seconds && g.time_control_seconds > 600) ||
-					g.time_control_preset === "rapid",
-			);
+		if (this.db.from) {
+			try {
+				let query = this.db.from("games").select("*").eq("status", "finished");
+				const { data, error } = await query;
+				if (!error && data) {
+					let games = data;
+					if (category === "bullet") {
+						games = games.filter(
+							(g) =>
+								(g.time_control_seconds && g.time_control_seconds < 180) ||
+								g.time_control_preset === "bullet",
+						);
+					} else if (category === "blitz") {
+						games = games.filter(
+							(g) =>
+								(g.time_control_seconds &&
+									g.time_control_seconds >= 180 &&
+									g.time_control_seconds <= 600) ||
+								g.time_control_preset === "blitz",
+						);
+					} else if (category === "rapid") {
+						games = games.filter(
+							(g) =>
+								(g.time_control_seconds && g.time_control_seconds > 600) ||
+								g.time_control_preset === "rapid",
+						);
+					}
+					return games;
+				}
+			} catch (err) {
+				console.warn(`[LeaderboardService] fallback query failed: ${err.message}`);
+			}
 		}
-		return games;
+		return [];
 	}
 
 	async getPlayerProfiles(walletAddresses) {

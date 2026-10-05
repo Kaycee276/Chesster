@@ -29,13 +29,13 @@ jobs:
             backend:
               - 'backend/**'
               - 'package.json'
-              - 'package-lock.json'
+              - 'pnpm-lock.yaml'
               - '.github/workflows/ci.yml'
             frontend:
               - 'frontend/**'
               - '.lighthouserc.json'
               - 'package.json'
-              - 'package-lock.json'
+              - 'pnpm-lock.yaml'
               - '.github/workflows/ci.yml'
             contracts:
               - 'contracts/soroban/**'
@@ -54,18 +54,23 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: 'backend/.nvmrc'
-          cache: 'npm'
-          cache-dependency-path: 'backend/package-lock.json'
+          cache: 'pnpm'
+          cache-dependency-path: 'backend/pnpm-lock.yaml'
 
       - name: Install Dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run Backend Tests with Coverage
-        run: npm run test:coverage
+        run: pnpm run test:coverage
 
       - name: Upload Backend Coverage to Codecov
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
@@ -88,30 +93,35 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: 'frontend/.nvmrc'
-          cache: 'npm'
-          cache-dependency-path: 'frontend/package-lock.json'
+          cache: 'pnpm'
+          cache-dependency-path: 'frontend/pnpm-lock.yaml'
 
       - name: Install Dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       - name: Run Frontend Tests with Coverage
-        run: npm run test:coverage
+        run: pnpm run test:coverage
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
       - name: Run Lighthouse CI
-        run: npm run lhci
+        run: pnpm run lhci
 
       - name: Upload Lighthouse CI Reports
         if: always()
@@ -122,10 +132,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Check Frontend Bundle Size
-        run: npm run size-check
+        run: pnpm run size-check
 
       - name: Generate Frontend Bundle Stats
-        run: npm run build:analyze
+        run: pnpm run build:analyze
 
       - name: Upload Frontend Bundle Stats
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

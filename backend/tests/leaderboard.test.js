@@ -11,6 +11,23 @@ function buildApp() {
 }
 
 describe("GET /api/leaderboard", () => {
+	beforeEach(() => {
+		jest.spyOn(leaderboardService, "getFinishedGames").mockResolvedValue([
+			{
+				player_white_address: "WHITE_ADDR",
+				player_black_address: "BLACK_ADDR",
+				winner: "white",
+				wager_amount: 10,
+				time_control_seconds: 300,
+			},
+		]);
+		jest.spyOn(leaderboardService, "getPlayerProfiles").mockResolvedValue(new Map());
+	});
+
+	afterEach(() => {
+		jest.restoreAllMocks();
+	});
+
 	it("returns 200 and leaderboard array matching LeaderboardEntry schema", async () => {
 		const res = await request(buildApp()).get("/api/leaderboard");
 		expect(res.status).toBe(200);

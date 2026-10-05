@@ -1,27 +1,28 @@
-# Install dependencies in a disposable stage, then remove development tools
-# before copying the production dependencies into the runtime image.
-FROM node:20-alpine AS builder
+# Install dependencies in a disposable stage, then copy production dependencies into the runtime image.
+FROM node:22-alpine AS builder
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci && npm prune --omit=dev
+RUN corepack enable && corepack prepare pnpm@latest --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
+RUN pnpm install --frozen-lockfile --prod
 
 # Keep a development target for docker-compose local development.
-FROM node:20-alpine AS dev
+FROM node:22-alpine AS dev
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+RUN corepack enable && corepack prepare pnpm@latest --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml* ./
+RUN pnpm install --frozen-lockfile
 COPY --chown=node:node . .
 USER node
 ENV NODE_ENV=development
 EXPOSE 3001
-CMD ["npm", "run", "dev"]
+CMD ["pnpm", "run", "dev"]
 
 # Production runtime contains only the app and production dependencies.
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
-COPY --chown=node:node package.json package-lock.json ./
+COPY --chown=node:node package.json pnpm-lock.yaml ./
 COPY --chown=node:node . .
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 CMD wget -qO- http://localhost:3001/health || exit 1
