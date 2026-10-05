@@ -1,3 +1,16 @@
+# [1.38.0](https://github.com/Kaycee276/Chesster/compare/v1.37.0...v1.38.0) (2026-10-05)
+
+
+### Bug Fixes
+
+* **health:** update database provider name to Neon PostgreSQL and simplify status page design ([c86a588](https://github.com/Kaycee276/Chesster/commit/c86a5883999ed7070753a6b21caed75b061d7ce2))
+* **ui:** improve mobile responsiveness and remove overlapping banners and floating controls ([c113498](https://github.com/Kaycee276/Chesster/commit/c11349829ceed5c08838418488be351a4e1a35e1))
+
+
+### Features
+
+* **frontend:** add live system status and endpoint telemetry page at /status ([5c6be4e](https://github.com/Kaycee276/Chesster/commit/5c6be4e28e6910cb68307127deb19f8f1ef60788))
+
 # [1.37.0](https://github.com/Kaycee276/Chesster/compare/v1.36.1...v1.37.0) (2026-10-04)
 
 
