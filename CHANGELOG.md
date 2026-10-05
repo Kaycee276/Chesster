@@ -1,3 +1,10 @@
+## [1.38.3](https://github.com/Kaycee276/Chesster/compare/v1.38.2...v1.38.3) (2026-10-05)
+
+
+### Bug Fixes
+
+* **seo:** add meta description and robots.txt for Lighthouse SEO compliance ([55047cb](https://github.com/Kaycee276/Chesster/commit/55047cbfdf358e10d46fa19f4bf6fa000628da20))
+
 ## [1.38.2](https://github.com/Kaycee276/Chesster/compare/v1.38.1...v1.38.2) (2026-10-05)
 
 
