@@ -69,6 +69,10 @@ jobs:
 
       - name: Run Backend Tests with Coverage
         run: pnpm run test:coverage
+        env:
+          DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/postgres'
+          SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
+          NODE_OPTIONS: '--experimental-vm-modules --experimental-require-module'
 
       - name: Upload Backend Coverage to Codecov
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
