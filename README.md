@@ -141,7 +141,7 @@ If you find Chesster valuable, consider supporting development:
 
 ## 🤝 Contributing
 
-Contributions are welcome. Chesster currently uses `master` as its default branch; open pull requests against `master`. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the branch workflow and [DEVELOPMENT.md](./DEVELOPMENT.md) for local CI checks.
+Contributions are welcome! All active development pull requests should target the `dev` branch. See [CONTRIBUTING.md](./CONTRIBUTING.md) for full branch workflow and [DEVELOPMENT.md](./DEVELOPMENT.md) for running local CI checks.
 
 ## 📄 License
 

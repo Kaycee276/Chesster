@@ -52,22 +52,22 @@ npm install
 
 ### 4. Running CI Checks Locally
 
-Before opening a Pull Request targeting `master`, run the checks relevant to your changes. These commands mirror the repository's existing GitHub Actions workflows:
+Before opening a Pull Request targeting `dev`, run the checks relevant to your changes. These commands mirror the repository's existing GitHub Actions workflows:
 
 - **Frontend lint, type check, tests, and build**:
   ```bash
   cd frontend
-  npm ci
-  npm run lint
-  npx tsc --noEmit
-  npm run test:coverage
-  npm run build
+  pnpm install --frozen-lockfile
+  pnpm run lint
+  pnpm exec tsc --noEmit
+  pnpm run test:coverage
+  pnpm run build
   ```
 - **Backend tests and coverage**:
   ```bash
   cd backend
-  npm ci
-  npm run test:coverage
+  pnpm install --frozen-lockfile
+  pnpm run test:coverage
   ```
 - **Soroban formatting, lint, tests, and optimized build**:
   ```bash
@@ -76,12 +76,6 @@ Before opening a Pull Request targeting `master`, run the checks relevant to you
   cargo clippy --all-targets --all-features -- -D warnings
   cargo test
   make optimize
-  ```
-
-- **Repository formatting** (for Prettier-managed files):
-  ```bash
-  npm ci
-  npm run format:check
   ```
 
 ---

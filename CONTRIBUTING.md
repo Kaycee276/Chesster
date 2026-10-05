@@ -69,19 +69,19 @@ flowchart LR
   B -->|pull request| U
 ```
 
-### 3. Start every change from the current `master`
+### 3. Start every change from the current `dev`
 
-Do not work directly on `master`. Update your local copy first, then create one focused branch. Replace the sample name with a concise description of your change.
+Do not work directly on `dev` or `master`. Update your local copy first, then create one focused branch. Replace the sample name with a concise description of your change.
 
 ```bash
-git switch master
+git switch dev
 git fetch upstream
-git pull --ff-only upstream master
-git push origin master
+git pull --ff-only upstream dev
+git push origin dev
 git switch -c docs/describe-your-change
 ```
 
-If `git switch` is unavailable, use `git checkout master` and `git checkout -b docs/describe-your-change` instead.
+If `git switch` is unavailable, use `git checkout dev` and `git checkout -b docs/describe-your-change` instead.
 
 ### 4. Make, verify, and save the change
 
@@ -102,15 +102,15 @@ Use `git add <file>` rather than `git add .` when you have unrelated local chang
 git push -u origin docs/describe-your-change
 ```
 
-Open the URL Git prints, choose `master` in `Kaycee276/Chesster` as the base branch, and use a Conventional Commit PR title. In the description, explain the change, list checks run, and add `Closes #149` (or the issue you completed).
+Open the URL Git prints, choose `dev` in `Kaycee276/Chesster` as the base branch, and use a Conventional Commit PR title. In the description, explain the change, list checks run, and add `Closes #149` (or the issue you completed).
 
 ### Keeping an open branch current
 
-Before addressing review feedback, incorporate the latest `master` without creating a merge commit:
+Before addressing review feedback, incorporate the latest `dev` without creating a merge commit:
 
 ```bash
 git fetch upstream
-git rebase upstream/master
+git rebase upstream/dev
 git push --force-with-lease
 ```
 
@@ -118,13 +118,37 @@ If Git reports a conflict, resolve the marked files, run `git add <resolved-file
 
 ## 🌿 Branching & Pull Request Workflow
 
-Chesster currently uses `master` as its default development branch. Branch from the latest `master` and open pull requests targeting `master`; the existing semantic-release workflow manages production releases.
+### Default Branch: `dev`
+All active development happens on the `dev` branch. The `master` / `main` branch is reserved for stable, production-ready releases only.
 
-- Branch from the current `upstream/master`; PRs target `master`.
-- Keep one issue or tightly related change per branch and PR.
-- Never force-push `master`. `--force-with-lease` is appropriate only for your own feature branch after a rebase.
-- Use the [branch names](#branch-naming-pattern) and [commit format](#commit-messages--pull-request-titles) below.
-- Keep commits reviewable and do not commit secrets, `.env` files, generated build output, or unrelated formatting changes.
+### How to Contribute
+1. **Fork** the repository (external contributors) or create a branch (team members).
+2. **Branch off `dev`**:
+   ```bash
+   git checkout dev
+   git pull upstream dev
+   git checkout -b feature/your-feature-name
+   ```
+3. **Make your changes**, commit using [Conventional Commits](https://www.conventionalcommits.org/).
+4. **Push to your fork/branch** and open a Pull Request **targeting `dev`**.
+5. **Wait for CI checks** to pass (automated via GitHub Actions).
+6. **Address review feedback** if requested.
+7. **Merge** after approval (maintainers only).
+
+### Branch Protection Rules
+- ❌ Direct pushes to `master` / `main` are **not allowed**.
+- ❌ Direct pushes to `dev` are **not allowed**.
+- ✅ All changes must go through a Pull Request.
+- ✅ CI status checks must pass before merging.
+- ✅ At least 1 maintainer approval is required.
+
+### Branch Naming Convention
+- `feature/` — New features
+- `fix/` — Bug fixes
+- `docs/` — Documentation changes
+- `test/` — Test additions/modifications
+- `refactor/` — Code refactoring
+- `chore/` — Maintenance tasks
 
 ---
 
