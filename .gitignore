@@ -12,6 +12,7 @@ dist-ssr/
 build/
 target/
 coverage/
+.lighthouseci/
 
 # Rust/Soroban
 contracts/soroban/target/
