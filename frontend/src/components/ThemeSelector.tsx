@@ -78,7 +78,7 @@ export default function ThemeSelector({ hideFloating = false }: { hideFloating?:
 			p.startsWith("/overlay") ||
 			p.startsWith("/spectate") ||
 			(p !== "/" &&
-				!["/tournaments", "/puzzles", "/referrals", "/leaderboard", "/analysis"].includes(p) &&
+				!["/tournaments", "/puzzles", "/referrals", "/leaderboard", "/analysis", "/status"].includes(p) &&
 				!p.startsWith("/profile") &&
 				!p.startsWith("/tournaments/"));
 	}

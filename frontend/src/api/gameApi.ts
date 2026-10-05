@@ -51,7 +51,7 @@ export async function getCsrfToken(): Promise<string | null> {
 }
 
 export async function csrfFetch(url: string, init: RequestInit = {}): Promise<Response> {
-	let token = await getCsrfToken();
+	const token = await getCsrfToken();
 
 	const headers = new Headers(init.headers);
 	if (token) {

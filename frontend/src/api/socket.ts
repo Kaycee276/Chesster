@@ -163,3 +163,7 @@ class SocketService {
 }
 
 export const socketService = new SocketService();
+
+export function getSocket(): Socket {
+	return socketService.connect();
+}

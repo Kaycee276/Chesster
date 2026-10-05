@@ -5,7 +5,7 @@ import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 import { useWalletStore } from "../store/walletStore";
 import { api } from "../api/gameApi";
-import { Clock, Users, ChevronRight, Trophy, BarChart3, Share2, Copy, Check } from "lucide-react";
+import { Clock, Users, ChevronRight, Trophy, BarChart3, Share2, Copy, Check, Activity } from "lucide-react";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "./WalletDropdown";
 import { getTimeCategory, isValidTimeControl } from "../utils/timeControl";
@@ -674,6 +674,14 @@ export default function GameLobby() {
 							>
 							<BarChart3 size={14} className="text-(--accent-primary)" />
 							Leaderboard
+						</button>
+						<button
+							onClick={() => navigate("/status")}
+							className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-(--text-secondary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+							title="View live endpoint & service status"
+						>
+							<Activity size={14} className="text-emerald-400" />
+							Status
 						</button>
 					</nav>
 				</div>
