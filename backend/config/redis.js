@@ -16,8 +16,8 @@ function createClient(url) {
 		enableOfflineQueue: false,
 		maxRetriesPerRequest: 1,
 		connectTimeout: 2000,
-		// Keep reconnecting in the background, backing off up to 10s.
-		retryStrategy: (attempt) => Math.min(attempt * 500, 10000),
+		// In test mode, don't retry repeatedly to avoid open handles/timers
+		retryStrategy: process.env.NODE_ENV === "test" ? null : (attempt) => Math.min(attempt * 500, 10000),
 	});
 
 	redis.on("ready", () => {
@@ -67,6 +67,15 @@ async function getRedisConnection(timeoutMs = 2000) {
 
 /** Close the connection (graceful shutdown / tests). */
 async function closeRedis() {
+	reportedDown = false;
+	if (pubClient) {
+		try { await pubClient.quit(); } catch (_) { pubClient.disconnect(); }
+		pubClient = null;
+	}
+	if (subClient) {
+		try { await subClient.quit(); } catch (_) { subClient.disconnect(); }
+		subClient = null;
+	}
 	if (!client) return;
 	const redis = client;
 	client = null;
@@ -81,6 +90,9 @@ let pubClient = null;
 let subClient = null;
 
 function getPubSubClients() {
+	if (process.env.NODE_ENV === "test" && !process.env.TEST_ENABLE_REDIS) {
+		return { pubClient: null, subClient: null };
+	}
 	if (!process.env.REDIS_URL) return { pubClient: null, subClient: null };
 	if (!pubClient) {
 		pubClient = createClient(process.env.REDIS_URL);
