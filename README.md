@@ -9,6 +9,7 @@ A fully decentralized, two-player chess game built on the Stellar network using 
 ![Chesster](https://img.shields.io/badge/Stellar-Soroban-black?style=flat-square&logo=stellar)
 ![React](https://img.shields.io/badge/React-TypeScript-blue?style=flat-square&logo=react)
 ![Node.js](https://img.shields.io/badge/Node.js-Express-green?style=flat-square&logo=node.js)
+[![Fund my work on FLOSSAfrica](https://flossafrica.com/badge.svg)](https://flossafrica.com/m/kaycee276?p=Chesster)
 
 ## 🏗 Architecture
 
@@ -131,6 +132,12 @@ The project includes comprehensive test suites:
 
 - **Smart Contract**: `cd contracts/soroban && cargo test`
 - **Backend**: `cd backend && npm test`
+
+## 💖 Support & Funding
+
+If you find Chesster valuable, consider supporting development:
+
+[![Fund my work on FLOSSAfrica](https://flossafrica.com/badge.svg)](https://flossafrica.com/m/kaycee276?p=Chesster)
 
 ## 🤝 Contributing
 
