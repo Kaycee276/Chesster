@@ -1,3 +1,10 @@
+## [1.38.1](https://github.com/Kaycee276/Chesster/compare/v1.38.0...v1.38.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **test:** resolve Node 22 ESM require error, test env variables, and redis handles ([6a6b6a4](https://github.com/Kaycee276/Chesster/commit/6a6b6a425c59fcdbdc98c9c5aea8590a7b9b35d2))
+
 # [1.38.0](https://github.com/Kaycee276/Chesster/compare/v1.37.0...v1.38.0) (2026-10-05)
 
 
