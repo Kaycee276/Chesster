@@ -3,7 +3,6 @@ name: Release & Changelog Workflow
 on:
   push:
     branches:
-      - main
       - master
 
 permissions:
