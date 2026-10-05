@@ -1,3 +1,10 @@
+## [1.38.4](https://github.com/Kaycee276/Chesster/compare/v1.38.3...v1.38.4) (2026-10-05)
+
+
+### Bug Fixes
+
+* **build:** configure visualizer plugin for bundle stats generation ([5c701f9](https://github.com/Kaycee276/Chesster/commit/5c701f992a78391cbab32f07b600d012bebd8df6))
+
 ## [1.38.3](https://github.com/Kaycee276/Chesster/compare/v1.38.2...v1.38.3) (2026-10-05)
 
 
