@@ -14,7 +14,6 @@ import {
   Share2,
   Copy,
   Check,
-  Activity,
 } from "lucide-react";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "./WalletDropdown";
@@ -625,14 +624,6 @@ export default function GameLobby() {
             >
               <BarChart3 size={14} className="text-(--accent-primary) shrink-0" />
               <span className="hidden sm:inline">Leaderboard</span>
-            </button>
-            <button
-              onClick={() => navigate("/status")}
-              className="flex items-center gap-1 sm:gap-1.5 rounded-lg px-2 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold text-(--text-secondary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
-              title="View live endpoint & service status"
-            >
-              <Activity size={14} className="text-emerald-400 shrink-0" />
-              <span className="hidden sm:inline">Status</span>
             </button>
           </nav>
         </div>
