@@ -1,6 +1,6 @@
 {
   "name": "chesster",
-  "version": "1.38.1",
+  "version": "1.38.2",
   "private": true,
   "description": "Chesster - Decentralized Chess Game on Stellar",
   "packageManager": "pnpm@11.18.0",
