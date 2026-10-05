@@ -2,12 +2,26 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
+import { visualizer } from "rollup-plugin-visualizer";
+
+const analyzeBundle = process.env.ANALYZE === "true";
 
 // https://vite.dev/config/
 export default defineConfig({
 	plugins: [
 		react(),
 		tailwindcss(),
+		...(analyzeBundle
+			? [
+					visualizer({
+						filename: "dist/stats.html",
+						template: "treemap",
+						open: false,
+						gzipSize: true,
+						brotliSize: true,
+					}),
+				]
+			: []),
 		// Service worker + PWA support. The service worker precaches the built
 		// app shell and static chessboard assets for offline play, and the
 		// public/manifest.json enables "add to home screen" on mobile.
