@@ -1,14 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import {
-  Coins,
-  Crown,
-  RefreshCw,
-  Search,
-  Trophy,
-  Users,
-  Wallet,
-} from "lucide-react";
+import { Coins, Crown, RefreshCw, Search, Trophy, Users, Wallet } from "lucide-react";
 import {
   fetchTournaments,
   joinTournament,
@@ -87,14 +79,7 @@ function Spinner({ size = 16 }: { size?: number }) {
       viewBox="0 0 24 24"
       fill="none"
     >
-      <circle
-        className="opacity-25"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
-      />
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path
         className="opacity-75"
         fill="currentColor"
@@ -155,10 +140,8 @@ function TournamentCard({
 
   const count = t.participant_count ?? 0;
   const maxPlayers = t.max_players > 0 ? t.max_players : 0;
-  const percent =
-    maxPlayers > 0 ? Math.min(100, Math.round((count / maxPlayers) * 100)) : 0;
-  const countdown =
-    t.status === "open" && t.starts_at ? formatCountdown(t.starts_at, now) : "";
+  const percent = maxPlayers > 0 ? Math.min(100, Math.round((count / maxPlayers) * 100)) : 0;
+  const countdown = t.status === "open" && t.starts_at ? formatCountdown(t.starts_at, now) : "";
 
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-(--border) bg-(--bg-secondary) p-5 transition-colors hover:border-(--accent-primary)/40">
@@ -166,9 +149,7 @@ function TournamentCard({
       <div className="flex items-center justify-between gap-2 min-h-6">
         <StatusBadge status={t.status} />
         {countdown && (
-          <span className="text-xs font-semibold text-(--text-secondary)">
-            {countdown}
-          </span>
+          <span className="text-xs font-semibold text-(--text-secondary)">{countdown}</span>
         )}
       </div>
 
@@ -184,9 +165,7 @@ function TournamentCard({
           </span>
           <span className="text-2xl font-bold leading-tight">
             {formatXLM(t.prize_pool)}{" "}
-            <span className="text-sm font-semibold text-(--text-secondary)">
-              XLM
-            </span>
+            <span className="text-sm font-semibold text-(--text-secondary)">XLM</span>
           </span>
         </div>
         <span className="rounded-full border border-(--border) bg-(--bg) px-2.5 py-1 text-xs font-semibold text-(--text-secondary)">
@@ -202,9 +181,7 @@ function TournamentCard({
             {count}/{maxPlayers || "?"} players
           </span>
           {t.status === "open" && maxPlayers > 0 && count >= maxPlayers && (
-            <span className="ml-auto text-[10px] font-semibold text-(--warning)">
-              Full
-            </span>
+            <span className="ml-auto text-[10px] font-semibold text-(--warning)">Full</span>
           )}
         </div>
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-(--bg-tertiary)">
@@ -220,9 +197,7 @@ function TournamentCard({
         <div className="flex items-center gap-1.5 text-xs text-(--warning)">
           <Crown size={12} />
           <span>Winner:</span>
-          <span className="font-mono font-semibold">
-            {shortenAddress(t.winner_address)}
-          </span>
+          <span className="font-mono font-semibold">{shortenAddress(t.winner_address)}</span>
         </div>
       )}
 
@@ -308,9 +283,7 @@ export default function TournamentPage() {
         }
       } catch (err: unknown) {
         if (active) {
-          setError(
-            err instanceof Error ? err.message : "Failed to load tournaments",
-          );
+          setError(err instanceof Error ? err.message : "Failed to load tournaments");
         }
       } finally {
         if (active) setLoading(false);
@@ -327,9 +300,7 @@ export default function TournamentPage() {
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
     return tournaments.filter(
-      (t) =>
-        matchesFilter(t, filter) &&
-        (!query || t.title.toLowerCase().includes(query)),
+      (t) => matchesFilter(t, filter) && (!query || t.title.toLowerCase().includes(query))
     );
   }, [tournaments, filter, search]);
 
@@ -350,9 +321,7 @@ export default function TournamentPage() {
   }, [tournaments]);
 
   // Tick the countdown clock only while a visible card shows one.
-  const hasCountdowns = visible.some(
-    (t) => t.status === "open" && !!t.starts_at,
-  );
+  const hasCountdowns = visible.some((t) => t.status === "open" && !!t.starts_at);
   useEffect(() => {
     if (!hasCountdowns) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -371,17 +340,12 @@ export default function TournamentPage() {
       setJoinedIds((prev) => new Set(prev).add(t.id));
       setTournaments((prev) =>
         prev.map((x) =>
-          x.id === t.id
-            ? { ...x, participant_count: (x.participant_count ?? 0) + 1 }
-            : x,
-        ),
+          x.id === t.id ? { ...x, participant_count: (x.participant_count ?? 0) + 1 } : x
+        )
       );
       addToast(`You're in! Good luck in "${t.title}"`, "success");
     } catch (err: unknown) {
-      addToast(
-        err instanceof Error ? err.message : "Failed to join tournament",
-        "error",
-      );
+      addToast(err instanceof Error ? err.message : "Failed to join tournament", "error");
     } finally {
       setJoiningId(null);
     }
@@ -390,17 +354,15 @@ export default function TournamentPage() {
   return (
     <div className="h-svh w-screen overflow-hidden flex flex-col bg-(--bg)">
       {/* ── Header bar ── */}
-      <header className="shrink-0 h-14 flex items-center justify-between px-5 sm:px-8 border-b border-(--border)/40">
+      <header className="shrink-0 h-14 flex items-center justify-between px-3 sm:px-8 border-b border-(--border)/40 gap-2">
         <div className="flex items-center gap-3">
           <Link
             to="/"
-            className="text-xl font-bold tracking-tight hover:opacity-80 transition-opacity"
+            className="text-lg sm:text-xl font-bold tracking-tight hover:opacity-80 transition-opacity"
           >
             Chesster
           </Link>
-          <span className="hidden sm:block text-(--text-tertiary) text-xs">
-            Tournament Hub
-          </span>
+          <span className="hidden sm:block text-(--text-tertiary) text-xs">Tournament Hub</span>
         </div>
         <WalletDropdown />
       </header>
@@ -412,8 +374,8 @@ export default function TournamentPage() {
           <div>
             <h1 className="text-3xl font-bold">&#127942; Tournaments</h1>
             <p className="mt-1 text-sm text-(--text-secondary)">
-              Compete in on-chain chess events &#183; entry fees and prize pools
-              are escrowed on Stellar
+              Compete in on-chain chess events &#183; entry fees and prize pools are escrowed on
+              Stellar
             </p>
           </div>
 
@@ -433,9 +395,7 @@ export default function TournamentPage() {
                   {f.label}
                   <span
                     className={`rounded-full px-1.5 text-[10px] font-mono ${
-                      filter === f.key
-                        ? "bg-white/20"
-                        : "bg-(--bg-tertiary) text-(--text-tertiary)"
+                      filter === f.key ? "bg-white/20" : "bg-(--bg-tertiary) text-(--text-tertiary)"
                     }`}
                   >
                     {counts[f.key]}
@@ -471,9 +431,7 @@ export default function TournamentPage() {
           {/* Error banner */}
           {error && (
             <div className="flex items-center justify-between gap-3 rounded-xl border border-(--error)/40 bg-(--error)/10 px-4 py-3">
-              <p className="text-sm text-(--error)">
-                Couldn&#8217;t load tournaments: {error}
-              </p>
+              <p className="text-sm text-(--error)">Couldn&#8217;t load tournaments: {error}</p>
               <button
                 onClick={() => setRefreshKey((k) => k + 1)}
                 className="flex shrink-0 items-center gap-1.5 rounded-lg bg-(--error)/15 px-3 py-1.5 text-xs font-semibold text-(--error) hover:bg-(--error)/25 transition-colors"

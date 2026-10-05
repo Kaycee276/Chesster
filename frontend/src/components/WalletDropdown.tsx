@@ -26,12 +26,14 @@ export default function WalletDropdown() {
 
   useEffect(() => {
     if (!address) return;
-    fetchAccountBalances(address).then((balances) => {
-      const native = balances.find((b) => b.assetCode === "XLM");
-      if (native) setBalance(parseFloat(native.balance).toFixed(2));
-    }).catch(() => {
-      setBalance("0");
-    });
+    fetchAccountBalances(address)
+      .then((balances) => {
+        const native = balances.find((b) => b.assetCode === "XLM");
+        if (native) setBalance(parseFloat(native.balance).toFixed(2));
+      })
+      .catch(() => {
+        setBalance("0");
+      });
   }, [address]);
 
   useEffect(() => {
@@ -57,9 +59,10 @@ export default function WalletDropdown() {
     }
   };
 
+  const shortenAddr = (addr: string) => `${addr.slice(0, 4)}…${addr.slice(-4)}`;
   const activeBalance = address ? balance : "0";
   const displayBalance = isStreamerMode ? "•••• XLM" : `${activeBalance} XLM`;
-  const displayAddress = isStreamerMode && address ? `${address.slice(0, 4)}...${address.slice(-4)}` : address;
+  const displayAddress = isStreamerMode ? "••••••••" : address ? shortenAddr(address) : "";
 
   // Not connected — show wallet picker button
   if (!address) {
@@ -67,11 +70,16 @@ export default function WalletDropdown() {
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-2 text-sm bg-(--bg-secondary) hover:bg-(--bg-tertiary) px-3 py-1.5 rounded-lg border border-(--border) transition-colors"
+          className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm bg-(--bg-secondary) hover:bg-(--bg-tertiary) px-2.5 sm:px-3 py-1.5 rounded-lg border border-(--border) transition-colors shrink-0"
         >
-          <Wallet size={14} />
-          Connect Wallet
-          <ChevronDown size={14} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
+          <Wallet size={14} className="shrink-0" />
+          <span>
+            <span className="hidden xs:inline">Connect </span>Wallet
+          </span>
+          <ChevronDown
+            size={14}
+            className={`shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`}
+          />
         </button>
 
         {isOpen && (
@@ -84,9 +92,7 @@ export default function WalletDropdown() {
                   disabled={connecting !== null}
                   className="flex flex-col items-start w-full px-3 py-2 text-sm text-(--text-secondary) hover:text-(--text) hover:bg-(--bg-tertiary) rounded-lg transition-colors disabled:opacity-50"
                 >
-                  <span className="font-medium">
-                    {connecting === type ? "Connecting…" : label}
-                  </span>
+                  <span className="font-medium">{connecting === type ? "Connecting…" : label}</span>
                   <span className="text-[11px] text-(--text-tertiary)">{hint}</span>
                 </button>
               ))}
@@ -99,15 +105,22 @@ export default function WalletDropdown() {
 
   // Connected — show address + disconnect
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative shrink-0" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 text-sm font-mono bg-(--bg-secondary) hover:bg-(--bg-tertiary) px-3 py-1.5 rounded-lg border border-(--border) transition-colors"
+        className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-mono bg-(--bg-secondary) hover:bg-(--bg-tertiary) px-2.5 sm:px-3 py-1.5 rounded-lg border border-(--border) transition-colors shrink-0"
       >
-        {walletType && <span className="text-[10px] text-(--text-tertiary) font-sans capitalize">{walletType}</span>}
-        <span className="text-xs text-(--text-secondary)">{displayBalance}</span>
+        {walletType && (
+          <span className="hidden md:inline text-[10px] text-(--text-tertiary) font-sans capitalize">
+            {walletType}
+          </span>
+        )}
+        <span className="hidden sm:inline text-xs text-(--text-secondary)">{displayBalance}</span>
         <span>{displayAddress}</span>
-        <ChevronDown size={14} className={`transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        <ChevronDown
+          size={14}
+          className={`shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`}
+        />
       </button>
 
       {isOpen && (
