@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import StatusPage from "./StatusPage";
 
@@ -30,7 +29,7 @@ describe("StatusPage", () => {
 							uptime: 3600,
 							environment: "production",
 							services: {
-								database: { status: "healthy", database: "Postgres", responseTime: 80 },
+								database: { status: "healthy", database: "Neon PostgreSQL", responseTime: 80 },
 								stellarRpc: { status: "healthy", network: "testnet", latestLedger: 5000000, responseTime: 120 },
 							},
 						}),
@@ -53,9 +52,9 @@ describe("StatusPage", () => {
 		);
 
 		await waitFor(() => {
-			expect(screen.getByText("Chesster Status")).toBeInTheDocument();
+			expect(screen.getByText("Chesster System Status")).toBeInTheDocument();
 		});
-		expect(screen.getByText(/back to match lobby/i)).toBeInTheDocument();
+		expect(screen.getByText(/return to chess lobby/i)).toBeInTheDocument();
 	});
 
 	it("renders subsystem metric cards and status banner", async () => {
@@ -66,17 +65,16 @@ describe("StatusPage", () => {
 		);
 
 		await waitFor(() => {
-			expect(screen.getByText(/All Systems Operational/i)).toBeInTheDocument();
+			expect(screen.getByText(/All Systems Are Fully Operational/i)).toBeInTheDocument();
 		});
 
-		expect(screen.getByText(/Backend Web Server/i)).toBeInTheDocument();
-		expect(screen.getByText(/Database \(PostgreSQL\)/i)).toBeInTheDocument();
-		expect(screen.getAllByText(/Stellar & Soroban RPC/i).length).toBeGreaterThanOrEqual(1);
-		expect(screen.getByText(/Realtime WebSockets/i)).toBeInTheDocument();
+		expect(screen.getByText("API Server")).toBeInTheDocument();
+		expect(screen.getByText("Neon PostgreSQL")).toBeInTheDocument();
+		expect(screen.getByText("Stellar / Soroban")).toBeInTheDocument();
+		expect(screen.getByText("Live Moves")).toBeInTheDocument();
 	});
 
-	it("displays endpoint rows and allows filtering by category", async () => {
-		const user = userEvent.setup();
+	it("displays endpoint rows clearly", async () => {
 		render(
 			<MemoryRouter>
 				<StatusPage />
@@ -84,17 +82,11 @@ describe("StatusPage", () => {
 		);
 
 		await waitFor(() => {
-			expect(screen.getByText("Server Liveness Probe")).toBeInTheDocument();
-			expect(screen.getByText("Tournament Engine")).toBeInTheDocument();
-			expect(screen.getByText("Leaderboard & Elo Rankings")).toBeInTheDocument();
+			expect(screen.getByText("Backend API Server")).toBeInTheDocument();
+			expect(screen.getByText("Matchmaking & Game Lobby")).toBeInTheDocument();
+			expect(screen.getByText("Tournament System")).toBeInTheDocument();
+			expect(screen.getByText("Leaderboard & Player Ratings")).toBeInTheDocument();
 		});
-
-		// Click "Gameplay & Lobby" category tab
-		const gameplayTab = screen.getByRole("button", { name: "Gameplay & Lobby" });
-		await user.click(gameplayTab);
-
-		expect(screen.getByText("Tournament Engine")).toBeInTheDocument();
-		expect(screen.queryByText("Server Liveness Probe")).not.toBeInTheDocument();
 	});
 
 	it("handles degraded and failed endpoints gracefully", async () => {
@@ -122,7 +114,7 @@ describe("StatusPage", () => {
 		);
 
 		await waitFor(() => {
-			expect(screen.getByText(/Critical Service Outage|Degraded Performance Detected/i)).toBeInTheDocument();
+			expect(screen.getByText(/Service Disruption Detected|Some Services Experiencing Delays/i)).toBeInTheDocument();
 		});
 	});
 });

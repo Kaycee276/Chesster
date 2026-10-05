@@ -14,7 +14,7 @@ const RPC_URL = process.env.STELLAR_RPC_URL || "https://soroban-testnet.stellar.
 const NETWORK_PASSPHRASE = process.env.STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
 
 /**
- * Verify Supabase database connectivity
+ * Verify Neon PostgreSQL database connectivity
  * @returns {object} Database health status
  */
 async function checkDatabaseHealth() {
@@ -28,7 +28,7 @@ async function checkDatabaseHealth() {
     if (error) {
       return {
         status: "unhealthy",
-        database: "Supabase",
+        database: "Neon PostgreSQL",
         error: error.message,
         responseTime: Date.now() - startTime,
       };
@@ -36,19 +36,19 @@ async function checkDatabaseHealth() {
 
     const responseTime = Date.now() - startTime;
     logger.logPerformance("Database health check", responseTime, {
-      service: "Supabase",
+      service: "Neon PostgreSQL",
     });
 
     return {
       status: "healthy",
-      database: "Supabase",
+      database: "Neon PostgreSQL",
       responseTime,
     };
   } catch (error) {
     logger.error("Database health check failed", error);
     return {
       status: "unhealthy",
-      database: "Supabase",
+      database: "Neon PostgreSQL",
       error: error.message,
     };
   }
