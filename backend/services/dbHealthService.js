@@ -2,6 +2,10 @@ const supabase = require("../config/supabase");
 
 const DEFAULT_TIMEOUT_MS = 2000;
 const SLOW_QUERY_THRESHOLD_MS = 1000;
+const CACHE_TTL_MS = 3000;
+
+let cachedHealth = null;
+let lastCheckTime = 0;
 
 function roundLatency(durationMs) {
   return Math.round(durationMs * 100) / 100;
@@ -19,7 +23,17 @@ function withTimeout(promise, timeoutMs) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function checkDbHealth({ client = supabase, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+function clearDbHealthCache() {
+  cachedHealth = null;
+  lastCheckTime = 0;
+}
+
+async function checkDbHealth({ client = supabase, timeoutMs = DEFAULT_TIMEOUT_MS, bypassCache = false } = {}) {
+  const now = Date.now();
+  if (!bypassCache && cachedHealth && (now - lastCheckTime < CACHE_TTL_MS)) {
+    return { ...cachedHealth, cached: true };
+  }
+
   const start = process.hrtime.bigint();
 
   try {
@@ -29,28 +43,43 @@ async function checkDbHealth({ client = supabase, timeoutMs = DEFAULT_TIMEOUT_MS
 
     if (result?.error) throw new Error(result.error.message || "Database query failed");
     if (latencyMs >= SLOW_QUERY_THRESHOLD_MS) {
-      return {
+      const payload = {
         status: "unhealthy",
         latencyMs,
         error: `Database response exceeded ${SLOW_QUERY_THRESHOLD_MS}ms threshold`,
         pool: { active: null, idle: null },
       };
+      cachedHealth = payload;
+      lastCheckTime = Date.now();
+      return payload;
     }
 
-    return {
+    const payload = {
       status: "healthy",
       latencyMs,
       pool: { active: null, idle: null },
     };
+    cachedHealth = payload;
+    lastCheckTime = Date.now();
+    return payload;
   } catch (error) {
     const latencyMs = roundLatency(Number(process.hrtime.bigint() - start) / 1e6);
-    return {
+    const payload = {
       status: "unhealthy",
       latencyMs,
       error: error instanceof Error ? error.message : "Database health check failed",
       pool: { active: null, idle: null },
     };
+    cachedHealth = payload;
+    lastCheckTime = Date.now();
+    return payload;
   }
 }
 
-module.exports = { checkDbHealth, DEFAULT_TIMEOUT_MS, SLOW_QUERY_THRESHOLD_MS };
+module.exports = {
+  checkDbHealth,
+  clearDbHealthCache,
+  DEFAULT_TIMEOUT_MS,
+  SLOW_QUERY_THRESHOLD_MS,
+  CACHE_TTL_MS,
+};

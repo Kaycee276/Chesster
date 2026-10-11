@@ -89,6 +89,43 @@ async function checkStellarRpcHealth() {
 }
 
 /**
+ * GET /health/liveness
+ * Lightweight liveness probe - confirms process alive without querying external dependencies
+ */
+router.get(["/health/liveness", "/liveness"], (req, res) => {
+  const memUsage = process.memoryUsage();
+  res.status(200).json({
+    status: "ok",
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    memory: {
+      rssMb: Math.round((memUsage.rss / 1024 / 1024) * 100) / 100,
+      heapUsedMb: Math.round((memUsage.heapUsed / 1024 / 1024) * 100) / 100,
+      heapTotalMb: Math.round((memUsage.heapTotal / 1024 / 1024) * 100) / 100,
+    },
+    environment: process.env.NODE_ENV || "development",
+  });
+});
+
+/**
+ * GET /health/readiness
+ * Readiness probe with cached DB evaluation and strict 2s timeout
+ */
+router.get(["/health/readiness", "/readiness"], async (req, res) => {
+  const dbHealth = await checkDbHealth();
+  const isHealthy = dbHealth.status === "healthy";
+  const statusCode = isHealthy ? 200 : 503;
+
+  res.status(statusCode).json({
+    status: isHealthy ? "ready" : "not_ready",
+    timestamp: new Date().toISOString(),
+    components: {
+      database: dbHealth,
+    },
+  });
+});
+
+/**
  * GET /api/health
  * Basic health check endpoint - quick liveness probe
  */
@@ -109,8 +146,8 @@ router.get("/health", (req, res) => {
  * Database readiness probe with latency and pool diagnostics.
  */
 router.get("/health/db", async (req, res) => {
-	const health = await checkDbHealth();
-	res.status(health.status === "healthy" ? 200 : 503).json(health);
+  const health = await checkDbHealth();
+  res.status(health.status === "healthy" ? 200 : 503).json(health);
 });
 
 /**
@@ -123,7 +160,6 @@ router.get("/status", async (req, res) => {
   try {
     const startTime = Date.now();
 
-    // Check all services in parallel
     const [databaseHealth, stellarRpcHealth] = await Promise.all([
       checkDatabaseHealth(),
       checkStellarRpcHealth(),
