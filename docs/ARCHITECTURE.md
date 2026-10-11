@@ -74,3 +74,7 @@ stateDiagram-v2
 - The contract coordinator is authorized for configuration and final settlement actions; protect this key and use a controlled operational process.
 - The API is authoritative for off-chain chess state, but it cannot move player funds without the contract’s authorization rules.
 - Socket.IO events improve responsiveness; REST reads and contract transaction results are the recovery path after missed events or reconnection.
+
+## Smart Contract Integration & Soroban Escrow
+
+For an exhaustive guide covering Soroban instance storage keys, `DataKey` persistence, error codes (0-49), token 7-decimal conversions, and local testing with `stellar-cli`, refer to the [Soroban Smart Contract Integration Guide](SOROBAN_INTEGRATION.md).
