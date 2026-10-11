@@ -13,7 +13,7 @@ A fully decentralized, two-player chess game built on the Stellar network using 
 
 ## 🏗 Architecture
 
-For component responsibilities, trust boundaries, and match/escrow sequence diagrams, see the [architecture guide](docs/ARCHITECTURE.md).
+For component responsibilities, trust boundaries, and match/escrow sequence diagrams, see the [architecture guide](docs/ARCHITECTURE.md). For smart contract entrypoints, Soroban escrow storage layouts, error code catalog, and local CLI testing workflows, see the [Soroban Integration Guide](docs/SOROBAN_INTEGRATION.md).
 
 ```text
 Chesster/
