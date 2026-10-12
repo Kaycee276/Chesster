@@ -29,7 +29,7 @@
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-i18next": "^17.0.15",
+    "react-i18next": "^17.0.16",
     "react-router-dom": "^7.13.0",
     "socket.io-client": "^4.8.3",
     "tailwindcss": "^4.1.18",
