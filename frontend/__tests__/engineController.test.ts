@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { EngineController, type EngineResponse } from "../src/workers/engineController";
+import {
+	EngineController,
+	configureEngine,
+	type EngineResponse,
+} from "../src/workers/engineController";
 
 const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const AFTER_E4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
@@ -159,5 +163,54 @@ describe("EngineController", () => {
 			bestMove: null,
 			final: true,
 		});
+	});
+
+	it("configures depth and multi-pv options correctly", () => {
+		boot();
+		controller.setMultiPv(3);
+		expect(commands).toContain("setoption name MultiPV value 3");
+
+		controller.setDepth(20);
+		controller.handleRequest({ type: "evaluate", fen: START });
+		expect(commands.at(-1)).toBe("go depth 20");
+	});
+
+	it("supports configureEngine helper", () => {
+		boot();
+		const testCommands: string[] = [];
+		configureEngine(18, 2, { postMessage: (cmd) => testCommands.push(cmd) });
+		expect(testCommands).toEqual(["setoption name MultiPV value 2", "go depth 18"]);
+	});
+
+	it("parses info lines with depth, seldepth, multipv, nps, and pv to emit EngineMetrics", () => {
+		boot();
+		controller.setMultiPv(2);
+		controller.handleRequest({ type: "evaluate", fen: START });
+
+		controller.handleEngineOutput(
+			"info depth 14 seldepth 20 multipv 1 score cp 45 nps 750000 pv e2e4 e7e5",
+		);
+
+		const evals = evaluations();
+		expect(evals).toHaveLength(1);
+		expect(evals[0].depth).toBe(14);
+		expect(evals[0].seldepth).toBe(20);
+		expect(evals[0].nps).toBe(750000);
+		expect(evals[0].metrics).toEqual({
+			depth: 14,
+			seldepth: 20,
+			score: { type: "cp", value: 45 },
+			multipv: 1,
+			nps: 750000,
+			pv: ["e2e4", "e7e5"],
+		});
+
+		// Emits secondary PV line when multiPv >= 2
+		controller.handleEngineOutput(
+			"info depth 14 seldepth 19 multipv 2 score cp 30 nps 750000 pv d2d4 d7d5",
+		);
+		expect(evaluations()).toHaveLength(2);
+		expect(evaluations()[1].multipv).toBe(2);
+		expect(evaluations()[1].bestMove).toBe("d2d4");
 	});
 });

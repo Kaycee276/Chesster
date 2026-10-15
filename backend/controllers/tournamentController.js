@@ -114,10 +114,14 @@ class TournamentController {
 				});
 			}
 
-			const participant = await tournamentModel.addParticipant(
-				id,
-				walletAddress,
-				participantCount + 1,
+			const { executeWithRetry } = require("../database/transactionRetry");
+			const participant = await executeWithRetry(
+				async () => tournamentModel.addParticipant(
+					id,
+					walletAddress,
+					participantCount + 1,
+				),
+				{ context: `register-player-${id}-${walletAddress}` }
 			);
 
 			res.status(201).json({
@@ -125,6 +129,49 @@ class TournamentController {
 				participant,
 				participantCount: participantCount + 1,
 			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/** POST /api/tournaments/:id/advance */
+	async advanceRound(req, res, next) {
+		try {
+			const { id } = req.validated?.params || req.params;
+			const { completedMatchId, winnerAddress, nextRound } = req.validated?.body || req.body;
+			const { executeWithRetry } = require("../database/transactionRetry");
+
+			const result = await executeWithRetry(
+				async () => {
+					if (completedMatchId && winnerAddress) {
+						return await tournamentService.advanceMatchWinner(id, completedMatchId, winnerAddress);
+					}
+					return await tournamentModel.advanceRound(id, nextRound);
+				},
+				{ context: `advance-round-${id}` }
+			);
+
+			res.json({ success: true, result });
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/** PUT /api/tournaments/:id/participants/:address/score */
+	async updateParticipantScore(req, res, next) {
+		try {
+			const { id, address } = req.validated?.params || req.params;
+			const { scoreDelta, score, status } = req.validated?.body || req.body;
+			const { executeWithRetry } = require("../database/transactionRetry");
+
+			const participant = await executeWithRetry(
+				async () => {
+					return await tournamentModel.updateParticipantScore(id, address, { scoreDelta, score, status });
+				},
+				{ context: `update-participant-score-${id}-${address}` }
+			);
+
+			res.json({ success: true, participant });
 		} catch (error) {
 			next(error);
 		}

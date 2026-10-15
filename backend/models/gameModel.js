@@ -15,6 +15,23 @@ const ON_CHAIN_STATUS = { PENDING: 0, ACTIVE: 1, RESOLVED: 2, REFUNDED: 3 };
 // it is ever placed into a query filter.
 const STELLAR_ADDRESS_REGEX = /^[GC][A-Z2-7]{55}$/;
 
+const ALLOWED_HISTORY_SORT_COLUMNS = new Set([
+	"id",
+	"game_code",
+	"game_type",
+	"status",
+	"player_white_address",
+	"player_black_address",
+	"wager_amount",
+	"winner",
+	"created_at",
+	"updated_at",
+	"move_count",
+	"end_reason",
+]);
+const MAX_HISTORY_PAGE = 1000;
+const MAX_HISTORY_PAGE_SIZE = 100;
+
 /**
  * Validates a caller-supplied wallet address against the strict Stellar address
  * format. Supabase/PostgREST's `.or()` filter is built from a raw string, so any
@@ -886,11 +903,54 @@ class GameModel {
 			pageSize = 20,
 			sortBy = "created_at",
 			sortOrder = "desc",
+			cursor = null,
 		} = filters;
 
-		const pageNum = Math.max(1, parseInt(page) || 1);
-		const size = Math.max(1, Math.min(100, parseInt(pageSize) || 20));
-		const offset = (pageNum - 1) * size;
+		const cursorId = typeof cursor === "object" && cursor !== null ? cursor.id : (cursor ? String(cursor).trim() : null);
+
+		// Parse and validate page parameter
+		let pageNum = 1;
+		if (page !== undefined && page !== null && page !== "") {
+			const rawPage = typeof page === "string" ? page.trim() : page;
+			const parsed = Number(rawPage);
+			if (!/^-?\d+$/.test(String(rawPage)) || !Number.isInteger(parsed) || parsed < 1) {
+				throw new Error("Invalid page: must be a positive integer greater than or equal to 1");
+			}
+			if (parsed > MAX_HISTORY_PAGE) {
+				throw new Error(`Page exceeds maximum allowed limit of ${MAX_HISTORY_PAGE}`);
+			}
+			pageNum = parsed;
+		}
+
+		// Parse and validate pageSize parameter
+		let size = 20;
+		if (pageSize !== undefined && pageSize !== null && pageSize !== "") {
+			const rawSize = typeof pageSize === "string" ? pageSize.trim() : pageSize;
+			const parsed = Number(rawSize);
+			if (!/^-?\d+$/.test(String(rawSize)) || !Number.isInteger(parsed) || parsed < 1) {
+				throw new Error("Invalid pageSize: must be a positive integer between 1 and 100");
+			}
+			size = Math.min(MAX_HISTORY_PAGE_SIZE, parsed);
+		}
+
+		// Validate sortBy column against allowlist
+		const cleanSortBy = typeof sortBy === "string" ? sortBy.trim() : "created_at";
+		if (!ALLOWED_HISTORY_SORT_COLUMNS.has(cleanSortBy)) {
+			throw new Error(
+				`Invalid sortBy column: '${cleanSortBy}'. Allowed columns: ${Array.from(ALLOWED_HISTORY_SORT_COLUMNS).join(", ")}`
+			);
+		}
+
+		// Normalize sort direction to ascending or descending
+		const rawOrder = typeof sortOrder === "string" ? sortOrder.trim().toLowerCase() : "desc";
+		let sortDirection;
+		if (rawOrder === "asc" || rawOrder === "ascending") {
+			sortDirection = true;
+		} else if (rawOrder === "desc" || rawOrder === "descending") {
+			sortDirection = false;
+		} else {
+			throw new Error("Invalid sortOrder: must be 'asc' or 'desc'");
+		}
 
 		let query = supabase
 			.from("games")
@@ -919,25 +979,62 @@ class GameModel {
 			query = query.lte("created_at", dateTo);
 		}
 
-		const sortDirection = sortOrder === "asc" ? true : false;
-		query = query.order(sortBy, { ascending: sortDirection });
-		query = query.range(offset, offset + size - 1);
+		let cursorGame = null;
+		if (cursorId) {
+			const cursorQuery = supabase
+				.from("games")
+				.select("id, created_at, updated_at")
+				.eq("id", cursorId);
+			const res = typeof cursorQuery.maybeSingle === "function"
+				? await cursorQuery.maybeSingle()
+				: await cursorQuery.single();
+			cursorGame = res?.data || null;
+			if (cursorGame && cursorGame.created_at && cleanSortBy === "created_at") {
+				if (!sortDirection) {
+					query = query.lt("created_at", cursorGame.created_at);
+				} else {
+					query = query.gt("created_at", cursorGame.created_at);
+				}
+			}
+		}
 
-		const { data, error, count } = await query;
+		query = query.order(cleanSortBy, { ascending: sortDirection });
+
+		let data, error, count;
+		if (cursorId && cursorGame) {
+			query = query.limit(size + 1);
+			const res = await query;
+			data = res.data;
+			error = res.error;
+			count = res.count;
+		} else {
+			const offset = (pageNum - 1) * size;
+			query = query.range(offset, offset + size);
+			const res = await query;
+			data = res.data;
+			error = res.error;
+			count = res.count;
+		}
 
 		if (error) throw error;
 
-		const totalPages = Math.ceil(count / size);
+		const rows = data || [];
+		const hasMore = rows.length > size;
+		const paginatedData = hasMore ? rows.slice(0, size) : rows;
+		const nextCursor = hasMore && paginatedData.length > 0 ? paginatedData[paginatedData.length - 1].id : null;
+		const totalPages = count !== null && count !== undefined ? Math.ceil(count / size) : (hasMore ? pageNum + 1 : pageNum);
 
 		return {
-			data: data || [],
+			data: paginatedData,
+			nextCursor,
+			hasMore,
 			pagination: {
 				page: pageNum,
 				pageSize: size,
-				total: count,
+				total: count ?? paginatedData.length,
 				totalPages,
-				hasNextPage: pageNum < totalPages,
-				hasPreviousPage: pageNum > 1,
+				hasNextPage: hasMore,
+				hasPreviousPage: pageNum > 1 || Boolean(cursorId),
 			},
 		};
 	}
@@ -1144,4 +1241,7 @@ const gameModel = new GameModel();
 // Expose the address validator for direct unit testing without changing the
 // default export contract used across the codebase.
 gameModel.assertValidStellarAddress = assertValidStellarAddress;
+gameModel.ALLOWED_HISTORY_SORT_COLUMNS = ALLOWED_HISTORY_SORT_COLUMNS;
+gameModel.MAX_HISTORY_PAGE = MAX_HISTORY_PAGE;
+gameModel.MAX_HISTORY_PAGE_SIZE = MAX_HISTORY_PAGE_SIZE;
 module.exports = gameModel;

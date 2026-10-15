@@ -10,12 +10,14 @@ export type EngineStatus = "loading" | "ready" | "error" | "unsupported";
 
 interface Options {
 	depth?: number;
+	multiPv?: number;
 	enabled?: boolean;
 }
 
 interface State {
 	status: EngineStatus;
 	evaluation: EngineEvaluation | null;
+	variations: EngineEvaluation[];
 }
 
 function isTabHidden(): boolean {
@@ -33,15 +35,17 @@ function isTabHidden(): boolean {
  */
 export function useStockfishEvaluation(
 	fen: string | null,
-	{ depth = DEFAULT_SEARCH_DEPTH, enabled = true }: Options = {},
+	{ depth = DEFAULT_SEARCH_DEPTH, multiPv = 1, enabled = true }: Options = {},
 ) {
 	const [state, setState] = useState<State>(() => ({
 		status: typeof Worker === "undefined" ? "unsupported" : "loading",
 		evaluation: null,
+		variations: [],
 	}));
 	const workerRef = useRef<Worker | null>(null);
 	const fenRef = useRef(fen);
 	const depthRef = useRef(depth);
+	const multiPvRef = useRef(multiPv);
 	const completedFenRef = useRef<string | null>(null);
 
 	// Spawn the worker once per enabled session.
@@ -53,6 +57,10 @@ export function useStockfishEvaluation(
 		});
 		workerRef.current = worker;
 
+		if (multiPvRef.current > 1) {
+			worker.postMessage({ type: "setMultiPv", lines: multiPvRef.current });
+		}
+
 		worker.onmessage = (event: MessageEvent<EngineResponse>) => {
 			const message = event.data;
 			if (message.type === "ready") {
@@ -61,7 +69,16 @@ export function useStockfishEvaluation(
 				// Ignore late results for positions that are no longer displayed.
 				if (message.evaluation.fen !== fenRef.current) return;
 				if (message.evaluation.final) completedFenRef.current = message.evaluation.fen;
-				setState({ status: "ready", evaluation: message.evaluation });
+				setState((prev) => {
+					const pvIndex = (message.evaluation.multipv ?? 1) - 1;
+					const newVariations = [...prev.variations];
+					newVariations[pvIndex] = message.evaluation;
+					return {
+						status: "ready",
+						evaluation: message.evaluation.multipv === 1 || !message.evaluation.multipv ? message.evaluation : prev.evaluation,
+						variations: newVariations,
+					};
+				});
 			} else if (message.type === "error") {
 				setState((prev) => ({ ...prev, status: "error" }));
 			}
@@ -79,14 +96,16 @@ export function useStockfishEvaluation(
 	useEffect(() => {
 		fenRef.current = fen;
 		depthRef.current = depth;
+		multiPvRef.current = multiPv;
 
 		const worker = workerRef.current;
 		if (!worker) return;
 
+		worker.postMessage({ type: "setMultiPv", lines: multiPv } satisfies EngineRequest);
 		const request: EngineRequest =
 			fen && !isTabHidden() ? { type: "evaluate", fen, depth } : { type: "stop" };
 		worker.postMessage(request);
-	}, [fen, depth, enabled]);
+	}, [fen, depth, multiPv, enabled]);
 
 	// Pause while the tab is hidden; resume when it is visible again.
 	useEffect(() => {

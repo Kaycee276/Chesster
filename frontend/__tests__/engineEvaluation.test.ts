@@ -20,6 +20,8 @@ describe("parseUciInfo", () => {
 		);
 		expect(info).toEqual({
 			depth: 12,
+			seldepth: 17,
+			nps: 500000,
 			multipv: 1,
 			score: { type: "cp", value: 34 },
 			bound: null,

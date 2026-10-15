@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Copy, Check, ExternalLink, RefreshCw, Share2, Trophy, Handshake, Frown, X } from "lucide-react";
 import type { GameOutcome } from "../utils/gameResult";
 import { buildResultTitle, buildShareText, buildTwitterShareUrl, getEndReasonLabel } from "../utils/gameResult";
@@ -32,6 +33,7 @@ export default function GameResultModal({
 	onRematch,
 	onClose,
 }: GameResultModalProps) {
+	const { t } = useTranslation();
 	const [copied, setCopied] = useState(false);
 	const [rematchSent, setRematchSent] = useState(false);
 
@@ -48,6 +50,30 @@ export default function GameResultModal({
 	const handleRematch = () => {
 		onRematch();
 		setRematchSent(true);
+	};
+
+	const getTitle = () => {
+		if (outcome === "win") return t("gameResult.titleWin", { defaultValue: buildResultTitle(outcome) });
+		if (outcome === "loss") return t("gameResult.titleLoss", { defaultValue: buildResultTitle(outcome) });
+		return t("gameResult.titleDraw", { defaultValue: buildResultTitle(outcome) });
+	};
+
+	const getReason = () => {
+		if (!endReason) return t("gameResult.gameOver", { defaultValue: "Game Over" });
+		const keyMap: Record<string, string> = {
+			checkmate: "gameResult.checkmate",
+			resignation: "gameResult.resignation",
+			stalemate: "gameResult.drawStalemate",
+			time: "gameResult.timeOut",
+			disconnect: "gameResult.opponentDisconnected",
+			draw_agreed: "gameResult.drawAgreement",
+			threefold_repetition: "gameResult.threefoldRepetition",
+			fivefold_repetition: "gameResult.fivefoldRepetition",
+			"50_move_rule": "gameResult.rules50",
+			"75_move_rule": "gameResult.rules75",
+		};
+		const key = keyMap[endReason];
+		return key ? t(key, { defaultValue: getEndReasonLabel(endReason) }) : getEndReasonLabel(endReason);
 	};
 
 	const shareUrl = buildTwitterShareUrl(
@@ -73,8 +99,8 @@ export default function GameResultModal({
 
 				<div className="flex flex-col items-center gap-2">
 					<OutcomeIcon outcome={outcome} />
-					<h2 className="text-3xl font-extrabold">{buildResultTitle(outcome)}</h2>
-					<p className="text-sm text-(--text-secondary)">{getEndReasonLabel(endReason)}</p>
+					<h2 className="text-3xl font-extrabold">{getTitle()}</h2>
+					<p className="text-sm text-(--text-secondary)">{getReason()}</p>
 				</div>
 
 				{typeof eloDelta === "number" && (
@@ -93,7 +119,7 @@ export default function GameResultModal({
 						className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 transition-colors text-sm font-semibold"
 					>
 						<ExternalLink size={14} />
-						View Escrow Payout
+						{t("gameResult.viewEscrowPayout", { defaultValue: "View Escrow Payout" })}
 					</a>
 				)}
 
@@ -103,7 +129,9 @@ export default function GameResultModal({
 						className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-(--bg-tertiary) hover:bg-(--border) text-sm font-semibold transition-colors"
 					>
 						{copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-						{copied ? "Copied!" : "Copy PGN"}
+						{copied
+							? t("gameResult.copied", { defaultValue: "Copied!" })
+							: t("gameResult.copyPgn", { defaultValue: "Copy PGN" })}
 					</button>
 
 					<button
@@ -112,7 +140,9 @@ export default function GameResultModal({
 						className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-60 disabled:cursor-not-allowed text-sm font-semibold transition-colors"
 					>
 						<RefreshCw size={14} />
-						{rematchSent ? "Rematch Requested" : "Request Rematch"}
+						{rematchSent
+							? t("gameResult.rematchRequested", { defaultValue: "Rematch Requested" })
+							: t("gameResult.requestRematch", { defaultValue: "Request Rematch" })}
 					</button>
 
 					<a
@@ -122,7 +152,7 @@ export default function GameResultModal({
 						className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-sky-500/15 border border-sky-500/30 text-sky-400 hover:bg-sky-500/25 transition-colors text-sm font-semibold"
 					>
 						<Share2 size={14} />
-						Share on X
+						{t("gameResult.shareOnX", { defaultValue: "Share on X" })}
 					</a>
 				</div>
 			</div>

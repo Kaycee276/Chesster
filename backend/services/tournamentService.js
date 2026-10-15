@@ -182,84 +182,91 @@ class TournamentService {
 	 * @returns {Promise<object>} Advancement result
 	 */
 	async advanceMatchWinner(tournamentId, matchId, winnerAddress) {
-		const match = await tournamentModel.getMatchById(matchId);
-		if (!match) throw new Error(`Match not found: ${matchId}`);
+		const { executeWithRetry } = require("../database/transactionRetry");
 
-		// Set match winner and mark completed if not already
-		if (match.status !== "completed" && match.status !== "bye") {
-			await tournamentModel.setMatchWinner(matchId, winnerAddress);
-		}
+		return executeWithRetry(
+			async () => {
+				const match = await tournamentModel.getMatchById(matchId);
+				if (!match) throw new Error(`Match not found: ${matchId}`);
 
-		// Find downstream next-round match
-		const nextMatch = await tournamentModel.getNextRoundMatch(tournamentId, matchId);
+				// Set match winner and mark completed if not already
+				if (match.status !== "completed" && match.status !== "bye") {
+					await tournamentModel.setMatchWinner(matchId, winnerAddress);
+				}
 
-		if (nextMatch) {
-			// In single elimination, match M in round R feeds into match ceil(M/2) in round R+1
-			// Odd match numbers take player_one, even match numbers take player_two
-			const targetSlot = match.match_number % 2 === 1 ? "player_one" : "player_two";
-			const updatedNextMatch = await tournamentModel.assignPlayerToMatch(
-				nextMatch.id,
-				winnerAddress,
-				targetSlot,
-			);
+				// Find downstream next-round match
+				const nextMatch = await tournamentModel.getNextRoundMatch(tournamentId, matchId);
 
-			let gameCode = null;
-
-			// If both opponents are now set, automatically instantiate game room
-			if (updatedNextMatch.player_one && updatedNextMatch.player_two) {
-				try {
-					const game = await gameModel.createGame(
-						"chess",
-						null,
-						updatedNextMatch.player_one,
-						600,
+				if (nextMatch) {
+					// In single elimination, match M in round R feeds into match ceil(M/2) in round R+1
+					// Odd match numbers take player_one, even match numbers take player_two
+					const targetSlot = match.match_number % 2 === 1 ? "player_one" : "player_two";
+					const updatedNextMatch = await tournamentModel.assignPlayerToMatch(
+						nextMatch.id,
+						winnerAddress,
+						targetSlot,
 					);
-					if (game && game.game_code) {
-						gameCode = game.game_code;
-						await gameModel.joinGame(gameCode, "black", updatedNextMatch.player_two);
-						await tournamentModel.linkGameToMatch(nextMatch.id, gameCode);
+
+					let gameCode = null;
+
+					// If both opponents are now set, automatically instantiate game room
+					if (updatedNextMatch.player_one && updatedNextMatch.player_two) {
+						try {
+							const game = await gameModel.createGame(
+								"chess",
+								null,
+								updatedNextMatch.player_one,
+								600,
+							);
+							if (game && game.game_code) {
+								gameCode = game.game_code;
+								await gameModel.joinGame(gameCode, "black", updatedNextMatch.player_two);
+								await tournamentModel.linkGameToMatch(nextMatch.id, gameCode);
+							}
+						} catch (err) {
+							logger.error(`[TournamentService] Error instantiating game for match ${nextMatch.id}:`, {
+								error: err.message,
+							});
+						}
+					}
+
+					return {
+						completedMatchId: matchId,
+						winner: winnerAddress,
+						nextMatch: updatedNextMatch,
+						gameCode,
+						isChampionship: false,
+					};
+				}
+
+				// No next match => This was the Championship / Finals!
+				try {
+					await tournamentModel.updateTournamentStatus(tournamentId, "completed");
+				} catch (err) {
+					logger.warn("[TournamentService] Failed to set tournament completed status:", err.message);
+				}
+
+				// Trigger on-chain payout distribution via escrowService
+				let escrowTx = null;
+				try {
+					if (escrowService && typeof escrowService.completeTournament === "function") {
+						escrowTx = await escrowService.completeTournament(tournamentId, [winnerAddress], [10000]);
 					}
 				} catch (err) {
-					logger.error(`[TournamentService] Error instantiating game for match ${nextMatch.id}:`, {
+					logger.error(`[TournamentService] On-chain tournament payout error for ${tournamentId}:`, {
 						error: err.message,
 					});
 				}
-			}
 
-			return {
-				completedMatchId: matchId,
-				winner: winnerAddress,
-				nextMatch: updatedNextMatch,
-				gameCode,
-				isChampionship: false,
-			};
-		}
-
-		// No next match => This was the Championship / Finals!
-		try {
-			await tournamentModel.updateTournamentStatus(tournamentId, "completed");
-		} catch (err) {
-			logger.warn("[TournamentService] Failed to set tournament completed status:", err.message);
-		}
-
-		// Trigger on-chain payout distribution via escrowService
-		let escrowTx = null;
-		try {
-			if (escrowService && typeof escrowService.completeTournament === "function") {
-				escrowTx = await escrowService.completeTournament(tournamentId, [winnerAddress], [10000]);
-			}
-		} catch (err) {
-			logger.error(`[TournamentService] On-chain tournament payout error for ${tournamentId}:`, {
-				error: err.message,
-			});
-		}
-
-		return {
-			completedMatchId: matchId,
-			winner: winnerAddress,
-			isChampionship: true,
-			escrowTx,
-		};
+				return {
+					completedMatchId: matchId,
+					winner: winnerAddress,
+					isChampionship: true,
+					escrowTx,
+				};
+			},
+			{ context: `advance-match-winner-${tournamentId}-${matchId}` }
+		);
 	}
 
 	/**

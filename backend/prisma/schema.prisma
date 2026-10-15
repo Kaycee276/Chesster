@@ -80,6 +80,9 @@ model Game {
 
   @@index([game_code], map: "idx_games_code")
   @@index([variant], map: "idx_games_variant")
+  @@index([player_white_address, created_at(sort: Desc)], map: "idx_games_white_player_created_at")
+  @@index([player_black_address, created_at(sort: Desc)], map: "idx_games_black_player_created_at")
+  @@index([status, created_at(sort: Desc)], map: "idx_games_status_created_at")
   @@map("games")
 }
 
