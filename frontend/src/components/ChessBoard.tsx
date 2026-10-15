@@ -92,6 +92,8 @@ const WHITE_PIECE_STYLE: React.CSSProperties = {
   WebkitTextStroke: "0.5px #000",
 };
 
+import { triggerHaptic } from "../utils/haptics";
+
 const BLACK_PIECE_STYLE: React.CSSProperties = {
   color: "#111111",
   textShadow: "-1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff",
@@ -363,6 +365,12 @@ function ChessBoardInner() {
   const unreadCount = useGameStore((s) => s.unreadCount);
   const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
   const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
+  const isHapticsEnabled = useGameStore((s) => s.isHapticsEnabled);
+  const toggleHaptics = useGameStore((s) => s.toggleHaptics);
+
+  const safeHaptic = (type: "pickup" | "drop" | "error") => {
+    if (isHapticsEnabled) triggerHaptic(type);
+  };
 
   const boardTheme = useThemeStore((s) => s.boardTheme);
   const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
@@ -802,8 +810,9 @@ function ChessBoardInner() {
     const toastId = addToast("Moving...", "loading");
     try {
       await makeMove(from, to, promotion);
-      if ("vibrate" in navigator) navigator.vibrate(15);
+      safeHaptic("drop");
     } catch (error: unknown) {
+      safeHaptic("error");
       addToast(friendlyError(error), "error");
       selectSquare(null);
     } finally {
@@ -827,6 +836,7 @@ function ChessBoardInner() {
       if ((playerColor === "white" && !isWhitePiece) || (playerColor === "black" && isWhitePiece))
         return;
       selectSquare([row, col]);
+      safeHaptic("pickup");
     } else {
       if (selectedSquare[0] === row && selectedSquare[1] === col) {
         selectSquare(null);
@@ -835,14 +845,19 @@ function ChessBoardInner() {
       const clickedPiece = board[row][col];
       if (clickedPiece !== "." && isPlayerPiece(clickedPiece)) {
         selectSquare([row, col]);
+        safeHaptic("pickup");
         return;
+      }
+
+      if (!isPossibleMove(row, col)) {
+        safeHaptic("error");
       }
 
       await commitMove(selectedSquare, [row, col]);
     }
   };
 
-  // ── Touch/mouse drag-and-drop (#253) ──────────────────────────────────────
+  // ── Touch/mouse drag-and-drop (#253, #439) ──────────────────────────────────
   // Pieces can be picked up and dragged to a target square, in addition to
   // the tap-to-select / tap-to-move flow above. Pointer Events give us a
   // single API that covers mouse, touch and pen.
@@ -887,6 +902,7 @@ function ChessBoardInner() {
     const piece = board[row][col];
     if (piece === "." || !isPlayerPiece(piece)) return;
 
+    safeHaptic("pickup");
     pendingDragRef.current = {
       row,
       col,
@@ -905,8 +921,9 @@ function ChessBoardInner() {
       const dy = e.clientY - pending.startY;
       if (Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) {
         (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-        if (pending.pointerType === "touch" && "vibrate" in navigator) navigator.vibrate(10);
+        safeHaptic("pickup");
         selectSquare([pending.row, pending.col]);
+        const yOffset = pending.pointerType === "touch" ? -30 : 0;
         setDragPiece({
           row: pending.row,
           col: pending.col,
@@ -914,13 +931,14 @@ function ChessBoardInner() {
           pointerId: pending.pointerId,
           pointerType: pending.pointerType,
           x: e.clientX,
-          y: e.clientY,
+          y: e.clientY + yOffset,
         });
       }
       return;
     }
     if (dragPiece && dragPiece.pointerId === e.pointerId) {
-      setDragPiece((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
+      const yOffset = dragPiece.pointerType === "touch" ? -30 : 0;
+      setDragPiece((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY + yOffset } : prev));
     }
   };
 
@@ -932,16 +950,87 @@ function ChessBoardInner() {
     if (!dragPiece || dragPiece.pointerId !== e.pointerId) return;
 
     const from: [number, number] = [dragPiece.row, dragPiece.col];
-    const target = squareFromPoint(e.clientX, e.clientY);
+    const yOffset = dragPiece.pointerType === "touch" ? -30 : 0;
+    const target = squareFromPoint(e.clientX, e.clientY + yOffset) || squareFromPoint(e.clientX, e.clientY);
     setDragPiece(null);
 
-    if (!target) return;
+    if (!target) {
+      safeHaptic("error");
+      return;
+    }
     const [toRow, toCol] = target;
     if (toRow === from[0] && toCol === from[1]) return;
 
     const targetPiece = board[toRow][toCol];
     if (targetPiece !== "." && isPlayerPiece(targetPiece)) {
       selectSquare([toRow, toCol]);
+      safeHaptic("pickup");
+      return;
+    }
+
+    if (!isPossibleMove(toRow, toCol)) {
+      safeHaptic("error");
+      return;
+    }
+
+    await commitMove(from, [toRow, toCol]);
+  };
+
+  // ── Native mobile touch event handlers with -30px offset (#439) ─────────
+  const handleTouchStart = (e: React.TouchEvent, row: number, col: number) => {
+    if (status !== "active" || currentTurn !== playerColor || isMoving) return;
+    if (viewingIndex !== null) return;
+    const piece = board[row][col];
+    if (piece === "." || !isPlayerPiece(piece)) return;
+
+    const touch = e.touches[0];
+    safeHaptic("pickup");
+    selectSquare([row, col]);
+    setDragPiece({
+      row,
+      col,
+      piece,
+      pointerId: -1,
+      pointerType: "touch",
+      x: touch.clientX,
+      y: touch.clientY - 30, // -30px Y-axis offset so target square remains visible
+    });
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!dragPiece) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    setDragPiece((prev) => (prev ? { ...prev, x: touch.clientX, y: touch.clientY - 30 } : null));
+  };
+
+  const handleTouchEnd = async (e: React.TouchEvent) => {
+    if (!dragPiece) return;
+    const from: [number, number] = [dragPiece.row, dragPiece.col];
+    const changedTouch = e.changedTouches[0];
+    setDragPiece(null);
+
+    if (!changedTouch) return;
+    const target =
+      squareFromPoint(changedTouch.clientX, changedTouch.clientY - 30) ||
+      squareFromPoint(changedTouch.clientX, changedTouch.clientY);
+    if (!target) {
+      safeHaptic("error");
+      return;
+    }
+
+    const [toRow, toCol] = target;
+    if (toRow === from[0] && toCol === from[1]) return;
+
+    const targetPiece = board[toRow][toCol];
+    if (targetPiece !== "." && isPlayerPiece(targetPiece)) {
+      selectSquare([toRow, toCol]);
+      safeHaptic("pickup");
+      return;
+    }
+
+    if (!isPossibleMove(toRow, toCol)) {
+      safeHaptic("error");
       return;
     }
 
@@ -1212,6 +1301,27 @@ function ChessBoardInner() {
             onClick={toggleStreamerMode}
             className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors ${
               isStreamerMode ? "bg-(--accent-primary) justify-end" : "bg-gray-600 justify-start"
+            }`}
+          >
+            <span className="w-4 h-4 rounded-full bg-white shadow-sm" />
+          </button>
+        </div>
+
+        {/* Haptic Feedback (#439) */}
+        <div className="flex items-center justify-between p-2 rounded-xl bg-(--bg) border border-(--border)">
+          <div className="flex flex-col">
+            <span className="font-medium text-(--text)">Haptic Feedback</span>
+            <span className="text-[10px] text-(--text-tertiary)">
+              Vibration on piece selection, moves, and errors
+            </span>
+          </div>
+          <button
+            onClick={toggleHaptics}
+            role="switch"
+            aria-checked={isHapticsEnabled}
+            aria-label="Toggle haptic feedback"
+            className={`w-9 h-5 flex items-center rounded-full p-0.5 transition-colors ${
+              isHapticsEnabled ? "bg-(--accent-primary) justify-end" : "bg-gray-600 justify-start"
             }`}
           >
             <span className="w-4 h-4 rounded-full bg-white shadow-sm" />
@@ -1669,7 +1779,7 @@ function ChessBoardInner() {
           {/* ── Board (fills remaining height) ── */}
           <div
             ref={boardWrapperRef}
-            className="relative flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden"
+            className="relative flex-1 min-h-0 min-w-0 flex items-center justify-center overflow-hidden chessboard-wrapper"
             style={{ touchAction: "none" }}
           >
             {viewingIndex !== null && (
@@ -1711,6 +1821,7 @@ function ChessBoardInner() {
                 onPointerMove={handleBoardPointerMove}
                 onPointerUp={endDrag}
                 onPointerCancel={handlePointerCancel}
+                onTouchMove={handleTouchMove}
               >
                 {displayBoard.map((row, rowIndex) =>
                   row.map((piece, colIndex) => {
@@ -1799,11 +1910,16 @@ function ChessBoardInner() {
                             handleSquareClick(actualRow, actualCol);
                           }
                         }}
-                        onTouchEnd={(e) => {
+                        onTouchStart={(e) => handleTouchStart(e, actualRow, actualCol)}
+                        onTouchEnd={async (e) => {
                           // Prevent the synthetic click that follows touch so the
                           // handler doesn't fire twice on mobile browsers.
                           e.preventDefault();
-                          handleSquareClick(actualRow, actualCol);
+                          if (dragPiece) {
+                            await handleTouchEnd(e);
+                          } else {
+                            handleSquareClick(actualRow, actualCol);
+                          }
                         }}
                         onMouseDown={(e) => handleSquareMouseDown(e, actualRow, actualCol)}
                         onPointerDown={(e) => handlePiecePointerDown(e, actualRow, actualCol)}
@@ -1957,10 +2073,11 @@ function ChessBoardInner() {
                 )}
               </div>
             )}
-            {/* Dragged piece follows the pointer, elevated above the board (#253) */}
+            {/* Dragged ghost piece follows the pointer, elevated above the board (#253, #439) */}
             {dragPiece && boardPx > 0 && (
               <span
-                className="fixed leading-none pointer-events-none z-50"
+                data-testid="ghost-piece-overlay"
+                className="fixed leading-none pointer-events-none z-50 ghost-piece-overlay"
                 style={
                   {
                     left: dragPiece.x,
@@ -1968,9 +2085,9 @@ function ChessBoardInner() {
                     fontSize: `calc(${boardPx}px / 8 * 0.72)`,
                     transform:
                       dragPiece.pointerType === "touch"
-                        ? "translate(-50%, -50%) scale(1.2) translateY(-10px)"
+                        ? "translate(-50%, calc(-50% - 30px)) scale(1.2)"
                         : "translate(-50%, -50%) scale(1.1)",
-                    filter: "drop-shadow(0 6px 8px rgb(0 0 0 / 0.45))",
+                    filter: "drop-shadow(0 10px 15px rgba(0, 0, 0, 0.5))",
                     transition: "transform 0.1s ease-out",
                     ...(dragPiece.piece === dragPiece.piece.toUpperCase()
                       ? WHITE_PIECE_STYLE

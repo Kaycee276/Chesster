@@ -15,6 +15,15 @@ import {
 } from "../utils/moveAccuracy";
 import { INITIAL_BOARD, getPossibleMoves, applyMove, squareToAlgebraic } from "../utils/chessUtils";
 import { loadPgn, splitPgnGames, PgnParseError, type ReplayedMove } from "../utils/pgnParser";
+import EvaluationBar from "../components/EvaluationBar";
+import AnalysisControlBar from "../components/AnalysisControlBar";
+import {
+  loadAnalysisPreferences,
+  saveAnalysisPreferences,
+  type AnalysisPreferences,
+} from "../utils/analysisPreferences";
+import { toEngineFen, formatEvaluation, type EngineEvaluation } from "../utils/engineEvaluation";
+import { useStockfishEvaluation } from "../hooks/useStockfishEvaluation";
 
 const PIECE_SYMBOLS: Record<string, string> = {
   K: "♔",
@@ -213,6 +222,56 @@ export default function AnalysisPage() {
 
   const pliesPlayed = currentIndex + 1 + (branch?.length ?? 0);
   const turnToMove: "white" | "black" = pliesPlayed % 2 === 0 ? "white" : "black";
+
+  // ── Engine Evaluation & Analysis Settings (#438) ─────────────────────────
+  const [analysisPrefs, setAnalysisPrefs] = useState<AnalysisPreferences>(() =>
+    loadAnalysisPreferences()
+  );
+
+  const currentFen = useMemo(
+    () => toEngineFen(currentBoard, turnToMove),
+    [currentBoard, turnToMove]
+  );
+
+  const { evaluation: liveEvaluation, variations } = useStockfishEvaluation(currentFen, {
+    depth: analysisPrefs.targetDepth,
+    multiPv: analysisPrefs.multiPv,
+    enabled: !analysisPrefs.isPaused,
+  });
+
+  const handleDepthChange = (depth: number) => {
+    setAnalysisPrefs((prev) => {
+      const next = { ...prev, targetDepth: depth };
+      saveAnalysisPreferences(next);
+      return next;
+    });
+  };
+
+  const handleMultiPvChange = (lines: number) => {
+    setAnalysisPrefs((prev) => {
+      const next = { ...prev, multiPv: lines };
+      saveAnalysisPreferences(next);
+      return next;
+    });
+  };
+
+  const handleTogglePause = () => {
+    setAnalysisPrefs((prev) => {
+      const next = { ...prev, isPaused: !prev.isPaused };
+      saveAnalysisPreferences(next);
+      return next;
+    });
+  };
+
+  const formattedVariations = useMemo(() => {
+    return variations
+      .filter((v): v is EngineEvaluation => Boolean(v && v.pv && v.pv.length > 0))
+      .map((v) => ({
+        multipv: v.multipv ?? 1,
+        scoreText: formatEvaluation(v.scoreCp, v.mate),
+        pv: v.pv ?? [],
+      }));
+  }, [variations]);
 
   const isPlayerPieceOf = (piece: string, color: "white" | "black") =>
     piece !== "." &&
@@ -564,7 +623,16 @@ export default function AnalysisPage() {
 
       {/* ── Board + move list ── */}
       <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-2">
-        <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden">
+        <div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden gap-2">
+          {liveEvaluation && !analysisPrefs.isPaused && (
+            <EvaluationBar
+              scoreCp={liveEvaluation.scoreCp}
+              mate={liveEvaluation.mate}
+              orientation="white"
+              depth={liveEvaluation.depth}
+              loading={!liveEvaluation}
+            />
+          )}
           <div className="w-full max-w-[min(90vw,70vh)] aspect-square">
             <div
               className="w-full h-full rounded-sm overflow-hidden shadow-2xl"
@@ -645,6 +713,19 @@ export default function AnalysisPage() {
               )}
             </div>
           )}
+
+          {/* Analysis Settings & Depth Gauge (#438) */}
+          <AnalysisControlBar
+            currentDepth={liveEvaluation?.depth ?? 0}
+            targetDepth={analysisPrefs.targetDepth}
+            nps={liveEvaluation?.nps ?? liveEvaluation?.metrics?.nps ?? 0}
+            multiPv={analysisPrefs.multiPv}
+            isPaused={analysisPrefs.isPaused}
+            variations={formattedVariations}
+            onDepthChange={handleDepthChange}
+            onMultiPvChange={handleMultiPvChange}
+            onTogglePause={handleTogglePause}
+          />
 
           <MoveNavigator
             currentMoveIndex={currentIndex}

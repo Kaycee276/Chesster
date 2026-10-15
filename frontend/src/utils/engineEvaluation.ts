@@ -7,6 +7,15 @@ import { boardToFen } from "./chessUtils";
  * - `mate`: signed moves to mate (positive = White mates), 0 when the side to
  *   move is already checkmated, or null when no mate was found.
  */
+export interface EngineMetrics {
+	depth: number;
+	seldepth: number;
+	score: { type: "cp" | "mate"; value: number };
+	multipv: number;
+	nps: number;
+	pv: string[];
+}
+
 export interface EngineEvaluation {
 	fen: string;
 	depth: number;
@@ -15,11 +24,18 @@ export interface EngineEvaluation {
 	bestMove: string | null;
 	/** True once the search reached the requested depth. */
 	final: boolean;
+	seldepth?: number;
+	nps?: number;
+	multipv?: number;
+	pv?: string[];
+	metrics?: EngineMetrics;
 }
 
 export interface UciInfo {
 	depth: number;
+	seldepth?: number;
 	multipv: number;
+	nps?: number;
 	/** Score from the side to move's point of view. */
 	score: { type: "cp" | "mate"; value: number };
 	/** Set when the score is only a lower/upper bound (aspiration re-search). */
@@ -41,7 +57,9 @@ export function parseUciInfo(line: string): UciInfo | null {
 	if (tokens[0] !== "info") return null;
 
 	let depth: number | null = null;
+	let seldepth: number | undefined = undefined;
 	let multipv = 1;
+	let nps: number | undefined = undefined;
 	let score: UciInfo["score"] | null = null;
 	let bound: UciInfo["bound"] = null;
 	let pv: string[] = [];
@@ -51,8 +69,14 @@ export function parseUciInfo(line: string): UciInfo | null {
 			case "depth":
 				depth = Number(tokens[++i]);
 				break;
+			case "seldepth":
+				seldepth = Number(tokens[++i]);
+				break;
 			case "multipv":
 				multipv = Number(tokens[++i]);
+				break;
+			case "nps":
+				nps = Number(tokens[++i]);
 				break;
 			case "score": {
 				const type = tokens[++i];
@@ -74,7 +98,7 @@ export function parseUciInfo(line: string): UciInfo | null {
 	}
 
 	if (depth === null || !Number.isFinite(depth) || !score) return null;
-	return { depth, multipv, score, bound, pv };
+	return { depth, seldepth, multipv, nps, score, bound, pv };
 }
 
 /**

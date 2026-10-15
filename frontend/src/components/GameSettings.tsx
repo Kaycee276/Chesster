@@ -7,6 +7,8 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
   const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
   const isStreamerMode = useGameStore((s) => s.isStreamerMode);
   const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
+  const isHapticsEnabled = useGameStore((s) => s.isHapticsEnabled);
+  const toggleHaptics = useGameStore((s) => s.toggleHaptics);
   const isSettingsOpen = useGameStore((s) => s.isSettingsOpen);
   const setSettingsOpen = useGameStore((s) => s.setSettingsOpen);
   const [localOpen, setLocalOpen] = useState(false);
@@ -131,6 +133,34 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   <div
                     className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
                       isStreamerMode ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Haptic Feedback Toggle (#439) */}
+            <div className="flex flex-col gap-3 pt-3 border-t border-(--border)">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Haptic Feedback</label>
+                  <p className="text-xs text-(--text-tertiary)">
+                    Subtle vibration on piece pickup, valid drops, and illegal moves
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleHaptics}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    isHapticsEnabled ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={isHapticsEnabled}
+                  aria-label="Toggle haptic feedback"
+                >
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      isHapticsEnabled ? "translate-x-5" : "translate-x-0.5"
                     }`}
                   />
                 </button>
