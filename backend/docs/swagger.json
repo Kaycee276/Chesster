@@ -118,13 +118,92 @@
             "description": "Stellar public address of the player"
           },
           {
-            "name": "limit",
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by game status (e.g. active, finished)"
+          },
+          {
+            "name": "dateFrom",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Filter games created on or after this timestamp"
+          },
+          {
+            "name": "dateTo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Filter games created on or before this timestamp"
+          },
+          {
+            "name": "page",
             "in": "query",
             "required": false,
             "schema": {
               "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1
+            },
+            "description": "1-based page number (bounded: 1 to 1000)"
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
               "default": 20
-            }
+            },
+            "description": "Number of games per page (bounded: 1 to 100)"
+          },
+          {
+            "name": "sortBy",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "game_code",
+                "game_type",
+                "status",
+                "player_white_address",
+                "player_black_address",
+                "wager_amount",
+                "winner",
+                "created_at",
+                "updated_at",
+                "move_count",
+                "end_reason"
+              ],
+              "default": "created_at"
+            },
+            "description": "Allowlisted column to sort games by"
+          },
+          {
+            "name": "sortOrder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": ["asc", "desc"],
+              "default": "desc"
+            },
+            "description": "Sort direction ('asc' or 'desc')"
           }
         ],
         "responses": {

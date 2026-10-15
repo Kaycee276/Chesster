@@ -4203,6 +4203,20 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::InvalidTournament);
         }
 
+        // Validate winners: require each winner to be an enrolled participant,
+        // and reject duplicate winner addresses (Issue #387).
+        for i in 0..winners.len() {
+            let winner = winners.get(i).unwrap();
+            if !tournament.players.contains(&winner) {
+                panic_with_error!(&env, EscrowError::InvalidTournament);
+            }
+            for j in (i + 1)..winners.len() {
+                if winner == winners.get(j).unwrap() {
+                    panic_with_error!(&env, EscrowError::InvalidTournament);
+                }
+            }
+        }
+
         let fee_recipient =
             Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
 

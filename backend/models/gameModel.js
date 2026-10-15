@@ -14,6 +14,23 @@ const ON_CHAIN_STATUS = { PENDING: 0, ACTIVE: 1, RESOLVED: 2, REFUNDED: 3 };
 // it is ever placed into a query filter.
 const STELLAR_ADDRESS_REGEX = /^[GC][A-Z2-7]{55}$/;
 
+const ALLOWED_HISTORY_SORT_COLUMNS = new Set([
+	"id",
+	"game_code",
+	"game_type",
+	"status",
+	"player_white_address",
+	"player_black_address",
+	"wager_amount",
+	"winner",
+	"created_at",
+	"updated_at",
+	"move_count",
+	"end_reason",
+]);
+const MAX_HISTORY_PAGE = 1000;
+const MAX_HISTORY_PAGE_SIZE = 100;
+
 /**
  * Validates a caller-supplied wallet address against the strict Stellar address
  * format. Supabase/PostgREST's `.or()` filter is built from a raw string, so any
@@ -887,8 +904,50 @@ class GameModel {
 			sortOrder = "desc",
 		} = filters;
 
-		const pageNum = Math.max(1, parseInt(page) || 1);
-		const size = Math.max(1, Math.min(100, parseInt(pageSize) || 20));
+		// Parse and validate page parameter
+		let pageNum = 1;
+		if (page !== undefined && page !== null && page !== "") {
+			const rawPage = typeof page === "string" ? page.trim() : page;
+			const parsed = Number(rawPage);
+			if (!/^-?\d+$/.test(String(rawPage)) || !Number.isInteger(parsed) || parsed < 1) {
+				throw new Error("Invalid page: must be a positive integer greater than or equal to 1");
+			}
+			if (parsed > MAX_HISTORY_PAGE) {
+				throw new Error(`Page exceeds maximum allowed limit of ${MAX_HISTORY_PAGE}`);
+			}
+			pageNum = parsed;
+		}
+
+		// Parse and validate pageSize parameter
+		let size = 20;
+		if (pageSize !== undefined && pageSize !== null && pageSize !== "") {
+			const rawSize = typeof pageSize === "string" ? pageSize.trim() : pageSize;
+			const parsed = Number(rawSize);
+			if (!/^-?\d+$/.test(String(rawSize)) || !Number.isInteger(parsed) || parsed < 1) {
+				throw new Error("Invalid pageSize: must be a positive integer between 1 and 100");
+			}
+			size = Math.min(MAX_HISTORY_PAGE_SIZE, parsed);
+		}
+
+		// Validate sortBy column against allowlist
+		const cleanSortBy = typeof sortBy === "string" ? sortBy.trim() : "created_at";
+		if (!ALLOWED_HISTORY_SORT_COLUMNS.has(cleanSortBy)) {
+			throw new Error(
+				`Invalid sortBy column: '${cleanSortBy}'. Allowed columns: ${Array.from(ALLOWED_HISTORY_SORT_COLUMNS).join(", ")}`
+			);
+		}
+
+		// Normalize sort direction to ascending or descending
+		const rawOrder = typeof sortOrder === "string" ? sortOrder.trim().toLowerCase() : "desc";
+		let sortDirection;
+		if (rawOrder === "asc" || rawOrder === "ascending") {
+			sortDirection = true;
+		} else if (rawOrder === "desc" || rawOrder === "descending") {
+			sortDirection = false;
+		} else {
+			throw new Error("Invalid sortOrder: must be 'asc' or 'desc'");
+		}
+
 		const offset = (pageNum - 1) * size;
 
 		let query = supabase
@@ -918,8 +977,7 @@ class GameModel {
 			query = query.lte("created_at", dateTo);
 		}
 
-		const sortDirection = sortOrder === "asc" ? true : false;
-		query = query.order(sortBy, { ascending: sortDirection });
+		query = query.order(cleanSortBy, { ascending: sortDirection });
 		query = query.range(offset, offset + size - 1);
 
 		const { data, error, count } = await query;
@@ -1143,4 +1201,7 @@ const gameModel = new GameModel();
 // Expose the address validator for direct unit testing without changing the
 // default export contract used across the codebase.
 gameModel.assertValidStellarAddress = assertValidStellarAddress;
+gameModel.ALLOWED_HISTORY_SORT_COLUMNS = ALLOWED_HISTORY_SORT_COLUMNS;
+gameModel.MAX_HISTORY_PAGE = MAX_HISTORY_PAGE;
+gameModel.MAX_HISTORY_PAGE_SIZE = MAX_HISTORY_PAGE_SIZE;
 module.exports = gameModel;

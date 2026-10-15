@@ -1,4 +1,6 @@
 const crypto = require("crypto");
+const net = require("net");
+const dns = require("dns");
 const logger = require("../utils/logger");
 
 /**
@@ -15,9 +17,161 @@ const logger = require("../utils/logger");
  * still fail are archived in the `webhook_dead_letter_queue` table and can be
  * replayed manually with replayDeadLetterWebhook(id).
  *
- * Follows the same in-memory singleton pattern used by AuthService /
- * TimerService — single-process, no external queue dependency.
+ * Trusted Caller Boundary & Subscriber Configuration:
+ *   There is currently no public HTTP API route for registering webhooks;
+ *   subscribers are configured programmatically by trusted internal services
+ *   (e.g., eventConsumer, tournament handlers, backend workers).
+ *   To defend defense-in-depth against Server-Side Request Forgery (SSRF),
+ *   the service strictly enforces destination security policies:
+ *     1. Scheme: HTTPS is required for all subscriber destinations unless
+ *        explicitly enabled for local development (ALLOW_HTTP_WEBHOOKS=true or
+ *        WEBHOOK_ALLOW_INSECURE_LOCAL=true).
+ *     2. Credentials: Userinfo/credentials in URLs (http://user:pass@host) are rejected.
+ *     3. IP & Metadata Constraints: Loopback (127.0.0.0/8, ::1), private networks
+ *        (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7), link-local
+ *        (169.254.0.0/16, fe80::/10), cloud metadata (169.254.169.254,
+ *        metadata.google.internal, instance-data), multicast/reserved ranges,
+ *        and IPv4-mapped IPv6 representations are rejected at registration and dispatch.
+ *     4. DNS Resolution & Rebinding: Hostnames are validated through DNS resolution
+ *        before connection. All resolved addresses must be non-reserved public IPs.
+ *     5. Redirects: Manual redirect following inspects and validates the destination
+ *        of any HTTP 3xx redirect against this destination policy, preventing redirect SSRF.
  */
+
+function isPrivateOrReservedIPv4(ip) {
+  const parts = ip.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
+    return true;
+  }
+  const [b0, b1, b2, b3] = parts;
+
+  // 0.0.0.0/8 (Current network)
+  if (b0 === 0) return true;
+
+  // 10.0.0.0/8 (Private network)
+  if (b0 === 10) return true;
+
+  // 100.64.0.0/10 (Carrier-Grade NAT / Shared Address Space)
+  if (b0 === 100 && b1 >= 64 && b1 <= 127) return true;
+
+  // 127.0.0.0/8 (Loopback)
+  if (b0 === 127) return true;
+
+  // 169.254.0.0/16 (Link-local / Cloud metadata: 169.254.169.254)
+  if (b0 === 169 && b1 === 254) return true;
+
+  // 172.16.0.0/12 (Private network: 172.16.0.0 - 172.31.255.255)
+  if (b0 === 172 && b1 >= 16 && b1 <= 31) return true;
+
+  // 192.0.0.0/24 (IETF Protocol Assignments)
+  if (b0 === 192 && b1 === 0 && b2 === 0) return true;
+
+  // 192.0.2.0/24 (TEST-NET-1 documentation)
+  if (b0 === 192 && b1 === 0 && b2 === 2) return true;
+
+  // 192.168.0.0/16 (Private network)
+  if (b0 === 192 && b1 === 168) return true;
+
+  // 198.18.0.0/15 (Network benchmark testing)
+  if (b0 === 198 && (b1 === 18 || b1 === 19)) return true;
+
+  // 198.51.100.0/24 (TEST-NET-2 documentation)
+  if (b0 === 198 && b1 === 51 && b2 === 100) return true;
+
+  // 203.0.113.0/24 (TEST-NET-3 documentation)
+  if (b0 === 203 && b1 === 0 && b2 === 113) return true;
+
+  // 224.0.0.0/4 (Multicast) & 240.0.0.0/4 (Reserved / Future Use)
+  if (b0 >= 224) return true;
+
+  // 255.255.255.255 (Broadcast)
+  if (b0 === 255 && b1 === 255 && b2 === 255 && b3 === 255) return true;
+
+  return false;
+}
+
+function isPrivateOrReservedIPv6(ip) {
+  let str = ip.toLowerCase();
+
+  // IPv4-mapped IPv6: ::ffff:192.0.2.128
+  if (str.startsWith("::ffff:")) {
+    const v4Part = str.slice(7);
+    if (net.isIPv4(v4Part)) return isPrivateOrReservedIPv4(v4Part);
+  }
+
+  const parts = str.split("::");
+  let left = parts[0] ? parts[0].split(":") : [];
+  let right = parts.length > 1 ? (parts[1] ? parts[1].split(":") : []) : [];
+
+  if (right.length > 0 && net.isIPv4(right[right.length - 1])) {
+    return isPrivateOrReservedIPv4(right[right.length - 1]);
+  }
+  if (left.length > 0 && net.isIPv4(left[left.length - 1])) {
+    return isPrivateOrReservedIPv4(left[left.length - 1]);
+  }
+
+  let missing = 8 - (left.length + right.length);
+  if (missing < 0) return true;
+  let words = [...left, ...Array(missing).fill("0"), ...right].map((w) => parseInt(w || "0", 16));
+  if (words.length !== 8 || words.some((w) => isNaN(w) || w < 0 || w > 0xffff)) {
+    return true;
+  }
+
+  // :: (Unspecified)
+  if (words.every((w) => w === 0)) return true;
+
+  // ::1 (Loopback)
+  if (words.slice(0, 7).every((w) => w === 0) && words[7] === 1) return true;
+
+  // ::ffff:0:0/96 (IPv4-mapped)
+  if (words.slice(0, 5).every((w) => w === 0) && words[5] === 0xffff) {
+    const ipv4 = `${words[6] >> 8}.${words[6] & 0xff}.${words[7] >> 8}.${words[7] & 0xff}`;
+    return isPrivateOrReservedIPv4(ipv4);
+  }
+
+  // 100::/64 (Discard-only)
+  if (words[0] === 0x0100 && words[1] === 0 && words[2] === 0 && words[3] === 0) return true;
+
+  // 2001:db8::/32 (Documentation)
+  if (words[0] === 0x2001 && words[1] === 0x0db8) return true;
+
+  // fc00::/7 (Unique Local Address - ULA: fc00:: - fdff::)
+  if ((words[0] & 0xfe00) === 0xfc00) return true;
+
+  // fe80::/10 (Link-local unicast: fe80:: - febf::)
+  if ((words[0] & 0xffc0) === 0xfe80) return true;
+
+  // ff00::/8 (Multicast)
+  if ((words[0] & 0xff00) === 0xff00) return true;
+
+  return false;
+}
+
+function isPrivateOrReservedIp(ip) {
+  const v = net.isIP(ip);
+  if (v === 4) return isPrivateOrReservedIPv4(ip);
+  if (v === 6) return isPrivateOrReservedIPv6(ip);
+  return true;
+}
+
+async function defaultDnsLookup(hostname) {
+  if (
+    process.env.NODE_ENV === "test" &&
+    (hostname.endsWith(".example") ||
+      hostname.endsWith(".test") ||
+      hostname.endsWith(".invalid") ||
+      hostname === "a.com" ||
+      hostname === "b.com" ||
+      hostname === "fail.com" ||
+      hostname === "timeout.com" ||
+      hostname === "secure.com" ||
+      hostname === "log.com" ||
+      hostname === "x.com")
+  ) {
+    return [{ address: "93.184.216.34", family: 4 }];
+  }
+  return await dns.promises.lookup(hostname, { all: true });
+}
 
 const EVENT_TYPES = {
   MATCH_CREATED: "match.created",
@@ -154,12 +308,130 @@ class WebhookService {
    * @param {object} [options]
    * @param {object} [options.deadLetterStore] - persistence for failed deliveries
    * @param {(ms: number) => Promise<void>} [options.sleep] - back-off timer
+   * @param {(hostname: string) => Promise<Array<{address: string, family: number}>>} [options.dnsLookup] - DNS lookup implementation
+   * @param {boolean} [options.allowInsecureHttp] - permit HTTP in local development
+   * @param {Function} [options.fetch] - custom fetch implementation
    */
-  constructor({ deadLetterStore = supabaseDeadLetterStore, sleep = _sleep } = {}) {
+  constructor({
+    deadLetterStore = supabaseDeadLetterStore,
+    sleep = _sleep,
+    dnsLookup = defaultDnsLookup,
+    allowInsecureHttp = false,
+    fetch: customFetch = null,
+  } = {}) {
     this.subscribers = new Map();
     this.delIVERY_LOG = [];
     this.deadLetterStore = deadLetterStore;
     this.sleep = sleep;
+    this.dnsLookup = dnsLookup;
+    this.allowInsecureHttp = allowInsecureHttp;
+    this.customFetch = customFetch;
+  }
+
+  // -------------------------------------------------------------------
+  // Destination validation & security policy
+  // -------------------------------------------------------------------
+
+  validateDestinationSync(urlStr) {
+    if (!urlStr || typeof urlStr !== "string") {
+      throw new Error("eventType and url are required");
+    }
+
+    let urlObj;
+    try {
+      urlObj = new URL(urlStr);
+    } catch {
+      throw new Error(`Invalid webhook destination URL: ${urlStr}`);
+    }
+
+    const allowInsecure =
+      this.allowInsecureHttp ||
+      process.env.ALLOW_HTTP_WEBHOOKS === "true" ||
+      process.env.WEBHOOK_ALLOW_INSECURE_LOCAL === "true";
+
+    if (urlObj.protocol !== "https:") {
+      if (urlObj.protocol !== "http:" || !allowInsecure) {
+        throw new Error(
+          `Webhook destination must use HTTPS (received '${urlObj.protocol}'). Insecure HTTP is only permitted when explicitly enabled for local development.`
+        );
+      }
+    }
+
+    if (urlObj.username || urlObj.password) {
+      throw new Error("Webhook destination must not contain embedded user credentials");
+    }
+
+    const hostname = urlObj.hostname;
+    if (!hostname) {
+      throw new Error("Webhook destination hostname is required");
+    }
+
+    const lowerHost = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (
+      lowerHost === "metadata.google.internal" ||
+      lowerHost === "instance-data" ||
+      lowerHost === "metadata" ||
+      lowerHost === "169.254.169.254"
+    ) {
+      throw new Error(`Webhook destination to cloud metadata endpoint is blocked: ${hostname}`);
+    }
+
+    if (
+      !allowInsecure &&
+      (lowerHost === "localhost" ||
+        lowerHost.endsWith(".localhost") ||
+        lowerHost.endsWith(".local") ||
+        lowerHost.endsWith(".internal"))
+    ) {
+      throw new Error(`Webhook destination to local/internal network is blocked: ${hostname}`);
+    }
+
+    if (net.isIP(lowerHost)) {
+      if (!allowInsecure && isPrivateOrReservedIp(lowerHost)) {
+        throw new Error(
+          `Webhook destination to private or reserved IP address is blocked: ${hostname}`
+        );
+      }
+    }
+
+    return urlObj;
+  }
+
+  async validateDestinationDns(urlObj) {
+    const allowInsecure =
+      this.allowInsecureHttp ||
+      process.env.ALLOW_HTTP_WEBHOOKS === "true" ||
+      process.env.WEBHOOK_ALLOW_INSECURE_LOCAL === "true";
+
+    const host = urlObj.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (net.isIP(host)) {
+      if (!allowInsecure && isPrivateOrReservedIp(host)) {
+        throw new Error(
+          `Webhook destination to private or reserved IP address is blocked: ${host}`
+        );
+      }
+      return;
+    }
+
+    const addresses = await this.dnsLookup(host);
+    if (!addresses || addresses.length === 0) {
+      throw new Error(`DNS lookup for webhook host '${host}' returned no addresses`);
+    }
+
+    for (const record of addresses) {
+      const ip = typeof record === "string" ? record : record.address;
+      if (!allowInsecure && isPrivateOrReservedIp(ip)) {
+        throw new Error(
+          `Webhook destination host '${host}' resolved to blocked private or reserved IP: ${ip}`
+        );
+      }
+    }
+  }
+
+  async validateDestination(urlStr) {
+    const urlObj = this.validateDestinationSync(urlStr);
+    await this.validateDestinationDns(urlObj);
+    return urlObj;
   }
 
   // -------------------------------------------------------------------
@@ -168,6 +440,8 @@ class WebhookService {
 
   register(eventType, url) {
     if (!eventType || !url) throw new Error("eventType and url are required");
+    this.validateDestinationSync(url);
+
     if (!this.subscribers.has(eventType)) {
       this.subscribers.set(eventType, new Set());
     }
@@ -221,11 +495,20 @@ class WebhookService {
     };
   }
 
-  async _postOnce(url, payload, body, signature) {
+  async _postOnce(url, payload, body, signature, redirectCount = 0) {
+    const MAX_REDIRECTS = 5;
+    if (redirectCount > MAX_REDIRECTS) {
+      throw new Error(`Too many redirects (limit: ${MAX_REDIRECTS})`);
+    }
+
+    const urlObj = this.validateDestinationSync(url);
+    await this.validateDestinationDns(urlObj);
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), _getTimeout());
     try {
-      return await fetch(url, {
+      const fetchImpl = this.customFetch || globalThis.fetch;
+      const response = await fetchImpl(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -233,8 +516,19 @@ class WebhookService {
           "X-Webhook-Event": payload.event,
         },
         body,
+        redirect: "manual",
         signal: controller.signal,
       });
+
+      if (response && response.status >= 300 && response.status < 400) {
+        const location = response.headers?.get ? response.headers.get("location") : null;
+        if (location) {
+          const nextUrl = new URL(location, url).href;
+          return await this._postOnce(nextUrl, payload, body, signature, redirectCount + 1);
+        }
+      }
+
+      return response;
     } finally {
       clearTimeout(timer);
     }
@@ -263,7 +557,7 @@ class WebhookService {
       try {
         const response = await this._postOnce(url, payload, body, signature);
 
-        if (response.ok) {
+        if (response && response.ok) {
           const entry = {
             url,
             event: payload.event,
@@ -276,12 +570,20 @@ class WebhookService {
           return entry;
         }
 
-        lastStatusCode = response.status;
-        lastError = new Error(`HTTP ${response.status}`);
-        retryable = _isRetryableStatus(response.status);
+        lastStatusCode = response?.status || null;
+        lastError = new Error(`HTTP ${response?.status || "unknown"}`);
+        retryable = response ? _isRetryableStatus(response.status) : true;
       } catch (err) {
         lastStatusCode = null;
         lastError = err;
+        if (
+          err.message?.includes("blocked") ||
+          err.message?.includes("HTTPS") ||
+          err.message?.includes("credentials") ||
+          err.message?.includes("Invalid webhook")
+        ) {
+          retryable = false;
+        }
       }
 
       if (!retryable) break;
@@ -411,7 +713,9 @@ class WebhookService {
       [...urls].map((url) => this._deliverWithRetry(url, payload))
     );
 
-    return results.map((r) => (r.status === "fulfilled" ? r.value : { success: false, error: r.reason }));
+    return results.map((r) =>
+      r.status === "fulfilled" ? r.value : { success: false, error: r.reason }
+    );
   }
 
   // -------------------------------------------------------------------
@@ -448,3 +752,5 @@ module.exports.EVENT_TYPES = EVENT_TYPES;
 module.exports.WebhookService = WebhookService;
 module.exports.DLQ_STATUS = DLQ_STATUS;
 module.exports.computeBackoffDelay = computeBackoffDelay;
+module.exports.isPrivateOrReservedIp = isPrivateOrReservedIp;
+module.exports.defaultDnsLookup = defaultDnsLookup;

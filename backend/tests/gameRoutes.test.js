@@ -69,15 +69,7 @@ describe("game and escrow route integration", () => {
 
     expect(response.status).toBe(201);
     expect(response.body).toEqual({ success: true, data: game });
-    expect(gameModel.createGame).toHaveBeenCalledWith(
-      "chess",
-      25,
-      "GWHITE",
-      600,
-      null,
-      null,
-      0,
-    );
+    expect(gameModel.createGame).toHaveBeenCalledWith("chess", 25, "GWHITE", 600, null, null, 0);
   });
 
   test("POST /api/games/:gameCode/join emits an update when game becomes active", async () => {
@@ -186,5 +178,49 @@ describe("game and escrow route integration", () => {
     expect(response.status).toBe(200);
     expect(response.text).toContain("Swagger UI");
   });
-});
 
+  test("GET /api/games returns game history and pagination metadata", async () => {
+    gameModel.getGameHistory.mockResolvedValue({
+      data: [{ id: 1, game_code: "GAME1" }],
+      pagination: {
+        page: 1,
+        pageSize: 20,
+        total: 1,
+        totalPages: 1,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      },
+    });
+
+    const response = await request(app).get(
+      "/api/games?page=1&pageSize=20&sortBy=created_at&sortOrder=desc"
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data).toHaveLength(1);
+    expect(response.body.pagination.page).toBe(1);
+    expect(gameModel.getGameHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        page: "1",
+        pageSize: "20",
+        sortBy: "created_at",
+        sortOrder: "desc",
+      })
+    );
+  });
+
+  test("GET /api/games returns 400 when input validation fails in getGameHistory", async () => {
+    gameModel.getGameHistory.mockRejectedValue(
+      new Error("Invalid sortBy column: 'malicious_field'")
+    );
+
+    const response = await request(app).get("/api/games?sortBy=malicious_field");
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      success: false,
+      error: "Invalid sortBy column: 'malicious_field'",
+    });
+  });
+});

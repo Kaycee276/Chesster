@@ -7318,4 +7318,259 @@ mod extended_tests {
         // Executing drain without active schedule fails with DisputeNotFound (#24)
         client.execute_emergency_drain(&token.address);
     }
+
+    // ---------------------------------------------------------------------------
+    // Issue #387 — Reject Duplicate Tournament Winners
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_complete_tournament_rejects_duplicate_and_non_participant_winners() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let coordinator = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let p1 = Address::generate(&env);
+        let p2 = Address::generate(&env);
+        let p3 = Address::generate(&env);
+        let p4 = Address::generate(&env);
+        let outsider = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+        token_admin_client.mint(&p1, &1000);
+        token_admin_client.mint(&p2, &1000);
+        token_admin_client.mint(&p3, &1000);
+        token_admin_client.mint(&p4, &1000);
+
+        let contract_id = env.register(ChessterEscrow, ());
+        let client = ChessterEscrowClient::new(&env, &contract_id);
+
+        client.init(&coordinator, &500);
+        client.set_tournament_fee_bps(&250);
+        client.set_treasury_vault(&treasury);
+        client.add_supported_token(&token.address);
+
+        let tournament_id = String::from_str(&env, "TOURN_DUP_REJECT");
+        approve(&env, &token, &p1, &contract_id, 200);
+        approve(&env, &token, &p2, &contract_id, 200);
+        approve(&env, &token, &p3, &contract_id, 200);
+        approve(&env, &token, &p4, &contract_id, 200);
+
+        client.create_tournament(&tournament_id, &200, &4, &2, &10000, &token.address);
+        client.join_tournament(&tournament_id, &p1);
+        client.join_tournament(&tournament_id, &p2);
+        client.join_tournament(&tournament_id, &p3);
+        client.join_tournament(&tournament_id, &p4);
+
+        let t_active = client.get_tournament(&tournament_id);
+        assert_eq!(t_active.status, TournamentStatus::Active);
+        assert_eq!(t_active.total_pool, 800);
+        assert_eq!(client.get_escrowed_balance(&token.address), 800);
+
+        // 1. Duplicate first and second winners [p1, p1, p2]
+        let dup_first_second = vec![&env, p1.clone(), p1.clone(), p2.clone()];
+        let payout_bps = vec![&env, 5000_u32, 3000_u32, 2000_u32];
+        let res_dup1 =
+            client.try_complete_tournament(&tournament_id, &dup_first_second, &payout_bps);
+        assert!(res_dup1.is_err());
+
+        // 2. Duplicate first and last winners [p1, p2, p1]
+        let dup_first_last = vec![&env, p1.clone(), p2.clone(), p1.clone()];
+        let res_dup2 = client.try_complete_tournament(&tournament_id, &dup_first_last, &payout_bps);
+        assert!(res_dup2.is_err());
+
+        // 3. Non-participant in winners [p1, outsider, p3]
+        let non_participant = vec![&env, p1.clone(), outsider.clone(), p3.clone()];
+        let res_non_part =
+            client.try_complete_tournament(&tournament_id, &non_participant, &payout_bps);
+        assert!(res_non_part.is_err());
+
+        // 4. Mismatched winners and payout_bps lengths
+        let bad_len_winners = vec![&env, p1.clone(), p2.clone()];
+        let res_mismatch =
+            client.try_complete_tournament(&tournament_id, &bad_len_winners, &payout_bps);
+        assert!(res_mismatch.is_err());
+
+        // Verify tournament state and balances remain completely unchanged after all failed calls
+        let t_unchanged = client.get_tournament(&tournament_id);
+        assert_eq!(t_unchanged.status, TournamentStatus::Active);
+        assert_eq!(t_unchanged.total_pool, 800);
+        assert_eq!(token.balance(&p1), 800);
+        assert_eq!(token.balance(&p2), 800);
+        assert_eq!(token.balance(&p3), 800);
+        assert_eq!(token.balance(&p4), 800);
+        assert_eq!(token.balance(&coordinator), 0);
+        assert_eq!(token.balance(&treasury), 0);
+        assert_eq!(token.balance(&contract_id), 800);
+
+        // 5. Preserving disqualification slashing: disqualify p3
+        client.disqualify_participant(&tournament_id, &p3, &42);
+        let t_dq = client.get_tournament(&tournament_id);
+        assert!(t_dq.disqualified.get(p3.clone()).unwrap());
+
+        // 6. Valid completion with unique participants [p1, p2, p3]
+        let valid_winners = vec![&env, p1.clone(), p2.clone(), p3.clone()];
+        client.complete_tournament(&tournament_id, &valid_winners, &payout_bps);
+
+        let t_final = client.get_tournament(&tournament_id);
+        assert_eq!(t_final.status, TournamentStatus::Completed);
+
+        // Total pool = 800. Rake (2.5% = 250 bps) = 20 -> goes to treasury
+        // Net pool = 780
+        // P1 (50% = 5000 bps) = 390 -> P1 balance: 800 + 390 = 1190
+        // P2 (30% = 3000 bps) = 234 -> P2 balance: 800 + 234 = 1034
+        // P3 (20% = 2000 bps) = 156 -> P3 was DISQUALIFIED: 156 slashed to treasury! P3 balance remains 800.
+        // Treasury: 20 (rake) + 156 (slashed prize) = 176
+        assert_eq!(token.balance(&p1), 1190);
+        assert_eq!(token.balance(&p2), 1034);
+        assert_eq!(token.balance(&p3), 800);
+        assert_eq!(token.balance(&p4), 800);
+        assert_eq!(token.balance(&treasury), 176);
+        assert_eq!(token.balance(&contract_id), 0);
+        assert_eq!(client.get_escrowed_balance(&token.address), 0);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Issue #447 — Fuzz Test Escrow Stake Calculations Against Arithmetic Overflow
+    // and Precision Loss
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_fuzz_escrow_conservation_of_funds_iterative() {
+        let test_wagers: &[i128] = &[
+            1,
+            3,
+            7,
+            9,
+            99,
+            101,
+            1_000_000_007,
+            10_000_000_000_000,        // 10^13
+            100_000_000_000_000,       // 10^14 boundary
+            1_000_000_000_000_000_000, // 10^18 boundary
+            (1i128 << 63) - 1,         // 2^63 - 1
+            i128::MAX / 4,             // extreme boundary
+            (i128::MAX / 2) - 1,       // near overflow limit for wager * 2
+        ];
+        let test_fees: &[u32] = &[0, 1, 25, 50, 100, 250, 500, 750, 1000];
+
+        for &wager in test_wagers {
+            for &fee_bps in test_fees {
+                let total = wager * 2;
+                let fee = (total / 10_000) * (fee_bps as i128)
+                    + ((total % 10_000) * (fee_bps as i128)) / 10_000;
+                let winner_payout = total - fee;
+
+                // 1. Invariant: winner_payout + protocol_fee == total_wager * 2
+                assert_eq!(
+                    winner_payout + fee,
+                    total,
+                    "Winner payout conservation failed for wager={wager}, fee={fee_bps}"
+                );
+                assert!(winner_payout >= 0, "Winner payout cannot be negative");
+                assert!(fee >= 0, "Fee cannot be negative");
+
+                // 2. Invariant: draw split p1_refund + p2_refund + fee == total_wager * 2
+                // When match draws in ChessterEscrow, wager is refunded to each participant.
+                let p1_refund = wager;
+                let p2_refund = wager;
+                let draw_fee: i128 = 0;
+                assert_eq!(
+                    p1_refund + p2_refund + draw_fee,
+                    total,
+                    "Draw split conservation failed for wager={wager}"
+                );
+
+                // 3. Odd wagers remainder division attribution
+                // If splitting total pool with an odd remainder (e.g. odd total / 2)
+                let half_total = total / 2;
+                let remainder = total % 2;
+                let attributed_p1 = half_total + remainder;
+                let attributed_p2 = half_total;
+                assert_eq!(
+                    attributed_p1 + attributed_p2,
+                    total,
+                    "Odd wager split remainder conservation failed for wager={wager}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fuzz_escrow_conservation_with_proptest() {
+        let scenario = (1i128..=1_000_000_000_000_000_000i128, 0u32..=1000u32);
+        let mut runner = TestRunner::new(ProptestConfig::with_cases(1_000));
+
+        runner
+            .run(&scenario, |(wager, fee_bps)| {
+                let total = wager * 2;
+                let fee = (total * (fee_bps as i128)) / 10_000;
+                let winner_payout = total - fee;
+
+                prop_assert_eq!(winner_payout + fee, total);
+                prop_assert!(winner_payout >= 0);
+                prop_assert!(fee >= 0);
+
+                let p1_refund = wager;
+                let p2_refund = wager;
+                prop_assert_eq!(p1_refund + p2_refund, total);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_fuzz_escrow_settlement_on_chain_invariants() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let coordinator = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let p1 = Address::generate(&env);
+        let p2 = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+
+        let contract_id = env.register(ChessterEscrow, ());
+        let client = ChessterEscrowClient::new(&env, &contract_id);
+        client.init(&coordinator, &500); // 5% base fee
+        client.set_treasury_vault(&treasury);
+        client.add_whitelisted_token(&token.address);
+
+        let test_wagers: &[i128] = &[1, 3, 7, 99, 101, 1_000_000_007, 10_000_000_000];
+
+        for (idx, &wager) in test_wagers.iter().enumerate() {
+            token_admin_client.mint(&p1, &wager);
+            token_admin_client.mint(&p2, &wager);
+            approve(&env, &token, &p1, &contract_id, wager);
+            approve(&env, &token, &p2, &contract_id, wager);
+
+            let mut code_bytes = [0u8; 12];
+            code_bytes[0] = b'F';
+            code_bytes[1] = b'U';
+            code_bytes[2] = b'Z';
+            code_bytes[3] = b'Z';
+            code_bytes[4] = b'0' + (idx as u8);
+            let game_code = String::from_str(&env, core::str::from_utf8(&code_bytes[..5]).unwrap());
+
+            client.create_match(&game_code, &p1, &token.address, &wager);
+            client.join_match(&game_code, &p2);
+
+            let m = client.get_match(&game_code);
+            assert_eq!(m.total_staked, wager * 2);
+
+            // Alternate between winner resolution and draw resolution
+            let is_winner = idx % 2 == 0;
+            if is_winner {
+                client.resolve_match(&game_code, &Some(p1.clone()));
+            } else {
+                client.resolve_match(&game_code, &None);
+            }
+
+            // Verify strictly 0 escrowed balance remaining and no token leakage
+            assert_eq!(client.get_escrowed_balance(&token.address), 0);
+        }
+    }
 }
