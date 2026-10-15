@@ -1,3 +1,19 @@
+# [1.39.0](https://github.com/Kaycee276/Chesster/compare/v1.38.4...v1.39.0) (2026-10-15)
+
+
+### Bug Fixes
+
+* resolve issues [#386](https://github.com/Kaycee276/Chesster/issues/386), [#387](https://github.com/Kaycee276/Chesster/issues/387), [#388](https://github.com/Kaycee276/Chesster/issues/388), [#447](https://github.com/Kaycee276/Chesster/issues/447) (closes [#386](https://github.com/Kaycee276/Chesster/issues/386), closes [#387](https://github.com/Kaycee276/Chesster/issues/387), closes [#388](https://github.com/Kaycee276/Chesster/issues/388), closes [#447](https://github.com/Kaycee276/Chesster/issues/447)) ([#451](https://github.com/Kaycee276/Chesster/issues/451)) ([bd754a8](https://github.com/Kaycee276/Chesster/commit/bd754a8ad581b78b707fe9f254c85750aeca08df))
+* **tests:** resolve escrow test duplication and db health service cache reset ([2ab39aa](https://github.com/Kaycee276/Chesster/commit/2ab39aa7869fb5d270282de8f1e3402ff8f6e18f))
+
+
+### Features
+
+* **batch:** resolve assigned issues 397, 398, 399, 400 (closes [#397](https://github.com/Kaycee276/Chesster/issues/397), [#398](https://github.com/Kaycee276/Chesster/issues/398), [#399](https://github.com/Kaycee276/Chesster/issues/399), [#400](https://github.com/Kaycee276/Chesster/issues/400)) ([#453](https://github.com/Kaycee276/Chesster/issues/453)) ([4c0c6f8](https://github.com/Kaycee276/Chesster/commit/4c0c6f8d359295484b3b8f877c8e6f185aff7706))
+* **frontend:** resolve analysis depth gauge, touch haptics, i18n, and bracket pan-zoom (closes [#438](https://github.com/Kaycee276/Chesster/issues/438), closes [#439](https://github.com/Kaycee276/Chesster/issues/439), closes [#440](https://github.com/Kaycee276/Chesster/issues/440), closes [#441](https://github.com/Kaycee276/Chesster/issues/441)) ([#452](https://github.com/Kaycee276/Chesster/issues/452)) ([8513b01](https://github.com/Kaycee276/Chesster/commit/8513b01c1e36a693ecda99378ad924c24474de30))
+* **platform:** implement openapi specs, release automation, disconnect grace tests, and e2e lobby flow ([#455](https://github.com/Kaycee276/Chesster/issues/455)) ([5c5d40e](https://github.com/Kaycee276/Chesster/commit/5c5d40e486d65dfa29cd80f33c9da495378e2503)), closes [#450](https://github.com/Kaycee276/Chesster/issues/450) [#449](https://github.com/Kaycee276/Chesster/issues/449) [#448](https://github.com/Kaycee276/Chesster/issues/448) [#446](https://github.com/Kaycee276/Chesster/issues/446)
+* **security,db:** resolve issues [#442](https://github.com/Kaycee276/Chesster/issues/442), [#443](https://github.com/Kaycee276/Chesster/issues/443), [#444](https://github.com/Kaycee276/Chesster/issues/444), [#445](https://github.com/Kaycee276/Chesster/issues/445) (closes [#442](https://github.com/Kaycee276/Chesster/issues/442), closes [#443](https://github.com/Kaycee276/Chesster/issues/443), closes [#444](https://github.com/Kaycee276/Chesster/issues/444), closes [#445](https://github.com/Kaycee276/Chesster/issues/445)) ([#454](https://github.com/Kaycee276/Chesster/issues/454)) ([167f37f](https://github.com/Kaycee276/Chesster/commit/167f37fd344cab9fbfd94a947ee1a7e8e458e16c))
+
 ## [1.38.4](https://github.com/Kaycee276/Chesster/compare/v1.38.3...v1.38.4) (2026-10-05)
 
 
