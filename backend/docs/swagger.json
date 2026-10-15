@@ -204,6 +204,15 @@
               "default": "desc"
             },
             "description": "Sort direction ('asc' or 'desc')"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Game ID cursor for keyset pagination"
           }
         ],
         "responses": {
@@ -218,7 +227,9 @@
                     "data": {
                       "type": "array",
                       "items": { "$ref": "#/components/schemas/Game" }
-                    }
+                    },
+                    "nextCursor": { "type": "string", "nullable": true },
+                    "hasMore": { "type": "boolean" }
                   }
                 }
               }

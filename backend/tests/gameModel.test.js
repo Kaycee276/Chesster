@@ -13,8 +13,15 @@ jest.mock("../config/supabase", () => {
     or: jest.fn().mockReturnThis(),
     gte: jest.fn().mockReturnThis(),
     lte: jest.fn().mockReturnThis(),
+    gt: jest.fn().mockReturnThis(),
+    lt: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
     range: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    maybeSingle: jest.fn().mockResolvedValue({
+      data: { id: "game-cursor-123", created_at: "2026-01-01T00:00:00.000Z" },
+      error: null,
+    }),
     single: jest.fn().mockResolvedValue({
       data: {
         id: 1,
@@ -233,6 +240,26 @@ describe("Game Model", () => {
         hasNextPage: false,
         hasPreviousPage: false,
       });
+    });
+
+    it("supports cursor-based keyset pagination with nextCursor and hasMore", async () => {
+      const result = await gameModel.getGameHistory({
+        pageSize: 1,
+      });
+      expect(result).toHaveProperty("data");
+      expect(result).toHaveProperty("nextCursor");
+      expect(result).toHaveProperty("hasMore");
+      expect(result.pagination).toBeDefined();
+
+      // Query with cursor
+      const cursorResult = await gameModel.getGameHistory({
+        cursor: "game-cursor-123",
+        pageSize: 10,
+      });
+      expect(cursorResult).toHaveProperty("data");
+      expect(cursorResult).toHaveProperty("nextCursor");
+      expect(cursorResult).toHaveProperty("hasMore");
+      expect(cursorResult.pagination.hasPreviousPage).toBe(true);
     });
   });
 

@@ -443,6 +443,7 @@ class GameController {
 				pageSize,
 				sortBy,
 				sortOrder,
+				cursor,
 			} = req.query;
 
 			const filters = {
@@ -454,6 +455,7 @@ class GameController {
 				pageSize: pageSize !== undefined ? pageSize : 20,
 				sortBy: sortBy !== undefined ? sortBy : "created_at",
 				sortOrder: sortOrder !== undefined ? sortOrder : "desc",
+				cursor: cursor || null,
 			};
 
 			const result = await gameModel.getGameHistory(filters);
@@ -538,10 +540,14 @@ class GameController {
 			let tournamentAdvancement = null;
 			const match = await tournamentModel.getMatchByGameCode(gameCode);
 			if (match && winningAddress) {
-				tournamentAdvancement = await tournamentService.advanceRound(
-					match.tournament_id,
-					match.id,
-					winningAddress,
+				const { executeWithRetry } = require("../database/transactionRetry");
+				tournamentAdvancement = await executeWithRetry(
+					async () => tournamentService.advanceRound(
+						match.tournament_id,
+						match.id,
+						winningAddress,
+					),
+					{ context: `endGame-advanceRound-${gameCode}` }
 				);
 			}
 

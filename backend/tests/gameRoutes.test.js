@@ -223,4 +223,33 @@ describe("game and escrow route integration", () => {
       error: "Invalid sortBy column: 'malicious_field'",
     });
   });
+
+  test("GET /api/games accepts cursor parameter and returns nextCursor and hasMore", async () => {
+    gameModel.getGameHistory.mockResolvedValue({
+      data: [{ id: "game-uuid-2", game_code: "GAME2" }],
+      nextCursor: "game-uuid-2",
+      hasMore: true,
+      pagination: {
+        page: 1,
+        pageSize: 1,
+        total: 10,
+        totalPages: 10,
+        hasNextPage: true,
+        hasPreviousPage: true,
+      },
+    });
+
+    const response = await request(app).get("/api/games?cursor=game-uuid-1&pageSize=1");
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.nextCursor).toBe("game-uuid-2");
+    expect(response.body.hasMore).toBe(true);
+    expect(gameModel.getGameHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cursor: "game-uuid-1",
+        pageSize: "1",
+      })
+    );
+  });
 });

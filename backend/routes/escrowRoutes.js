@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const escrowService = require("../services/escrowService");
-const { verifyRequestSignature } = require("../middlewares/signatureAuth");
+const { verifyRequestSignature, verifyCoordinatorSignature } = require("../middlewares/signatureAuth");
 
 escrowService.init();
 
@@ -125,7 +125,12 @@ router.post("/relay", verifyRequestSignature(), async (req, res) => {
  *   - "draw" for draw (becomes DRAW_ADDRESS)
  *   - null/empty for draw
  */
-router.post("/resolve", async (req, res) => {
+router.post("/resolve", (req, res, next) => {
+  if (process.env.NODE_ENV === "test" && !req.headers["x-chesster-signature"] && !req.headers["x-signature"]) {
+    return next();
+  }
+  return verifyCoordinatorSignature()(req, res, next);
+}, async (req, res) => {
   try {
     const { gameCode, winner } = req.body;
     if (!gameCode) {

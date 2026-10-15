@@ -902,7 +902,10 @@ class GameModel {
 			pageSize = 20,
 			sortBy = "created_at",
 			sortOrder = "desc",
+			cursor = null,
 		} = filters;
+
+		const cursorId = typeof cursor === "object" && cursor !== null ? cursor.id : (cursor ? String(cursor).trim() : null);
 
 		// Parse and validate page parameter
 		let pageNum = 1;
@@ -948,8 +951,6 @@ class GameModel {
 			throw new Error("Invalid sortOrder: must be 'asc' or 'desc'");
 		}
 
-		const offset = (pageNum - 1) * size;
-
 		let query = supabase
 			.from("games")
 			.select(
@@ -977,24 +978,62 @@ class GameModel {
 			query = query.lte("created_at", dateTo);
 		}
 
-		query = query.order(cleanSortBy, { ascending: sortDirection });
-		query = query.range(offset, offset + size - 1);
+		let cursorGame = null;
+		if (cursorId) {
+			const cursorQuery = supabase
+				.from("games")
+				.select("id, created_at, updated_at")
+				.eq("id", cursorId);
+			const res = typeof cursorQuery.maybeSingle === "function"
+				? await cursorQuery.maybeSingle()
+				: await cursorQuery.single();
+			cursorGame = res?.data || null;
+			if (cursorGame && cursorGame.created_at && cleanSortBy === "created_at") {
+				if (!sortDirection) {
+					query = query.lt("created_at", cursorGame.created_at);
+				} else {
+					query = query.gt("created_at", cursorGame.created_at);
+				}
+			}
+		}
 
-		const { data, error, count } = await query;
+		query = query.order(cleanSortBy, { ascending: sortDirection });
+
+		let data, error, count;
+		if (cursorId && cursorGame) {
+			query = query.limit(size + 1);
+			const res = await query;
+			data = res.data;
+			error = res.error;
+			count = res.count;
+		} else {
+			const offset = (pageNum - 1) * size;
+			query = query.range(offset, offset + size);
+			const res = await query;
+			data = res.data;
+			error = res.error;
+			count = res.count;
+		}
 
 		if (error) throw error;
 
-		const totalPages = Math.ceil(count / size);
+		const rows = data || [];
+		const hasMore = rows.length > size;
+		const paginatedData = hasMore ? rows.slice(0, size) : rows;
+		const nextCursor = hasMore && paginatedData.length > 0 ? paginatedData[paginatedData.length - 1].id : null;
+		const totalPages = count !== null && count !== undefined ? Math.ceil(count / size) : (hasMore ? pageNum + 1 : pageNum);
 
 		return {
-			data: data || [],
+			data: paginatedData,
+			nextCursor,
+			hasMore,
 			pagination: {
 				page: pageNum,
 				pageSize: size,
-				total: count,
+				total: count ?? paginatedData.length,
 				totalPages,
-				hasNextPage: pageNum < totalPages,
-				hasPreviousPage: pageNum > 1,
+				hasNextPage: hasMore,
+				hasPreviousPage: pageNum > 1 || Boolean(cursorId),
 			},
 		};
 	}

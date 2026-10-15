@@ -97,34 +97,9 @@ app.use(enforceHttps);
 
 // Reject insecure (non-wss) WebSocket handshakes in production (Issue #143).
 io.use(enforceSecureSocket());
-// Strict Content Security Policy via Helmet (Issue #325)
-const isProduction = process.env.NODE_ENV === "production";
-app.use(
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: isProduction
-          ? ["'self'"]
-          : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "blob:", "https:"],
-        connectSrc: [
-          "'self'",
-          "https://soroban-testnet.stellar.org",
-          "https://horizon-testnet.stellar.org",
-          "https://*.supabase.co",
-          "wss:",
-          "ws:",
-        ],
-        fontSrc: ["'self'", "data:"],
-        objectSrc: ["'none'"],
-        upgradeInsecureRequests: isProduction ? [] : null,
-      },
-    },
-    crossOriginEmbedderPolicy: false,
-  })
-);
+// Strict Content Security Policy via Helmet (Issue #325 & Issue #444)
+const { createCspMiddleware } = require("./middleware/securityHeaders");
+app.use(createCspMiddleware());
 
 // Apply structured logging middleware
 app.use(logger.requestMiddleware());
@@ -168,6 +143,11 @@ app.use("/api/referrals", referralRoutes);
 app.use("/api/puzzles", puzzleRoutes);
 app.use("/api", tournamentRoutes);
 app.use(metricsRoutes);
+
+// Root endpoint
+app.get("/", (req, res) => {
+  res.json({ status: "ok", name: "Chesster API", message: "Chesster backend running" });
+});
 
 // Legacy health endpoint
 app.get("/health", (req, res) => {
