@@ -3247,7 +3247,7 @@ mod extended_tests {
     use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
     use soroban_sdk::{
         testutils::{Events, Ledger},
-        vec, Address, Env, String,
+        vec, Address, Env, String, TryIntoVal,
     };
 
     fn create_token_contract<'a>(
@@ -7317,5 +7317,133 @@ mod extended_tests {
 
         // Executing drain without active schedule fails with DisputeNotFound (#24)
         client.execute_emergency_drain(&token.address);
+    }
+
+    #[test]
+    fn test_standardized_event_topics_and_payloads_lifecycle() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let coordinator = Address::generate(&env);
+        let player1 = Address::generate(&env);
+        let player2 = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+        token_admin_client.mint(&player1, &1000);
+        token_admin_client.mint(&player2, &1000);
+
+        let contract_id = env.register(ChessterEscrow, ());
+        let client = ChessterEscrowClient::new(&env, &contract_id);
+
+        client.init(&coordinator, &500);
+        client.add_whitelisted_token(&token.address);
+
+        let game_code = String::from_str(&env, "GAME_TOPIC_TEST");
+        approve(&env, &token, &player1, &contract_id, 1000);
+        approve(&env, &token, &player2, &contract_id, 1000);
+
+        // 1. Create match
+        client.create_match(&game_code, &player1, &token.address, &100);
+        let events = env.events().all();
+        let create_event = events.iter().find(|(id, topics, _)| {
+            if id != &contract_id || topics.len() != 3 {
+                return false;
+            }
+            let t0: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+            let t1: Result<Symbol, _> = topics.get(1).unwrap().try_into_val(&env);
+            t0 == Ok(symbol_short!("escrow")) && t1 == Ok(symbol_short!("created"))
+        });
+        assert!(create_event.is_some(), "create match event missing");
+        let (_, topics, data) = create_event.unwrap();
+        let match_id: u64 = topics.get(2).unwrap().try_into_val(&env).unwrap();
+        assert_eq!(match_id, 1);
+        let (p1, tok, amt): (Address, Address, i128) = data.try_into_val(&env).unwrap();
+        assert_eq!(p1, player1);
+        assert_eq!(tok, token.address);
+        assert_eq!(amt, 100);
+
+        // 2. Join match
+        client.join_match(&game_code, &player2);
+        let events = env.events().all();
+        let join_event = events.iter().find(|(id, topics, _)| {
+            if id != &contract_id || topics.len() != 3 {
+                return false;
+            }
+            let t0: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+            let t1: Result<Symbol, _> = topics.get(1).unwrap().try_into_val(&env);
+            t0 == Ok(symbol_short!("escrow")) && t1 == Ok(symbol_short!("joined"))
+        });
+        assert!(join_event.is_some(), "join match event missing");
+        let (_, topics, data) = join_event.unwrap();
+        let join_match_id: u64 = topics.get(2).unwrap().try_into_val(&env).unwrap();
+        assert_eq!(join_match_id, 1);
+        let (p2, pool): (Address, i128) = data.try_into_val(&env).unwrap();
+        assert_eq!(p2, player2);
+        assert_eq!(pool, 200);
+
+        // 3. Resolve match
+        client.resolve_match(&game_code, &Some(player1.clone()));
+        let events = env.events().all();
+        let settle_event = events.iter().find(|(id, topics, _)| {
+            if id != &contract_id || topics.len() != 3 {
+                return false;
+            }
+            let t0: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+            let t1: Result<Symbol, _> = topics.get(1).unwrap().try_into_val(&env);
+            t0 == Ok(symbol_short!("escrow")) && t1 == Ok(symbol_short!("settled"))
+        });
+        assert!(settle_event.is_some(), "settle match event missing");
+        let (_, topics, data) = settle_event.unwrap();
+        let settle_match_id: u64 = topics.get(2).unwrap().try_into_val(&env).unwrap();
+        assert_eq!(settle_match_id, 1);
+        let (winner, payout, fee): (Address, i128, i128) = data.try_into_val(&env).unwrap();
+        assert_eq!(winner, player1);
+        assert_eq!(fee, 10);
+        assert_eq!(payout, 190);
+    }
+
+    #[test]
+    fn test_standardized_event_topics_and_payloads_refund() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let coordinator = Address::generate(&env);
+        let player1 = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+        token_admin_client.mint(&player1, &1000);
+
+        let contract_id = env.register(ChessterEscrow, ());
+        let client = ChessterEscrowClient::new(&env, &contract_id);
+
+        client.init(&coordinator, &500);
+        client.add_whitelisted_token(&token.address);
+
+        let game_code = String::from_str(&env, "GAME_REFUND_TOPIC");
+        approve(&env, &token, &player1, &contract_id, 1000);
+        client.create_match(&game_code, &player1, &token.address, &100);
+
+        env.ledger().set_timestamp(3601);
+        client.refund_after_timeout(&game_code);
+
+        let events = env.events().all();
+        let refund_event = events.iter().find(|(id, topics, _)| {
+            if id != &contract_id || topics.len() != 3 {
+                return false;
+            }
+            let t0: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+            let t1: Result<Symbol, _> = topics.get(1).unwrap().try_into_val(&env);
+            t0 == Ok(symbol_short!("escrow")) && t1 == Ok(symbol_short!("refunded"))
+        });
+        assert!(refund_event.is_some(), "refund event missing");
+        let (_, topics, data) = refund_event.unwrap();
+        let refund_match_id: u64 = topics.get(2).unwrap().try_into_val(&env).unwrap();
+        assert_eq!(refund_match_id, 1);
+        let (winner, payout, fee): (Option<Address>, i128, i128) = data.try_into_val(&env).unwrap();
+        assert_eq!(winner, None);
+        assert_eq!(payout, 100);
+        assert_eq!(fee, 0);
     }
 }

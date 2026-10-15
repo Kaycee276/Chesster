@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const { queryWithRetry } = require("../config/db");
 const { getRedisClient } = require("../config/redis");
 
 const LEADERBOARD_CACHE_PREFIX = "cache:leaderboard";

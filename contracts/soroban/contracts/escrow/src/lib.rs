@@ -588,6 +588,30 @@ pub struct EmergencyDrainEvent {
     pub amount: i128,
 }
 
+// ---------------------------------------------------------------------------
+// Standardized Match Lifecycle Events (Issue #397)
+// ---------------------------------------------------------------------------
+
+/// Standardized event topic symbols for match lifecycle events.
+pub const TOPIC_ESCROW: Symbol = symbol_short!("escrow");
+pub const TOPIC_CREATED: Symbol = symbol_short!("created");
+pub const TOPIC_JOINED: Symbol = symbol_short!("joined");
+pub const TOPIC_SETTLED: Symbol = symbol_short!("settled");
+pub const TOPIC_REFUNDED: Symbol = symbol_short!("refunded");
+
+/// Centralized event publishing helper to guarantee uniform indexing format across all match lifecycle transitions.
+pub fn emit_match_event(env: &Env, topic: Symbol, match_id: u64, data: Val) {
+    let topics = (symbol_short!("escrow"), topic, match_id);
+    env.events().publish(topics, data);
+}
+
+/// Centralized event publishing helper for match settlements.
+pub fn emit_match_settled(env: &Env, match_id: u64, winner: &Address, payout: i128, fee: i128) {
+    let topics = (symbol_short!("escrow"), symbol_short!("settled"), match_id);
+    let data = (winner.clone(), payout, fee);
+    env.events().publish(topics, data);
+}
+
 /// Reentrancy guard that locks guarded escrow functions for the duration of a
 /// transaction, preventing cross-contract re-entry. The lock is set
 /// on entry via `acquire_reentrancy` or `ReentrancyGuard::new` and cleared on exit.
@@ -2377,6 +2401,12 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &player1_key);
         Self::bump_instance_ttl(&env);
 
+        emit_match_event(
+            &env,
+            symbol_short!("created"),
+            next_nonce,
+            (player1.clone(), token.clone(), amount).into_val(&env),
+        );
         env.events().publish(
             (symbol_short!("created"), game_code.clone()),
             MatchCreatedEvent {
@@ -2471,6 +2501,12 @@ impl ChessterEscrow {
             .set(&player2_key, &updated_matches);
         Self::bump_entry_ttl(&env, &player2_key);
 
+        emit_match_event(
+            &env,
+            symbol_short!("joined"),
+            m.nonce,
+            (player2.clone(), m.total_staked).into_val(&env),
+        );
         env.events().publish(
             (symbol_short!("funded"), game_code.clone()),
             MatchFundedEvent {
@@ -2833,6 +2869,19 @@ impl ChessterEscrow {
             payload.winner.clone(),
         );
 
+        if let Some(ref w) = payload.winner {
+            let payout = checked_sub(&env, m.total_staked, admin_fee);
+            emit_match_settled(&env, m.nonce, w, payout, admin_fee);
+        } else {
+            let payout = m.total_staked;
+            emit_match_event(
+                &env,
+                symbol_short!("settled"),
+                m.nonce,
+                (payload.winner.clone(), payout, admin_fee).into_val(&env),
+            );
+        }
+
         env.events().publish(
             (symbol_short!("resolved"), payload.match_id.clone()),
             MatchResolvedEvent {
@@ -2862,6 +2911,19 @@ impl ChessterEscrow {
         }
 
         let admin_fee = Self::settle_match(&env, &coordinator, &game_code, &mut m, winner.clone());
+
+        if let Some(ref w) = winner {
+            let payout = checked_sub(&env, m.total_staked, admin_fee);
+            emit_match_settled(&env, m.nonce, w, payout, admin_fee);
+        } else {
+            let payout = m.total_staked;
+            emit_match_event(
+                &env,
+                symbol_short!("settled"),
+                m.nonce,
+                (winner.clone(), payout, admin_fee).into_val(&env),
+            );
+        }
 
         env.events().publish(
             (symbol_short!("resolved"), game_code.clone()),
@@ -3771,6 +3833,12 @@ impl ChessterEscrow {
         env.storage().persistent().set(&DataKey::Metrics, &metrics);
         Self::bump_entry_ttl(env, &DataKey::Metrics);
 
+        emit_match_event(
+            env,
+            symbol_short!("refunded"),
+            m.nonce,
+            (None::<Address>, m.total_staked, 0_i128).into_val(env),
+        );
         env.events().publish(
             (symbol_short!("refunded"), game_code.clone()),
             MatchRefundedEvent {

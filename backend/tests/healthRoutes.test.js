@@ -19,6 +19,13 @@ jest.mock("../config/supabase", () => ({
   })),
 }));
 
+jest.mock("../config/redis", () => ({
+  getRedisConnection: jest.fn().mockResolvedValue({
+    ping: jest.fn().mockResolvedValue("PONG"),
+  }),
+}));
+
+const { checkDbHealth, clearDbHealthCache } = require("../services/dbHealthService");
 const healthRoutes = require("../routes/healthRoutes");
 
 describe("Health Check Routes", () => {
@@ -187,6 +194,123 @@ describe("Health Check Routes", () => {
         // Services might have errors
         expect(response.body).toHaveProperty("services");
       }
+    });
+  });
+
+  describe("GET /api/health/liveness", () => {
+    test("should return 200 with uptimeSeconds, memoryUsage, and timestamp without querying db/redis", async () => {
+      const response = await request(app).get("/api/health/liveness");
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty("status", "ok");
+      expect(response.body).toHaveProperty("uptimeSeconds");
+      expect(typeof response.body.uptimeSeconds).toBe("number");
+      expect(response.body).toHaveProperty("memoryUsage");
+      expect(response.body.memoryUsage).toHaveProperty("heapUsed");
+      expect(response.body).toHaveProperty("timestamp");
+    });
+  });
+
+  describe("GET /api/health/readiness", () => {
+    beforeEach(() => {
+      clearDbHealthCache();
+    });
+
+    test("should return 200 when database and redis are healthy", async () => {
+      const response = await request(app).get("/api/health/readiness");
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty("status", "healthy");
+      expect(response.body.dependencies.database.status).toBe("healthy");
+      expect(response.body.dependencies.redis.status).toBe("healthy");
+    });
+
+    test("should return 503 when database is unhealthy", async () => {
+      const dbMock = require("../config/supabase");
+      const originalFrom = dbMock.from;
+      dbMock.from = jest.fn(() => ({
+        select: jest.fn(() => ({
+          limit: jest.fn().mockResolvedValue({ data: null, error: { message: "DB connection timeout" } }),
+        })),
+      }));
+
+      try {
+        const response = await request(app).get("/api/health/readiness");
+        expect(response.status).toBe(503);
+        expect(response.body.status).toBe("unhealthy");
+        expect(response.body.dependencies.database.status).toBe("unhealthy");
+      } finally {
+        dbMock.from = originalFrom;
+        clearDbHealthCache();
+      }
+    });
+
+    test("should return 503 when redis is unhealthy", async () => {
+      const redisConfig = require("../config/redis");
+      const originalGetRedis = redisConfig.getRedisConnection;
+      process.env.REDIS_URL = "redis://localhost:6379";
+      redisConfig.getRedisConnection = jest.fn().mockResolvedValue({
+        ping: jest.fn().mockRejectedValue(new Error("Redis offline")),
+      });
+
+      try {
+        const response = await request(app).get("/api/health/readiness");
+        expect(response.status).toBe(503);
+        expect(response.body.status).toBe("unhealthy");
+        expect(response.body.dependencies.redis.status).toBe("unhealthy");
+      } finally {
+        delete process.env.REDIS_URL;
+        redisConfig.getRedisConnection = originalGetRedis;
+      }
+    });
+  });
+
+  describe("GET /api/health/detailed", () => {
+    beforeEach(() => {
+      clearDbHealthCache();
+    });
+
+    test("should return detailed health status with 200", async () => {
+      const response = await request(app).get("/api/health/detailed");
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty("status", "healthy");
+      expect(response.body).toHaveProperty("services");
+      expect(response.body.services).toHaveProperty("database");
+      expect(response.body.services).toHaveProperty("redis");
+      expect(response.body.services).toHaveProperty("stellarRpc");
+    });
+  });
+
+  describe("dbHealthService in-memory TTL caching (3 seconds)", () => {
+    beforeEach(() => {
+      clearDbHealthCache();
+    });
+
+    test("should return cached result on consecutive calls within 3 seconds", async () => {
+      let queryCount = 0;
+      const customClient = {
+        from: jest.fn(() => ({
+          select: jest.fn(() => ({
+            limit: jest.fn().mockImplementation(async () => {
+              queryCount++;
+              return { data: [{ id: 1 }], error: null };
+            }),
+          })),
+        })),
+      };
+
+      const first = await checkDbHealth({ client: customClient });
+      expect(first.status).toBe("healthy");
+      expect(queryCount).toBe(1);
+
+      // Second immediate call within 3 seconds should use cache
+      const second = await checkDbHealth({ client: customClient });
+      expect(second.status).toBe("healthy");
+      expect(second.cached).toBe(true);
+      expect(queryCount).toBe(1); // No new DB call!
+
+      // When bypassCache is true, a fresh call is made
+      const third = await checkDbHealth({ client: customClient, bypassCache: true });
+      expect(third.status).toBe("healthy");
+      expect(queryCount).toBe(2);
     });
   });
 });

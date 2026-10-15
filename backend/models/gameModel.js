@@ -1,4 +1,5 @@
 const supabase = require("../config/supabase");
+const { queryWithRetry } = require("../config/db");
 const chessEngine = require("../services/chessEngine");
 const escrowService = require("../services/escrowService");
 const referralService = require("../services/referralService");
