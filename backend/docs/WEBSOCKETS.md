@@ -26,6 +26,10 @@ const socket = io("http://localhost:3000", {
 
 The server validates the JWT against `JWT_SECRET` via `verifySocketToken(token)`. When valid, the socket is bound to the player's wallet address and authorized for player-only events.
 
+## 1.3 Webhook verification
+
+Webhook requests include `X-Chesster-Timestamp` and `X-Chesster-Signature` headers. To verify a request, reject timestamps outside the subscriber's replay window, then compute the HMAC-SHA256 hex digest of `${timestamp}.${rawRequestBody}` with the subscriber secret. Accept only when it matches the `v1` value in `X-Chesster-Signature` (`t=<timestamp>,v1=<digest>`). Use the raw body bytes before JSON parsing.
+
 ---
 
 ## 2. Room & Channel Architecture

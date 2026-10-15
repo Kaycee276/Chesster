@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+
 process.env.WEBHOOK_SECRET = "test-webhook-secret-key";
 process.env.WEBHOOK_TIMEOUT_MS = "1000";
 process.env.WEBHOOK_MAX_RETRIES = "2";
@@ -154,7 +156,7 @@ describe("WebhookService", () => {
       expect(results[0].success).toBe(false);
     });
 
-    it("attaches X-Webhook-Signature header with HMAC", async () => {
+    it("attaches timestamped subscriber HMAC headers", async () => {
       let capturedHeaders;
       const mockFetch = jest.fn().mockImplementation(async (_url, opts) => {
         capturedHeaders = opts.headers;
@@ -162,10 +164,18 @@ describe("WebhookService", () => {
       });
       jest.spyOn(globalThis, "fetch").mockImplementation(mockFetch);
 
-      webhookService.register(EVENT_TYPES.MATCH_CREATED, "https://secure.com/hook");
+      const secret = "subscriber-secret";
+      webhookService.register(EVENT_TYPES.MATCH_CREATED, "https://secure.com/hook", secret);
       await webhookService.dispatch(EVENT_TYPES.MATCH_CREATED, { gameCode: "G1" });
 
-      expect(capturedHeaders["X-Webhook-Signature"]).toMatch(/^sha256=[a-f0-9]{64}$/);
+      expect(capturedHeaders["X-Chesster-Timestamp"]).toMatch(/^\d+$/);
+      const timestamp = capturedHeaders["X-Chesster-Timestamp"];
+      const body = mockFetch.mock.calls[0][1].body;
+      const expected = crypto
+        .createHmac("sha256", secret)
+        .update(`${timestamp}.${body}`)
+        .digest("hex");
+      expect(capturedHeaders["X-Chesster-Signature"]).toBe(`t=${timestamp},v1=${expected}`);
       expect(capturedHeaders["X-Webhook-Event"]).toBe(EVENT_TYPES.MATCH_CREATED);
     });
 

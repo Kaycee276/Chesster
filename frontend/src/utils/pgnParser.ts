@@ -46,6 +46,7 @@ const RESULT_TOKENS = new Set(["1-0", "0-1", "1/2-1/2", "*"]);
 /** Strips {comments}, (variations) and $NAGs out of PGN move text. */
 function stripPgnNoise(movetext: string): string {
 	let s = movetext.replace(/\{[^}]*\}/g, " ");
+	s = s.replace(/\be\.p\./gi, " ");
 	let prev: string;
 	do {
 		prev = s;
@@ -62,13 +63,13 @@ export function parsePgn(pgnText: string): {
 	result: string;
 } {
 	const headers: Record<string, string> = {};
-	const headerRegex = /^\s*\[(\w+)\s+"([^"]*)"\]\s*$/gm;
+	const headerRegex = /^\s*\[(\w+)\s+"((?:\\.|[^"])*)"\]\s*$/gm;
 	let match: RegExpExecArray | null;
 	while ((match = headerRegex.exec(pgnText))) {
 		headers[match[1]] = match[2];
 	}
 
-	const movetext = pgnText.replace(/\[[^\]]*\]/g, " ");
+	const movetext = pgnText.replace(/^\s*\[[^\n]*\]\s*$/gm, " ");
 	const cleaned = stripPgnNoise(movetext);
 	const rawTokens = cleaned.split(/\s+/).filter(Boolean);
 
@@ -179,7 +180,12 @@ function findCandidates(
 			if (parsed.fromFile && alg[0] !== parsed.fromFile) continue;
 			if (parsed.fromRank && alg[1] !== parsed.fromRank) continue;
 			const moves = getPossibleMoves(board, [r, c], turn);
-			if (moves.some(([mr, mc]) => mr === to[0] && mc === to[1])) candidates.push([r, c]);
+			const canEnPassant =
+				parsed.piece === "P" && parsed.capture && board[to[0]][to[1]] === "." &&
+				Math.abs(c - to[1]) === 1 && board[r][to[1]] === (turn === "white" ? "p" : "P");
+			if (moves.some(([mr, mc]) => mr === to[0] && mc === to[1]) || canEnPassant) {
+				candidates.push([r, c]);
+			}
 		}
 	}
 	return candidates;
@@ -267,7 +273,7 @@ export interface PgnGameText {
  * selector when a collection file is dropped.
  */
 export function splitPgnGames(pgnText: string): PgnGameText[] {
-	const headerRegex = /^\s*\[(\w+)\s+"([^"]*)"\]\s*$/gm;
+	const headerRegex = /^\s*\[(\w+)\s+"((?:\\.|[^"])*)"\]\s*$/gm;
 	const headerRanges: { start: number; end: number }[] = [];
 	let match: RegExpExecArray | null;
 	while ((match = headerRegex.exec(pgnText))) {
@@ -295,7 +301,7 @@ export function splitPgnGames(pgnText: string): PgnGameText[] {
 			.trim();
 		if (!segment) continue;
 		const headers: Record<string, string> = {};
-		const segHeaderRegex = /^\s*\[(\w+)\s+"([^"]*)"\]\s*$/gm;
+		const segHeaderRegex = /^\s*\[(\w+)\s+"((?:\\.|[^"])*)"\]\s*$/gm;
 		let headerMatch: RegExpExecArray | null;
 		while ((headerMatch = segHeaderRegex.exec(segment))) {
 			headers[headerMatch[1]] = headerMatch[2];

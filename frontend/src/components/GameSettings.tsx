@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { Settings } from "lucide-react";
+import { Settings, Volume2 } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
+import { BOARD_THEMES, useThemeStore } from "../store/themeStore";
+import { soundService } from "../services/soundService";
 
 export default function GameSettings({ hideFloating = false }: { hideFloating?: boolean } = {}) {
   const isBlindfoldMode = useGameStore((s) => s.isBlindfoldMode);
@@ -9,6 +11,10 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
   const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
   const isHapticsEnabled = useGameStore((s) => s.isHapticsEnabled);
   const toggleHaptics = useGameStore((s) => s.toggleHaptics);
+  const masterVolume = useGameStore((s) => s.masterVolume);
+  const setMasterVolume = useGameStore((s) => s.setMasterVolume);
+  const boardTheme = useThemeStore((s) => s.boardTheme);
+  const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
   const isSettingsOpen = useGameStore((s) => s.isSettingsOpen);
   const setSettingsOpen = useGameStore((s) => s.setSettingsOpen);
   const [localOpen, setLocalOpen] = useState(false);
@@ -76,6 +82,60 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
               >
                 ×
               </button>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <div className="flex items-center justify-between">
+                <label htmlFor="master-volume" className="flex items-center gap-2 text-sm font-semibold">
+                  <Volume2 size={16} /> Master volume
+                </label>
+                <output htmlFor="master-volume" className="text-xs text-(--text-tertiary)">
+                  {Math.round(masterVolume * 100)}%
+                </output>
+              </div>
+              <input
+                id="master-volume"
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={masterVolume}
+                onChange={(event) => {
+                  const volume = Number(event.target.value);
+                  setMasterVolume(volume);
+                  soundService.move();
+                }}
+                aria-label="Master volume"
+                className="w-full accent-(--accent-primary)"
+              />
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <span className="text-sm font-semibold">Board theme</span>
+              <div className="grid grid-cols-2 gap-2">
+                {BOARD_THEMES.map((theme) => (
+                  <button
+                    key={theme.key}
+                    type="button"
+                    onClick={() => setBoardTheme(theme.key)}
+                    aria-label={`Select ${theme.name} board theme`}
+                    aria-pressed={boardTheme === theme.key}
+                    className={`flex items-center gap-2 rounded-lg border p-2 text-left text-xs transition-colors ${
+                      boardTheme === theme.key
+                        ? "border-(--accent-primary) ring-2 ring-(--accent-primary)/40"
+                        : "border-(--border) hover:border-(--accent-primary)/60"
+                    }`}
+                  >
+                    <span className="grid h-7 w-7 grid-cols-2 grid-rows-2 overflow-hidden rounded-sm border border-black/20" aria-hidden="true">
+                      <span style={{ backgroundColor: theme.light }} />
+                      <span style={{ backgroundColor: theme.dark }} />
+                      <span style={{ backgroundColor: theme.dark }} />
+                      <span style={{ backgroundColor: theme.light }} />
+                    </span>
+                    <span>{theme.name}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Blindfold Mode Toggle */}

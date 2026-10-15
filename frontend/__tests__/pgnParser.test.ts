@@ -15,6 +15,7 @@ const SCHOLARS_MATE = `1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7#`;
 // Both the b1 and f3 knights attack d2 once the d-pawn steps aside,
 // exercising SAN's file-disambiguation ("Nbd2" vs "Nfd2").
 const KNIGHT_DISAMBIGUATION = `1. Nf3 Nf6 2. d4 d5 3. Nbd2`;
+const SICILIAN = `1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3`;
 
 describe("pgnParser", () => {
 	it("parses headers and move tokens", () => {
@@ -73,6 +74,50 @@ describe("pgnParser", () => {
 
 	it("throws when there are no moves at all", () => {
 		expect(() => loadPgn('[Event "Empty"]\n\n*')).toThrow(PgnParseError);
+	});
+
+	it("parses the Sicilian Defense move sequence", () => {
+		expect(parsePgn(SICILIAN).sanMoves).toEqual([
+			"e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3",
+		]);
+	});
+
+	it("replays queenside castling", () => {
+		const { moves } = loadPgn(`1. d4 d5 2. Nc3 Nc6 3. Bf4 Bf5 4. Qd2 Qd7 5. O-O-O`);
+		const castle = moves[moves.length - 1];
+		expect(castle.san).toBe("O-O-O");
+		expect(squareToAlgebraic(castle.from)).toBe("e1");
+		expect(squareToAlgebraic(castle.to)).toBe("c1");
+		expect(castle.boardAfter[7][3]).toBe("R");
+	});
+
+	it("replays en-passant notation and removes the captured pawn", () => {
+		const { moves } = loadPgn(`1. e4 a6 2. e5 d5 3. exd6 e.p.`);
+		const move = moves[moves.length - 1];
+		expect(move.isCapture).toBe(true);
+		expect(squareToAlgebraic(move.to)).toBe("d6");
+		expect(move.boardAfter[2][3]).toBe("P");
+		expect(move.boardAfter[3][3]).toBe(".");
+	});
+
+	it("preserves check suffixes and all promotion pieces", () => {
+		const { sanMoves } = parsePgn("1. e8=Q+ e8=R# 2. d8=B 2... c8=N");
+		expect(sanMoves).toEqual(["e8=Q+", "e8=R#", "d8=B", "c8=N"]);
+	});
+
+	it("accepts file and rank disambiguation tokens", () => {
+		expect(parsePgn("1. Rad1 N5f3").sanMoves).toEqual(["Rad1", "N5f3"]);
+	});
+
+	it("removes comments, clock annotations, and numeric annotation glyphs", () => {
+		const { sanMoves } = parsePgn("1. e4 {[%clk 0:09:59] opening move} e5 $1 2. Nf3");
+		expect(sanMoves).toEqual(["e4", "e5", "Nf3"]);
+	});
+
+	it("parses header values containing closing brackets", () => {
+		const parsed = parsePgn('[Event "League [A] Final"]\n[Site "Board [1]"]\n\n1. e4 *');
+		expect(parsed.headers).toEqual({ Event: "League [A] Final", Site: "Board [1]" });
+		expect(parsed.sanMoves).toEqual(["e4"]);
 	});
 });
 

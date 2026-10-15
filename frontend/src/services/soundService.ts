@@ -379,6 +379,10 @@ class SoundService {
     localStorage.setItem(LS_VOLUME_KEY, String(this._volume));
   }
 
+  setMasterVolume(value: number) {
+    this.setVolume(value);
+  }
+
   getVolume() {
     return this._volume;
   }

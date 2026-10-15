@@ -90,6 +90,8 @@ interface GameStore {
   // Haptic feedback for touch and interactions (#439)
   isHapticsEnabled: boolean;
   toggleHaptics: () => void;
+  masterVolume: number;
+  setMasterVolume: (volume: number) => void;
   // Settings modal visibility
   isSettingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
@@ -161,6 +163,7 @@ export const useGameStore = create<GameStore>()(
       isBlindfoldMode: false,
       isStreamerMode: false,
       isHapticsEnabled: true,
+      masterVolume: soundService.getVolume(),
       isSettingsOpen: false,
 
       toggleBlindfoldMode: () =>
@@ -169,6 +172,11 @@ export const useGameStore = create<GameStore>()(
         set((s) => ({ isStreamerMode: !s.isStreamerMode })),
       toggleHaptics: () =>
         set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
+      setMasterVolume: (volume: number) => {
+        const normalized = Math.min(1, Math.max(0, volume));
+        soundService.setMasterVolume(normalized);
+        set({ masterVolume: normalized });
+      },
       setSettingsOpen: (open: boolean) =>
         set({ isSettingsOpen: open }),
 
