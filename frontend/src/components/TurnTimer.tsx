@@ -24,6 +24,8 @@ export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = f
 	
 	// Low time danger: <= 20s OR <= 10% of total time, AND it's the active player's turn
 	const isLowTime = isCurrentTurn && (secondsLeft <= 20 || secondsLeft <= totalSeconds * 0.1);
+	// Critical scramble: under 10s on your turn — pulse accelerates (#474).
+	const isCritical = isCurrentTurn && secondsLeft <= 10 && secondsLeft > 0;
 	
 	const lowTime = secondsLeft <= LOW_TIME_THRESHOLD;
 	const display = formatTime(secondsLeft);
@@ -37,15 +39,25 @@ export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = f
 		wasLowRef.current = lowTime && secondsLeft > 0;
 	}, [lowTime, secondsLeft]);
 
+	const ariaLabel = isLowTime
+		? `Low time warning: ${Math.ceil(Math.max(0, secondsLeft))} seconds remaining`
+		: `Time remaining: ${display}`;
+
 	return (
-		<div className={`flex items-center gap-2 p-2 rounded-lg transition-all ${
-			isLowTime 
-				? "border-2 border-red-500 bg-red-950/40 animate-pulse" 
-				: ""
-		}`}>
+		<div
+			role="timer"
+			aria-live="polite"
+			aria-atomic="true"
+			aria-label={ariaLabel}
+			className={`flex items-center gap-2 p-2 rounded-lg transition-all ${
+				isLowTime
+					? "border-2 border-red-500 ring-2 ring-red-500 bg-red-950/40 animate-pulse turn-timer-emergency text-red-400 font-bold"
+					: ""
+			} ${isCritical ? "turn-timer-critical" : ""}`}
+		>
 			<Timer size={12} className={urgent ? "text-red-500" : "text-(--text-tertiary)"} />
 			<span
-				className={`font-mono font-bold text-sm tabular-nums ${urgent ? "text-red-500 animate-pulse" : "text-(--text-secondary)"}`}
+				className={`font-mono font-bold text-sm tabular-nums ${urgent ? "text-red-400 animate-pulse" : "text-(--text-secondary)"}`}
 			>
 				{display}
 			</span>

@@ -1,4 +1,5 @@
 const supabase = require("../config/supabase");
+const { executeWithRetry, OptimisticLockError } = require("../database/transactionRetry");
 
 const DEFAULT_K_FACTOR = 32;
 const GLICKO2_SCALE = 173.7178;
@@ -57,7 +58,7 @@ class EloService {
 
 	async updateGlicko2Ratings(player1Id, player2Id, winnerId, db = supabase) {
 		if (!player1Id || !player2Id || player1Id === player2Id) throw new Error("Two different player IDs are required");
-		const fetch = (id) => db.from("players").select("wallet_address, elo_rating, rating_deviation, volatility").eq("wallet_address", id).single();
+		const fetch = (id) => db.from("players").select("wallet_address, elo_rating, rating_deviation, volatility, version").eq("wallet_address", id).single();
 		const [{ data: player1, error: error1 }, { data: player2, error: error2 }] = await Promise.all([fetch(player1Id), fetch(player2Id)]);
 		if (error1) throw new Error(`Failed to fetch player 1: ${error1.message}`);
 		if (error2) throw new Error(`Failed to fetch player 2: ${error2.message}`);
@@ -65,9 +66,35 @@ class EloService {
 		if (score1 === null) throw new Error("Winner ID must match one of the players");
 		const next1 = this.calculateGlicko2Rating({ rating: player1.elo_rating, ratingDeviation: player1.rating_deviation, volatility: player1.volatility }, { rating: player2.elo_rating, ratingDeviation: player2.rating_deviation }, score1);
 		const next2 = this.calculateGlicko2Rating({ rating: player2.elo_rating, ratingDeviation: player2.rating_deviation, volatility: player2.volatility }, { rating: player1.elo_rating, ratingDeviation: player1.rating_deviation }, 1 - score1);
+		// Optimistic-locked writes (#472): WHERE version = $currentVersion + retry.
+		const writeOne = (id, current, next) =>
+			executeWithRetry(
+				async () => {
+					const hasVersion = current && Object.prototype.hasOwnProperty.call(current, "version");
+					const currentVersion = current.version ?? 1;
+					const patch = hasVersion
+						? { elo_rating: next.rating, rating_deviation: next.ratingDeviation, volatility: next.volatility, version: currentVersion + 1 }
+						: { elo_rating: next.rating, rating_deviation: next.ratingDeviation, volatility: next.volatility };
+					let q = db.from("players").update(patch).eq("wallet_address", id);
+					if (hasVersion) q = q.eq("version", currentVersion);
+					const res = typeof q.maybeSingle === "function" ? await q.maybeSingle() : await q.single();
+					if (res.error) {
+						// Fallback for DBs without the version column yet: plain write.
+						if (String(res.error.message || "").includes("version")) {
+							const fallback = await db.from("players").update({ elo_rating: next.rating, rating_deviation: next.ratingDeviation, volatility: next.volatility }).eq("wallet_address", id);
+							if (fallback.error) throw fallback.error;
+							return fallback.data;
+						}
+						throw res.error;
+					}
+					if (!res.data) throw new OptimisticLockError(`Concurrent rating update for ${id}`);
+					return res.data;
+				},
+				{ maxRetries: 3, baseDelayMs: 100, context: "elo-glicko2-update" }
+			);
 		await Promise.all([
-			db.from("players").update({ elo_rating: next1.rating, rating_deviation: next1.ratingDeviation, volatility: next1.volatility }).eq("wallet_address", player1Id),
-			db.from("players").update({ elo_rating: next2.rating, rating_deviation: next2.ratingDeviation, volatility: next2.volatility }).eq("wallet_address", player2Id),
+			writeOne(player1Id, player1, next1),
+			writeOne(player2Id, player2, next2),
 		]);
 		return { player1: next1, player2: next2 };
 	}
@@ -112,7 +139,7 @@ class EloService {
 
 		const { data: player1, error: err1 } = await db
 			.from("users")
-			.select("id, elo_rating")
+			.select("id, elo_rating, version")
 			.eq("id", player1Id)
 			.single();
 
@@ -121,7 +148,7 @@ class EloService {
 
 		const { data: player2, error: err2 } = await db
 			.from("users")
-			.select("id, elo_rating")
+			.select("id, elo_rating, version")
 			.eq("id", player2Id)
 			.single();
 
@@ -151,19 +178,44 @@ class EloService {
 		const newRating1 = this.calculateNewRating(rating1, expected1, actual1);
 		const newRating2 = this.calculateNewRating(rating2, expected2, actual2);
 
-		const { error: updateErr1 } = await db
-			.from("users")
-			.update({ elo_rating: newRating1 })
-			.eq("id", player1Id);
+		// Optimistic-locked writes (#472): conditional on version + 3x retry.
+		const writeRating = (id, current, newRating) =>
+			executeWithRetry(
+				async () => {
+					const hasVersion = current && Object.prototype.hasOwnProperty.call(current, "version");
+					const currentVersion = current.version ?? 1;
+					let q = db.from("users").update(hasVersion ? { elo_rating: newRating, version: currentVersion + 1 } : { elo_rating: newRating }).eq("id", id);
+					if (hasVersion) q = q.eq("version", currentVersion);
+					const res = typeof q.maybeSingle === "function" ? await q.maybeSingle() : await q.single();
+					// QueryBuilder update returns {data: rows[], error}; single()/maybeSingle() normalizes.
+					// Treat empty data as a version collision.
+					if (res.error) {
+						if (String(res.error.message || "").includes("version")) {
+							const fallback = await db.from("users").update({ elo_rating: newRating }).eq("id", id);
+							if (fallback.error) throw new Error(`Failed to update rating: ${fallback.error.message}`);
+							return fallback.data;
+						}
+						throw new Error(`Failed to update rating: ${res.error.message}`);
+					}
+					if (!res.data || (Array.isArray(res.data) && res.data.length === 0)) {
+						throw new OptimisticLockError(`Concurrent rating update for ${id}`);
+					}
+					return res.data;
+				},
+				{ maxRetries: 3, baseDelayMs: 100, context: "elo-update" }
+			);
 
-		if (updateErr1) throw new Error(`Failed to update player 1 rating: ${updateErr1.message}`);
+		try {
+			await writeRating(player1Id, player1, newRating1);
+		} catch (e) {
+			throw new Error(`Failed to update player 1 rating: ${e.message}`);
+		}
 
-		const { error: updateErr2 } = await db
-			.from("users")
-			.update({ elo_rating: newRating2 })
-			.eq("id", player2Id);
-
-		if (updateErr2) throw new Error(`Failed to update player 2 rating: ${updateErr2.message}`);
+		try {
+			await writeRating(player2Id, player2, newRating2);
+		} catch (e) {
+			throw new Error(`Failed to update player 2 rating: ${e.message}`);
+		}
 
 		console.log(
 			`[EloService] Ratings updated — P1: ${rating1}→${newRating1}, P2: ${rating2}→${newRating2}`,

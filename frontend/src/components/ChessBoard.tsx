@@ -363,6 +363,9 @@ function ChessBoardInner() {
   const [mobileTab, setMobileTab] = useState<"moves" | "chat" | "settings" | null>(null);
 
   const unreadCount = useGameStore((s) => s.unreadCount);
+  const queuedPremove = useGameStore((s) => s.queuedPremove);
+  const setQueuedPremove = useGameStore((s) => s.setQueuedPremove);
+  const clearPremove = useGameStore((s) => s.clearPremove);
   const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
   const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
   const isHapticsEnabled = useGameStore((s) => s.isHapticsEnabled);
@@ -821,13 +824,51 @@ function ChessBoardInner() {
     }
   };
 
+  const queuePremove = (from: [number, number], to: [number, number]) => {
+    // Speculative premove (#473): only the player's own piece may be queued.
+    const piece = board[from[0]][from[1]];
+    if (piece === "." || !isPlayerPiece(piece)) {
+      safeHaptic("error");
+      return;
+    }
+    const isPromotion = piece.toLowerCase() === "p" && (to[0] === 0 || to[0] === 7);
+    setQueuedPremove({ from, to, promotion: isPromotion ? "q" : undefined });
+    selectSquare(null);
+    safeHaptic("drop");
+  };
+
   const handleSquareClick = async (row: number, col: number) => {
     // A plain left-click always clears any drawn arrows/highlights (#252).
     clearAnnotations();
 
-    if (status !== "active" || currentTurn !== playerColor || isMoving) return;
+    if (status !== "active" || isMoving) return;
     if (viewingIndex !== null) return;
     if (dragPiece) return; // a drag is in progress — its pointerup handles the drop
+
+    // Premove flow (#473): opponent's turn — queue a speculative move.
+    if (currentTurn !== playerColor) {
+      if (!playerColor) return;
+      if (!selectedSquare) {
+        const piece = board[row][col];
+        if (piece === "." || !isPlayerPiece(piece)) return;
+        selectSquare([row, col]);
+        safeHaptic("pickup");
+      } else {
+        if (selectedSquare[0] === row && selectedSquare[1] === col) {
+          selectSquare(null);
+          clearPremove();
+          return;
+        }
+        const clickedPiece = board[row][col];
+        if (clickedPiece !== "." && isPlayerPiece(clickedPiece)) {
+          selectSquare([row, col]);
+          safeHaptic("pickup");
+          return;
+        }
+        queuePremove(selectedSquare, [row, col]);
+      }
+      return;
+    }
 
     if (!selectedSquare) {
       const piece = board[row][col];
@@ -897,7 +938,9 @@ function ChessBoardInner() {
 
   const handlePiecePointerDown = (e: React.PointerEvent, row: number, col: number) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (status !== "active" || currentTurn !== playerColor || isMoving) return;
+    // Premove (#473): allow picking up own pieces during the opponent's turn.
+    if (status !== "active" || isMoving) return;
+    if (!playerColor) return;
     if (viewingIndex !== null) return;
     const piece = board[row][col];
     if (piece === "." || !isPlayerPiece(piece)) return;
@@ -968,6 +1011,12 @@ function ChessBoardInner() {
       return;
     }
 
+    // Opponent's turn → queue as premove instead of moving now (#473).
+    if (currentTurn !== playerColor) {
+      queuePremove(from, [toRow, toCol]);
+      return;
+    }
+
     if (!isPossibleMove(toRow, toCol)) {
       safeHaptic("error");
       return;
@@ -978,7 +1027,9 @@ function ChessBoardInner() {
 
   // ── Native mobile touch event handlers with -30px offset (#439) ─────────
   const handleTouchStart = (e: React.TouchEvent, row: number, col: number) => {
-    if (status !== "active" || currentTurn !== playerColor || isMoving) return;
+    // Premove (#473): allow touch-drag during the opponent's turn.
+    if (status !== "active" || isMoving) return;
+    if (!playerColor) return;
     if (viewingIndex !== null) return;
     const piece = board[row][col];
     if (piece === "." || !isPlayerPiece(piece)) return;
@@ -1026,6 +1077,12 @@ function ChessBoardInner() {
     if (targetPiece !== "." && isPlayerPiece(targetPiece)) {
       selectSquare([toRow, toCol]);
       safeHaptic("pickup");
+      return;
+    }
+
+    // Opponent's turn → queue as premove (#473).
+    if (currentTurn !== playerColor) {
+      queuePremove(from, [toRow, toCol]);
       return;
     }
 
@@ -1144,6 +1201,8 @@ function ChessBoardInner() {
   const handleSquareMouseDown = (e: React.MouseEvent, row: number, col: number) => {
     if (e.button !== 2) return; // only the right mouse button draws annotations
     e.preventDefault();
+    // Right-click cancels a queued premove (#473) in addition to annotations.
+    if (queuedPremove) clearPremove();
     rightDragRef.current = { row, col, color: colorFromModifiers(e) };
   };
 
@@ -1776,6 +1835,23 @@ function ChessBoardInner() {
             )}
           </div>
 
+          {/* ── Premove banner (#473) ── */}
+          {queuedPremove && status === "active" && currentTurn !== playerColor && (
+            <div
+              data-testid="premove-banner"
+              className="shrink-0 flex items-center gap-2 px-3 h-8 rounded-xl bg-orange-500/10 border border-orange-400/30 text-orange-300 text-xs font-semibold"
+              style={{ width: boardPx > 0 ? `${boardPx}px` : "100%", maxWidth: "100%" }}
+            >
+              <span className="truncate">Premove queued — fires on your turn</span>
+              <button
+                onClick={clearPremove}
+                className="ml-auto px-2 py-0.5 rounded-lg bg-orange-500/20 hover:bg-orange-500/40 text-orange-200 text-[11px] font-bold transition-colors shrink-0"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* ── Board (fills remaining height) ── */}
           <div
             ref={boardWrapperRef}
@@ -1862,10 +1938,21 @@ function ChessBoardInner() {
                     const isCursor =
                       cursor !== null && cursor[0] === actualRow && cursor[1] === actualCol;
 
+                    // Premove highlight (#473): distinct orange/cyan markers.
+                    const isPremoveSource =
+                      queuedPremove !== null &&
+                      queuedPremove.from[0] === actualRow &&
+                      queuedPremove.from[1] === actualCol;
+                    const isPremoveDest =
+                      queuedPremove !== null &&
+                      queuedPremove.to[0] === actualRow &&
+                      queuedPremove.to[1] === actualCol;
+
                     return (
                       <div
                         key={`${rowIndex}-${colIndex}`}
                         data-testid={`square-${actualRow}-${actualCol}`}
+                        data-premove={isPremoveSource ? "source" : isPremoveDest ? "dest" : undefined}
                         role="gridcell"
                         tabIndex={0}
                         aria-label={squareAriaLabel(piece, actualRow, actualCol)}
@@ -1876,7 +1963,11 @@ function ChessBoardInner() {
                           isKingInCheck ? "square-check bg-red-500/80" : ""
                         } ${isLastMoveSquare ? "square-last-move bg-yellow-300/45" : ""} ${
                           highlight ? " outline-2 outline-yellow-300/60 -outline-offset-2" : ""
-                        } ${isCursor ? "outline-2 outline-sky-400 -outline-offset-2" : ""}`}
+                        } ${isCursor ? "outline-2 outline-sky-400 -outline-offset-2" : ""} ${
+                          isPremoveSource ? "premove-source outline-2 outline-orange-400 -outline-offset-2" : ""
+                        } ${
+                          isPremoveDest ? "premove-dest outline-2 outline-cyan-300 -outline-offset-2" : ""
+                        }`}
                         style={
                           isCaptureSquare
                             ? { animation: "captureFlash 0.4s ease-out forwards" }

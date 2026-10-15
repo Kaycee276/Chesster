@@ -67,6 +67,11 @@ interface GameStore {
     piece: string;
   } | null;
   selectedSquare: [number, number] | null;
+  // Premove queue (#473): speculative move entered during opponent's turn.
+  // Squares use board indices to match ChessBoard; promotion is "q"|"r"|"b"|"n".
+  queuedPremove: { from: [number, number]; to: [number, number]; promotion?: string } | null;
+  setQueuedPremove: (premove: { from: [number, number]; to: [number, number]; promotion?: string } | null) => void;
+  clearPremove: () => void;
   // Move history + board playback rewind
   moveHistory: MoveRecord[];
   viewingIndex: number | null;
@@ -116,6 +121,7 @@ interface GameStore {
   loadMoveHistory: () => Promise<void>;
   setViewingIndex: (index: number | null) => void;
   updateGameState: (data: GameState) => void;
+  tryExecutePremove: () => Promise<boolean>;
   resignGame: () => Promise<void>;
   offerDraw: () => Promise<void>;
   acceptDraw: () => Promise<void>;
@@ -147,6 +153,9 @@ export const useGameStore = create<GameStore>()(
       capturedBlack: [],
       lastMove: null,
       selectedSquare: null,
+      queuedPremove: null,
+      setQueuedPremove: (premove) => set({ queuedPremove: premove }),
+      clearPremove: () => set({ queuedPremove: null, selectedSquare: null }),
       moveHistory: [],
       viewingIndex: null,
       wagerAmount: null,
@@ -423,6 +432,43 @@ export const useGameStore = create<GameStore>()(
         }
         if (data.status !== "active") {
           stopLocalTimer();
+          // A finished game invalidates any queued premove.
+          if (get().queuedPremove) set({ queuedPremove: null });
+          return;
+        }
+        // Opponent move arrived: auto-execute a legal queued premove (#473).
+        const { queuedPremove, playerColor, currentTurn, status } = get();
+        if (queuedPremove && playerColor && currentTurn === playerColor && status === "active") {
+          void get().tryExecutePremove();
+        }
+      },
+
+      tryExecutePremove: async () => {
+        const { queuedPremove, board, playerColor, status } = get();
+        if (!queuedPremove || !playerColor || status !== "active") return false;
+        if (get().currentTurn !== playerColor) return false;
+        // Validate against the fresh position; cancel cleanly if illegal.
+        const { getPossibleMoves } = await import("../utils/chessUtils");
+        const legal = getPossibleMoves(board, queuedPremove.from, playerColor).some(
+          ([r, c]) => r === queuedPremove.to[0] && c === queuedPremove.to[1]
+        );
+        if (!legal) {
+          set({ queuedPremove: null, selectedSquare: null });
+          try {
+            soundService.lowTime();
+          } catch { /* ignore audio failures */ }
+          return false;
+        }
+        const premove = queuedPremove;
+        set({ queuedPremove: null });
+        try {
+          await get().makeMove(premove.from, premove.to, premove.promotion);
+          return true;
+        } catch {
+          try {
+            soundService.lowTime();
+          } catch { /* ignore */ }
+          return false;
         }
       },
 
@@ -513,6 +559,7 @@ export const useGameStore = create<GameStore>()(
           secondsLeft: 600,
           timeControlSeconds: 600,
           selectedSquare: null,
+          queuedPremove: null,
           moveHistory: [],
           viewingIndex: null,
           wagerAmount: null,

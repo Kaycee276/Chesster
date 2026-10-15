@@ -139,6 +139,18 @@ class QueryBuilder {
     return this;
   }
 
+  // Supabase-compatible `.is(column, value)` — used for soft-delete filtering
+  // (#471): `.is("deleted_at", null)` → `"deleted_at" IS NULL`.
+  is(column, value) {
+    if (value === null || value === undefined) {
+      this.conditions.push(`"${column}" IS NULL`);
+    } else {
+      const p = this._addParam(value);
+      this.conditions.push(`"${column}" = ${p}`);
+    }
+    return this;
+  }
+
   neq(column, value) {
     const p = this._addParam(value);
     this.conditions.push(`"${column}" <> ${p}`);

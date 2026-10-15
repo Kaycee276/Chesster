@@ -53,6 +53,9 @@ model Game {
   deleted_at             DateTime? @db.Timestamptz(6)
   archived_at            DateTime? @db.Timestamptz(6)
   archival_status        String?   @default("active") @db.VarChar(20)
+  // Soft-delete + retention archival (#471):
+  // deleted_at covers deletedAt, is_archived covers isArchived.
+  is_archived            Boolean   @default(false)
   move_history           Json?     @default("[]") @db.JsonB
   is_draw                Boolean?  @default(false)
   draw_reason            String?   @db.VarChar(50)
@@ -83,6 +86,9 @@ model Game {
   @@index([player_white_address, created_at(sort: Desc)], map: "idx_games_white_player_created_at")
   @@index([player_black_address, created_at(sort: Desc)], map: "idx_games_black_player_created_at")
   @@index([status, created_at(sort: Desc)], map: "idx_games_status_created_at")
+  @@index([deleted_at], map: "idx_games_deleted_at")
+  @@index([archival_status], map: "idx_games_archival_status")
+  @@index([is_archived], map: "idx_games_is_archived")
   @@map("games")
 }
 
@@ -141,6 +147,8 @@ model User {
   claimable_commission  Decimal       @default(0) @db.Decimal(30, 0)
   is_deleted            Boolean       @default(false)
   deleted_at            DateTime?     @db.Timestamptz(6)
+  // Optimistic locking version for concurrent balance/stats updates (#472).
+  version               Int           @default(1)
   created_at            DateTime      @default(now()) @db.Timestamptz(6)
   updated_at            DateTime      @default(now()) @db.Timestamptz(6)
 
@@ -164,6 +172,8 @@ model Player {
   losses           Int       @default(0)
   is_deleted       Boolean   @default(false)
   deleted_at       DateTime? @db.Timestamptz(6)
+  // Optimistic locking version for concurrent rating/stats updates (#472).
+  version          Int       @default(1)
   created_at       DateTime  @default(now()) @db.Timestamptz(6)
   updated_at       DateTime  @default(now()) @db.Timestamptz(6)
 

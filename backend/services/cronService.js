@@ -49,14 +49,35 @@ class CronService {
 
 	async archiveCompletedGames() {
 		const cutoffDate = new Date(Date.now() - this.archivalAgeDays * 24 * 60 * 60 * 1000);
+		// Retention soft-mark (#471): flag stale completed games as archived
+		// without touching active matches or open disputes.
+		let marked = 0;
+		try {
+			let excludedGameIds = [];
+			try {
+				if (this.db && typeof this.db.from === "function") {
+					const flagRes = await this.db.from("player_flags").select("game_id").eq("status", "pending").limit(1000);
+					excludedGameIds = (flagRes?.data || []).map((f) => f.game_id).filter(Boolean);
+				}
+			} catch (_) {
+				// Dispute lookup is best-effort; archival still excludes active statuses.
+			}
+			if (this.game && typeof this.game.archiveStaleCompletedGames === "function") {
+				const res = await this.game.archiveStaleCompletedGames(cutoffDate.toISOString(), { excludedGameIds });
+				marked = res?.archived ?? 0;
+			}
+		} catch (error) {
+			console.error("[CronService] Retention marking failed:", error.message);
+		}
 		try {
 			if (this.archival && typeof this.archival.archiveOldGames === "function") {
-				return await this.archival.archiveOldGames(cutoffDate);
+				const result = await this.archival.archiveOldGames(cutoffDate);
+				return { ...result, marked };
 			}
-			return { success: true, archived: 0 };
+			return { success: true, archived: 0, marked };
 		} catch (error) {
 			console.error("[CronService] Game archival failed:", error.message);
-			return { success: false, error: error.message };
+			return { success: false, error: error.message, marked };
 		}
 	}
 

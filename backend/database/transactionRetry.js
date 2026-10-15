@@ -1,6 +1,31 @@
 const logger = require("../utils/logger");
 
 /**
+ * Optimistic locking failure: a conditional `WHERE version = $currentVersion`
+ * update matched 0 rows because another worker already incremented it (#472).
+ */
+class OptimisticLockError extends Error {
+	constructor(message = "Optimistic lock conflict: record was modified concurrently") {
+		super(message);
+		this.name = "OptimisticLockError";
+		this.code = "OPTIMISTIC_LOCK";
+	}
+}
+
+function isOptimisticLockError(error) {
+	if (!error) return false;
+	if (error instanceof OptimisticLockError) return true;
+	if (String(error.code || "") === "OPTIMISTIC_LOCK") return true;
+	if (error.name === "OptimisticLockError") return true;
+	const message = String(error.message || "").toLowerCase();
+	return (
+		message.includes("optimistic lock") ||
+		message.includes("version mismatch") ||
+		message.includes("concurrent modification")
+	);
+}
+
+/**
  * Transient error detection:
  * - PostgreSQL error 40P01: deadlock detected
  * - PostgreSQL error 40001: serialization failure
@@ -9,6 +34,8 @@ const logger = require("../utils/logger");
  */
 function isTransientConflictError(error) {
 	if (!error) return false;
+	// Optimistic-lock collisions are retryable by definition (#472).
+	if (isOptimisticLockError(error)) return true;
 	const code = String(error.code || error.sqlState || "");
 	if (code === "40P01" || code === "40001" || code === "P2034") {
 		return true;
@@ -102,4 +129,6 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 module.exports = {
 	executeWithRetry,
 	isTransientConflictError,
+	isOptimisticLockError,
+	OptimisticLockError,
 };
