@@ -10,6 +10,7 @@ export default defineConfig({
 		baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:3090",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
+    permissions: ["clipboard-read", "clipboard-write"],
   },
   projects: [
     {

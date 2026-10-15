@@ -84,3 +84,16 @@ backend/
 ├── database/        # SQL schemas
 └── server.js        # Entry point
 ```
+
+## API & WebSocket Documentation
+
+- **OpenAPI 3.0 Specification**: [`docs/openapi.yaml`](./docs/openapi.yaml)
+- **Interactive Swagger UI**: Start the server and navigate to `http://localhost:3000/api-docs`
+- **WebSocket Protocol Reference**: [`docs/WEBSOCKETS.md`](./docs/WEBSOCKETS.md)
+
+### Previewing OpenAPI in Swagger Editor
+1. Open the [Swagger Editor](https://editor.swagger.io/).
+2. Click **File** > **Import File** in the top navigation bar.
+3. Select `backend/docs/openapi.yaml` from your local checkout.
+4. Test request schemas, inspect endpoints, and try out live requests against `http://localhost:3000/api`.
+

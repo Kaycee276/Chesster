@@ -404,6 +404,7 @@ io.on("connection", (socket) => {
     presence[playerColor].socketId = null;
     broadcastPresence(gameCode, playerColor, "reconnecting");
     io.to(gameCode).emit('player_status', { color: playerColor, status: 'disconnected', graceMs: 60 * 1000 });
+    io.to(gameCode).emit('opponent_disconnected', { gameCode, color: playerColor, graceTimeSeconds: 60 });
 
     // Give the player a 60-second grace period to reconnect before the
     // match is auto-forfeited on their behalf (see timerService).
@@ -543,6 +544,7 @@ io.on("connection", (socket) => {
         timestamp: new Date().toISOString(),
       });
       socket.to(gameId).emit('player_status', { color: playerColor, status: 'reconnected' });
+      socket.to(gameId).emit('opponent_reconnected', { gameCode: gameId, color: playerColor });
 
       // Confirm success via ack
       sendAck(null, { success: true, gameId, playerColor });

@@ -1,0 +1,986 @@
+openapi: 3.0.3
+info:
+  title: Chesster Platform REST API
+  description: >-
+    High-performance, decentralized chess and tournament platform on Stellar &
+    Soroban. Exposes REST API endpoints for authentication, match creation, move
+    execution, escrow settlements, tournaments, puzzles, and platform metrics.
+  version: 1.0.0
+  contact:
+    name: Chesster Team
+    url: https://github.com/Kaycee276/Chesster
+  license:
+    name: ISC
+    url: https://opensource.org/licenses/ISC
+servers:
+  - url: /api
+    description: Primary API endpoint prefix
+  - url: http://localhost:3000/api
+    description: Local development server
+tags:
+  - name: Auth
+    description: Nonce challenge generation, wallet signature verification, and profile management
+  - name: Games
+    description: Match lifecycle, lobby creation, moves, draw/resign, and chat
+  - name: Tournaments
+    description: Single-elimination tournaments, registration, and bracket progression
+  - name: Puzzles
+    description: Daily rated chess puzzles and tactical solution verification
+  - name: Escrow
+    description: Stellar Soroban on-chain match escrow, deposit checks, and settlement
+  - name: Health
+    description: System status, uptime, and database health probes
+
+paths:
+  /auth/challenge:
+    post:
+      tags:
+        - Auth
+      summary: Request cryptographic nonce challenge for wallet login
+      operationId: createAuthChallenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - publicKey
+              properties:
+                publicKey:
+                  type: string
+                  example: GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI
+                  description: Stellar G-address of the connecting wallet
+      responses:
+        '200':
+          description: Nonce challenge created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      nonce:
+                        type: string
+                        example: "Sign this message to authenticate with Chesster: 1729000000000-a1b2c3d4"
+                      expiresAt:
+                        type: string
+                        format: date-time
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Verify signature and obtain JWT session token
+      operationId: loginWallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - publicKey
+                - signature
+              properties:
+                publicKey:
+                  type: string
+                  example: GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI
+                signature:
+                  type: string
+                  example: MOCK_ED25519_BASE64_SIGNATURE
+      responses:
+        '200':
+          description: Wallet verified; JWT access token returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      token:
+                        type: string
+                        example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                      user:
+                        $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/profile:
+    get:
+      tags:
+        - Auth
+      summary: Get currently authenticated user profile
+      operationId: getMyProfile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    put:
+      tags:
+        - Auth
+      summary: Update profile preferences (username, avatar, theme)
+      operationId: updateProfile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: GrandmasterStellar
+                avatarUrl:
+                  type: string
+                  example: https://chesster.app/avatars/knight.png
+                preferredTheme:
+                  type: string
+                  example: dark
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/{address}/profile:
+    get:
+      tags:
+        - Auth
+      summary: Fetch public profile and Elo rating for any wallet address
+      operationId: getPublicProfile
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Public player profile
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/UserProfile'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /games:
+    post:
+      tags:
+        - Games
+      summary: Create a new game lobby / match
+      operationId: createGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGameRequest'
+      responses:
+        '200':
+          description: Match created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/Game'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    get:
+      tags:
+        - Games
+      summary: List matches with pagination
+      operationId: listGames
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, active, completed, cancelled]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of matches
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Game'
+
+  /games/pending:
+    get:
+      tags:
+        - Games
+      summary: Retrieve list of open games awaiting opponent join
+      operationId: getPendingGames
+      responses:
+        '200':
+          description: Open waiting lobbies
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Game'
+
+  /games/{gameCode}:
+    get:
+      tags:
+        - Games
+      summary: Get match state by game code
+      operationId: getGameByCode
+      parameters:
+        - name: gameCode
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current match state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Game'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /games/{gameCode}/join:
+    post:
+      tags:
+        - Games
+      summary: Join an open match as opponent or spectator
+      operationId: joinGame
+      parameters:
+        - name: gameCode
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                playerColor:
+                  type: string
+                  enum: [white, black]
+                walletAddress:
+                  type: string
+      responses:
+        '200':
+          description: Joined successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Game'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /games/{gameCode}/move:
+    post:
+      tags:
+        - Games
+      summary: Submit a validated chess move
+      operationId: makeMove
+      parameters:
+        - name: gameCode
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - from
+                - to
+              properties:
+                from:
+                  type: array
+                  items:
+                    type: integer
+                  example: [6, 4]
+                to:
+                  type: array
+                  items:
+                    type: integer
+                  example: [4, 4]
+                promotion:
+                  type: string
+                  enum: [q, r, b, n]
+      responses:
+        '200':
+          description: Move executed; updated state returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Game'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /games/{gameCode}/resign:
+    post:
+      tags:
+        - Games
+      summary: Resign active match
+      operationId: resignGame
+      parameters:
+        - name: gameCode
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Game resigned; winner awarded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Game'
+
+  /games/{gameCode}/draw/offer:
+    post:
+      tags:
+        - Games
+      summary: Offer a mutual draw to the opponent
+      operationId: offerDraw
+      parameters:
+        - name: gameCode
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Draw offered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /games/{gameCode}/draw/accept:
+    post:
+      tags:
+        - Games
+      summary: Accept an outstanding draw offer
+      operationId: acceptDraw
+      parameters:
+        - name: gameCode
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Game concluded as mutual draw
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Game'
+
+  /games/{gameCode}/chat:
+    get:
+      tags:
+        - Games
+      summary: Fetch in-game chat message history
+      operationId: getGameChat
+      parameters:
+        - name: gameCode
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Message array
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+
+  /tournaments:
+    get:
+      tags:
+        - Tournaments
+      summary: List tournaments with optional status filters
+      operationId: listTournaments
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, active, completed, cancelled]
+      responses:
+        '200':
+          description: Tournament list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Tournament'
+
+  /tournaments/{id}:
+    get:
+      tags:
+        - Tournaments
+      summary: Get tournament overview and registration status
+      operationId: getTournamentById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tournament object
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Tournament'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tournaments/{id}/bracket:
+    get:
+      tags:
+        - Tournaments
+      summary: Get tournament bracket hierarchy and round matches
+      operationId: getTournamentBracket
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tournament bracket structure
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      rounds:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/BracketRound'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tournaments/{id}/register:
+    post:
+      tags:
+        - Tournaments
+      summary: Register player for an upcoming tournament
+      operationId: registerTournament
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - walletAddress
+              properties:
+                walletAddress:
+                  type: string
+                playerName:
+                  type: string
+      responses:
+        '200':
+          description: Registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /puzzles/daily:
+    get:
+      tags:
+        - Puzzles
+      summary: Retrieve the daily featured chess tactic puzzle
+      operationId: getDailyPuzzle
+      responses:
+        '200':
+          description: Daily puzzle data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    $ref: '#/components/schemas/Puzzle'
+
+  /puzzles/{id}/verify:
+    post:
+      tags:
+        - Puzzles
+      summary: Verify candidate move sequence for a puzzle
+      operationId: verifyPuzzleSolution
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - moves
+              properties:
+                moves:
+                  type: array
+                  items:
+                    type: string
+                  example: ["e2e4", "e7e5", "g1f3"]
+      responses:
+        '200':
+          description: Verification outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      solved:
+                        type: boolean
+                      ratingDelta:
+                        type: integer
+                      newRating:
+                        type: integer
+
+  /escrow/{gameId}:
+    get:
+      tags:
+        - Escrow
+      summary: Get Soroban on-chain escrow status and deposit confirmation
+      operationId: getEscrowStatus
+      parameters:
+        - name: gameId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Escrow status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      gameId:
+                        type: string
+                      contractId:
+                        type: string
+                      status:
+                        type: string
+                        enum: [pending, locked, settled, refunded]
+                      totalWager:
+                        type: number
+
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Microservice liveness and database connection probe
+      operationId: getHealthStatus
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  uptime:
+                    type: number
+                  timestamp:
+                    type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Enter the Bearer token returned from /api/auth/login
+
+  responses:
+    BadRequest:
+      description: Invalid query parameters or malformed request payload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication required or invalid/expired JWT token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: The requested resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: Rate limit exceeded (IP or wallet quota)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalServerError:
+      description: Unexpected internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: Invalid input parameters
+        code:
+          type: string
+          example: BAD_REQUEST
+        details:
+          type: array
+          items:
+            type: string
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        walletAddress:
+          type: string
+          example: GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI
+        name:
+          type: string
+          example: PlayerOne
+        rating:
+          type: integer
+          example: 1500
+        gamesPlayed:
+          type: integer
+          example: 42
+        wins:
+          type: integer
+          example: 25
+
+    CreateGameRequest:
+      type: object
+      required:
+        - gameType
+      properties:
+        gameType:
+          type: string
+          example: chess
+        wagerAmount:
+          type: number
+          example: 10
+        timeControlSeconds:
+          type: integer
+          example: 300
+        incrementSeconds:
+          type: integer
+          example: 0
+
+    Game:
+      type: object
+      properties:
+        id:
+          type: string
+        game_code:
+          type: string
+          example: CHESS789
+        game_type:
+          type: string
+          example: chess
+        status:
+          type: string
+          enum: [pending, active, completed, cancelled]
+          example: active
+        current_turn:
+          type: string
+          enum: [white, black]
+          example: white
+        board_state:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+        player_white_address:
+          type: string
+        player_black_address:
+          type: string
+        wager_amount:
+          type: number
+        winner:
+          type: string
+        end_reason:
+          type: string
+          example: checkmate
+
+    ChatMessage:
+      type: object
+      properties:
+        id:
+          type: string
+        playerColor:
+          type: string
+          enum: [white, black]
+        message:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    Tournament:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+          example: Stellar Blitz Championship
+        status:
+          type: string
+          enum: [open, active, completed, cancelled]
+        prizePool:
+          type: number
+          example: 500
+        entryFee:
+          type: number
+          example: 10
+        totalRounds:
+          type: integer
+          example: 4
+
+    BracketRound:
+      type: object
+      properties:
+        roundNumber:
+          type: integer
+          example: 1
+        matches:
+          type: array
+          items:
+            type: object
+            properties:
+              matchNumber:
+                type: integer
+              playerWhite:
+                type: object
+                properties:
+                  walletAddress:
+                    type: string
+                  name:
+                    type: string
+              playerBlack:
+                type: object
+                properties:
+                  walletAddress:
+                    type: string
+                  name:
+                    type: string
+              status:
+                type: string
+                example: active
+
+    Puzzle:
+      type: object
+      properties:
+        id:
+          type: string
+        fen:
+          type: string
+          example: r1bqkb1r/pppp1ppp/2n5/4p3/2B1n3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4
+        rating:
+          type: integer
+          example: 1650
+        initialMove:
+          type: string
+          example: c4f7

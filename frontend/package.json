@@ -16,7 +16,8 @@
     "lhci": "lhci autorun --config=../.lighthouserc.json",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests",
-    "test:coverage": "vitest run --coverage --passWithNoTests"
+    "test:coverage": "vitest run --coverage --passWithNoTests",
+    "test:e2e": "playwright test e2e/gameplay.spec.ts"
   },
   "dependencies": {
     "@stellar/freighter-api": "^6.0.1",
