@@ -277,6 +277,11 @@ class TimerService {
 						status: "offline",
 						forfeited: true,
 					});
+					this.io.to(gameCode).emit("game_over", {
+						gameCode,
+						winner: game.winner === game.player_white_address ? "white" : "black",
+						reason: "abandonment",
+					});
 				}
 			} catch (err) {
 				console.error(`[TimerService] auto-forfeit failed for ${gameCode}/${color}:`, err.message);

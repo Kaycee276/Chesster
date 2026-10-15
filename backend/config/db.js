@@ -7,6 +7,37 @@
 const { Pool } = require("pg");
 const prisma = require("./prisma");
 
+const TRANSIENT_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "57P01", // admin_shutdown
+  "57P02", // crash_shutdown
+  "08006", // connection_failure
+  "08001", // sqlclient_unable_to_establish_sqlconnection
+  "08004", // sqlserver_rejected_establishment_of_sqlconnection
+  "08007", // transaction_resolution_unknown
+  "08003", // connection_does_not_exist
+]);
+
+function isTransientError(err) {
+  if (!err) return false;
+  if (err.code && TRANSIENT_ERROR_CODES.has(String(err.code))) return true;
+  const msg = err.message || "";
+  if (
+    msg.includes("Connection terminated unexpectedly") ||
+    msg.includes("connection reset") ||
+    msg.includes("server closed the connection unexpectedly") ||
+    msg.includes("terminating connection due to administrator command") ||
+    msg.includes("timeout exceeded") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("ECONNRESET")
+  ) {
+    return true;
+  }
+  return false;
+}
+
 let poolInstance = null;
 
 function getPool() {
@@ -20,8 +51,10 @@ function getPool() {
           ? { rejectUnauthorized: false }
           : false,
       max: parseInt(process.env.PG_MAX_POOL_SIZE || "20", 10),
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
+      idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "10000", 10),
+      connectionTimeoutMillis: parseInt(process.env.PG_CONN_TIMEOUT_MS || "5000", 10),
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
     });
 
     poolInstance.on("error", (err) => {
@@ -29,6 +62,30 @@ function getPool() {
     });
   }
   return poolInstance;
+}
+
+async function queryWithRetry(
+  sql,
+  params = [],
+  { maxRetries = 3, backoffMs = 150, isReadOnly = true, pool = getPool() } = {}
+) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await pool.query(sql, params);
+    } catch (err) {
+      attempt++;
+      if (!isReadOnly || attempt >= maxRetries || !isTransientError(err)) {
+        throw err;
+      }
+      const jitter = Math.random() * 50;
+      const delay = Math.min(2000, backoffMs * Math.pow(2, attempt) + jitter);
+      console.warn(
+        `[PostgreSQL Retry] Transient error encountered (attempt ${attempt}/${maxRetries}): ${err.message}. Retrying in ${Math.round(delay)}ms...`
+      );
+      await new Promise((res) => setTimeout(res, delay));
+    }
+  }
 }
 
 class QueryBuilder {
@@ -196,12 +253,12 @@ class QueryBuilder {
   }
 
   async _execute() {
-    const pool = getPool();
+    const pool = typeof db !== "undefined" && db.getPool ? db.getPool() : getPool();
     try {
       if (this.operation === "select") {
         if (this.headOption && this.countOption === "exact") {
           const countSql = `SELECT COUNT(*)::int AS count FROM "${this.table}"${this._buildWhere()}`;
-          const res = await pool.query(countSql, this.params);
+          const res = await queryWithRetry(countSql, this.params, { isReadOnly: true, pool });
           return { data: null, count: res.rows[0]?.count || 0, error: null };
         }
 
@@ -214,7 +271,7 @@ class QueryBuilder {
                 .join(", ");
 
         const sql = `SELECT ${cols} FROM "${this.table}"${this._buildWhere()}${this._buildOrder()}${this._buildLimit()}`;
-        const res = await pool.query(sql, this.params);
+        const res = await queryWithRetry(sql, this.params, { isReadOnly: true, pool });
         return { data: res.rows, count: res.rowCount, error: null };
       }
 
@@ -311,13 +368,13 @@ const db = {
     return new QueryBuilder(tableName);
   },
   async rpc(fnName, args = {}) {
-    const pool = getPool();
+    const pool = db.getPool ? db.getPool() : getPool();
     try {
       const keys = Object.keys(args);
       const params = keys.map((k) => args[k]);
       const placeholders = params.map((_, i) => `$${i + 1}`).join(", ");
       const sql = `SELECT * FROM "${fnName}"(${placeholders})`;
-      const res = await pool.query(sql, params);
+      const res = await queryWithRetry(sql, params, { isReadOnly: true, pool });
       return { data: res.rows, error: null };
     } catch (err) {
       return { data: null, error: err };
@@ -327,6 +384,12 @@ const db = {
     return { __raw: sql };
   },
   getPool,
+  queryWithRetry,
+  isTransientError,
+  TRANSIENT_ERROR_CODES,
 };
 
 module.exports = db;
+module.exports.queryWithRetry = queryWithRetry;
+module.exports.isTransientError = isTransientError;
+module.exports.TRANSIENT_ERROR_CODES = TRANSIENT_ERROR_CODES;

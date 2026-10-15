@@ -252,6 +252,44 @@ class TournamentModel {
 	}
 
 	/**
+	 * Updates a tournament participant's score and optional status.
+	 *
+	 * @param {string} tournamentId
+	 * @param {string} walletAddress
+	 * @param {object} updates
+	 * @returns {Promise<object>}
+	 */
+	async updateParticipantScore(tournamentId, walletAddress, { scoreDelta = 0, score = null, status = null } = {}) {
+		const participant = await this.getParticipant(tournamentId, walletAddress);
+		if (!participant) {
+			throw new Error(`Participant not found: ${walletAddress}`);
+		}
+
+		const newScore = score !== null ? score : (participant.score || 0) + scoreDelta;
+		const payload = {
+			score: newScore,
+			updated_at: new Date().toISOString(),
+		};
+		if (status) {
+			if (!PARTICIPANT_STATUSES.includes(status)) {
+				throw new Error(`Invalid participant status: ${status}`);
+			}
+			payload.status = status;
+		}
+
+		const { data, error } = await supabase
+			.from("tournament_participants")
+			.update(payload)
+			.eq("tournament_id", tournamentId)
+			.eq("wallet_address", walletAddress)
+			.select()
+			.single();
+
+		if (error) throw error;
+		return data;
+	}
+
+	/**
 	 * Creates a single bracket match.
 	 *
 	 * @param {object} params

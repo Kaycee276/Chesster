@@ -1,4 +1,4 @@
-const { checkDbHealth } = require("../services/dbHealthService");
+const { checkDbHealth, clearDbHealthCache } = require("../services/dbHealthService");
 
 function createClient(result, delayMs = 0) {
   return {
@@ -11,6 +11,9 @@ function createClient(result, delayMs = 0) {
 }
 
 describe("Database health probe", () => {
+  beforeEach(() => {
+    clearDbHealthCache();
+  });
   it("reports a healthy response with latency metrics", async () => {
     const health = await checkDbHealth({
       client: createClient({ data: [{ id: 1 }], error: null }),

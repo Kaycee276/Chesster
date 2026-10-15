@@ -6,6 +6,7 @@
 const express = require("express");
 const router = express.Router();
 const supabase = require("../config/supabase");
+const redisConfig = require("../config/redis");
 const { checkDbHealth } = require("../services/dbHealthService");
 const logger = require("../utils/logger");
 const { Keypair, rpc, Networks } = require("@stellar/stellar-sdk");
@@ -89,6 +90,51 @@ async function checkStellarRpcHealth() {
 }
 
 /**
+ * Verify Redis connectivity with a timeout
+ * @param {number} timeoutMs
+ * @returns {Promise<object>}
+ */
+async function checkRedisHealth(timeoutMs = 2000) {
+  if (!process.env.REDIS_URL) {
+    return {
+      status: "healthy",
+      service: "Redis",
+      configured: false,
+      message: "Redis disabled or not configured",
+    };
+  }
+  const startTime = Date.now();
+  let timer;
+  try {
+    const client = await redisConfig.getRedisConnection(timeoutMs);
+    if (!client) {
+      return {
+        status: "unhealthy",
+        service: "Redis",
+        error: `Redis connection timed out after ${timeoutMs}ms`,
+      };
+    }
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Redis ping timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
+    await Promise.race([client.ping(), timeoutPromise]);
+    clearTimeout(timer);
+    return {
+      status: "healthy",
+      service: "Redis",
+      responseTime: Date.now() - startTime,
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    return {
+      status: "unhealthy",
+      service: "Redis",
+      error: err.message,
+    };
+  }
+}
+
+/**
  * GET /api/health
  * Basic health check endpoint - quick liveness probe
  */
@@ -102,6 +148,94 @@ router.get("/health", (req, res) => {
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || "development",
   });
+});
+
+/**
+ * GET /api/health/liveness (and /health/liveness)
+ * Liveness probe: returns HTTP 200 with process uptime, memory usage, and timestamp without querying external services.
+ */
+router.get(["/health/liveness", "/liveness"], (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    uptimeSeconds: Math.floor(process.uptime()),
+    memoryUsage: process.memoryUsage(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+/**
+ * GET /api/health/readiness (and /health/readiness)
+ * Readiness probe: evaluates Neon PostgreSQL and Redis connectivity with a strict 2-second timeout per probe.
+ */
+router.get(["/health/readiness", "/readiness"], async (req, res) => {
+  try {
+    const [databaseHealth, redisHealth] = await Promise.all([
+      checkDbHealth({ timeoutMs: 2000 }),
+      checkRedisHealth(2000),
+    ]);
+
+    const isHealthy = databaseHealth.status === "healthy" && redisHealth.status === "healthy";
+    const statusCode = isHealthy ? 200 : 503;
+
+    return res.status(statusCode).json({
+      status: isHealthy ? "healthy" : "unhealthy",
+      timestamp: new Date().toISOString(),
+      dependencies: {
+        database: databaseHealth,
+        redis: redisHealth,
+      },
+    });
+  } catch (error) {
+    logger.error("Readiness probe failed", error);
+    return res.status(503).json({
+      status: "unhealthy",
+      timestamp: new Date().toISOString(),
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/health/detailed (and /health/detailed)
+ * Detailed health probe across database, redis, and stellar horizon rpc.
+ */
+router.get(["/health/detailed", "/detailed"], async (req, res) => {
+  try {
+    const startTime = Date.now();
+    const [databaseHealth, redisHealth, stellarRpcHealth] = await Promise.all([
+      checkDbHealth({ timeoutMs: 2000 }),
+      checkRedisHealth(2000),
+      checkStellarRpcHealth(),
+    ]);
+
+    const overallHealth =
+      databaseHealth.status === "healthy" &&
+      redisHealth.status === "healthy" &&
+      stellarRpcHealth.status === "healthy"
+        ? "healthy"
+        : "degraded";
+
+    const statusCode = overallHealth === "healthy" ? 200 : 503;
+    return res.status(statusCode).json({
+      status: overallHealth,
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      memoryUsage: process.memoryUsage(),
+      services: {
+        database: databaseHealth,
+        redis: redisHealth,
+        stellarRpc: stellarRpcHealth,
+      },
+      durationMs: Date.now() - startTime,
+    });
+  } catch (error) {
+    logger.error("Detailed health check failed", error);
+    return res.status(503).json({
+      status: "error",
+      timestamp: new Date().toISOString(),
+      error: error.message,
+    });
+  }
 });
 
 /**

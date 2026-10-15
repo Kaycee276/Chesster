@@ -5,6 +5,10 @@ try {
   Keypair = require("@stellar/stellar-sdk").Keypair;
 }
 
+const { getRedisClient } = require("../config/redis");
+
+const inMemorySeenNonces = new Map();
+
 /**
  * Middleware: Verify Request Signature on Relayed Meta-Transactions (Issue #323)
  * Protects endpoints from replay attacks and unauthorized meta-transactions by enforcing
@@ -105,8 +109,115 @@ function verifyRequestSignature(options = {}) {
   };
 }
 
+/**
+ * Middleware: Verify Cryptographic Signature on Escrow Coordinator Callbacks (Issue #445)
+ * Enforces strict 60-second temporal freshness and single-use nonce tracking via Redis
+ * to prevent settlement replay attacks.
+ */
+function verifyCoordinatorSignature(options = {}) {
+  const maxWindowMs = options.maxWindowMs ?? 60000; // 60 seconds
+  const nonceTtlSeconds = options.nonceTtlSeconds ?? 300; // 5 minutes TTL
+  const coordinatorPublicKey = options.coordinatorPublicKey || process.env.COORDINATOR_PUBLIC_KEY;
+
+  return async (req, res, next) => {
+    try {
+      const signature =
+        req.headers["x-chesster-signature"] ||
+        req.headers["x-signature"];
+      const timestamp =
+        req.headers["x-chesster-timestamp"] ||
+        req.headers["x-timestamp"];
+      const nonce =
+        req.headers["x-chesster-nonce"] ||
+        req.headers["x-nonce"];
+      const publicKey =
+        req.headers["x-chesster-public-key"] ||
+        req.headers["x-public-key"] ||
+        coordinatorPublicKey;
+
+      if (!signature || !timestamp || !nonce) {
+        return res.status(401).json({ error: "Missing security headers" });
+      }
+
+      const parsedTimestamp = Number(timestamp);
+      if (isNaN(parsedTimestamp)) {
+        return res.status(401).json({ error: "Invalid timestamp header" });
+      }
+
+      const now = Date.now();
+      if (Math.abs(now - parsedTimestamp) > maxWindowMs) {
+        return res.status(401).json({ error: "Request signature expired" });
+      }
+
+      const redis = options.redisClient || getRedisClient();
+      const redisKey = `coordinator:nonce:${nonce}`;
+
+      if (redis) {
+        const acquired = await redis.set(redisKey, "1", "EX", nonceTtlSeconds, "NX");
+        if (!acquired || (acquired !== "OK" && acquired !== true)) {
+          return res.status(409).json({ error: "Replay detected: nonce already processed" });
+        }
+      } else {
+        const nowSec = Math.floor(now / 1000);
+        if (inMemorySeenNonces.has(redisKey)) {
+          const exp = inMemorySeenNonces.get(redisKey);
+          if (exp > nowSec) {
+            return res.status(409).json({ error: "Replay detected: nonce already processed" });
+          }
+        }
+        inMemorySeenNonces.set(redisKey, nowSec + nonceTtlSeconds);
+      }
+
+      if (!publicKey) {
+        return res.status(401).json({ error: "Missing coordinator public key" });
+      }
+
+      let keypair;
+      try {
+        keypair = Keypair.fromPublicKey(publicKey);
+      } catch (err) {
+        return res.status(401).json({ error: "Invalid Stellar public key format" });
+      }
+
+      const bodyStr =
+        typeof req.body === "object" && req.body !== null
+          ? JSON.stringify(req.body)
+          : req.body || "";
+      const message = `${timestamp}.${nonce}.${bodyStr}`;
+
+      let signatureBuffer;
+      try {
+        if (/^[0-9a-fA-F]+$/.test(signature) && signature.length === 128) {
+          signatureBuffer = Buffer.from(signature, "hex");
+        } else {
+          signatureBuffer = Buffer.from(signature, "base64");
+        }
+      } catch (err) {
+        return res.status(401).json({ error: "Invalid signature encoding" });
+      }
+
+      let isValid = false;
+      try {
+        isValid = keypair.verify(Buffer.from(message), signatureBuffer);
+      } catch (err) {
+        return res.status(403).json({ error: "Invalid cryptographic signature" });
+      }
+
+      if (!isValid) {
+        return res.status(403).json({ error: "Invalid cryptographic signature" });
+      }
+
+      req.authenticatedCoordinator = publicKey;
+      next();
+    } catch (err) {
+      return res.status(500).json({ error: "Coordinator signature verification error: " + err.message });
+    }
+  };
+}
+
 module.exports = {
   verifyRequestSignature,
+  verifyCoordinatorSignature,
   verifyStellarSignature: (publicKey, message, signatureBase64) => {
     const keypair = Keypair.fromPublicKey(publicKey);
     const signatureBytes = Buffer.from(signatureBase64, "base64");

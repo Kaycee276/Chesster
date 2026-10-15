@@ -10,6 +10,7 @@ const {
   EVENT_TYPES,
   DLQ_STATUS,
   computeBackoffDelay,
+  isPrivateOrReservedIp,
 } = require("../services/webhookService");
 
 function createDeadLetterStore() {
@@ -49,8 +50,12 @@ describe("WebhookService", () => {
     });
 
     it("throws if eventType or url is missing", () => {
-      expect(() => webhookService.register("", "https://x.com")).toThrow("eventType and url are required");
-      expect(() => webhookService.register(EVENT_TYPES.MATCH_CREATED, "")).toThrow("eventType and url are required");
+      expect(() => webhookService.register("", "https://x.com")).toThrow(
+        "eventType and url are required"
+      );
+      expect(() => webhookService.register(EVENT_TYPES.MATCH_CREATED, "")).toThrow(
+        "eventType and url are required"
+      );
     });
 
     it("removes a registered URL", () => {
@@ -61,7 +66,9 @@ describe("WebhookService", () => {
     });
 
     it("does not throw when unregistering a non-existent URL", () => {
-      expect(() => webhookService.unregister(EVENT_TYPES.MATCH_CREATED, "https://nope.com")).not.toThrow();
+      expect(() =>
+        webhookService.unregister(EVENT_TYPES.MATCH_CREATED, "https://nope.com")
+      ).not.toThrow();
     });
   });
 
@@ -208,7 +215,13 @@ describe("WebhookService", () => {
 
     it("onPayoutConfirmed dispatches match.payout_confirmed event", async () => {
       const spy = jest.spyOn(webhookService, "dispatch").mockResolvedValue([]);
-      const payout = { gameCode: "G1", winner: "P1", amount: "200", txHash: "def", confirmedAt: new Date().toISOString() };
+      const payout = {
+        gameCode: "G1",
+        winner: "P1",
+        amount: "200",
+        txHash: "def",
+        confirmedAt: new Date().toISOString(),
+      };
       await webhookService.onPayoutConfirmed(payout);
       expect(spy).toHaveBeenCalledWith(EVENT_TYPES.MATCH_PAYOUT_CONFIRMED, payout);
     });
@@ -434,7 +447,9 @@ describe("WebhookService", () => {
 
       expect(deadLetterStore.claimForReplay).toHaveBeenCalledWith("dlq-42");
       expect(JSON.parse(sentBody)).toEqual(deadLetter.payload);
-      expect(webhookService.verify(sentBody, sentHeaders["X-Webhook-Signature"].slice(7))).toBe(true);
+      expect(webhookService.verify(sentBody, sentHeaders["X-Webhook-Signature"].slice(7))).toBe(
+        true
+      );
       expect(result).toMatchObject({ success: true, deadLetterId: "dlq-42" });
       expect(deadLetterStore.update).toHaveBeenCalledWith(
         "dlq-42",
@@ -566,6 +581,258 @@ describe("WebhookService", () => {
       await expect(store.claimForReplay("x")).rejects.toThrow("boom");
       query.eq.mockResolvedValue({ error: { message: "update failed" } });
       await expect(store.update("x", {})).rejects.toThrow("update failed");
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // Destination validation & SSRF protection (Issue #388)
+  // -------------------------------------------------------------------
+
+  describe("destination security and SSRF protection (Issue #388)", () => {
+    describe("URL scheme & credentials enforcement", () => {
+      it("rejects non-HTTPS destinations outside local development", () => {
+        expect(() =>
+          webhookService.register(EVENT_TYPES.MATCH_CREATED, "http://example.com/hook")
+        ).toThrow("Webhook destination must use HTTPS");
+
+        expect(() =>
+          webhookService.register(EVENT_TYPES.MATCH_CREATED, "ftp://example.com/hook")
+        ).toThrow("Webhook destination must use HTTPS");
+      });
+
+      it("permits HTTP when explicitly enabled for local development", () => {
+        const localSvc = new WebhookService({
+          deadLetterStore,
+          sleep,
+          allowInsecureHttp: true,
+        });
+        expect(() =>
+          localSvc.register(EVENT_TYPES.MATCH_CREATED, "http://example.com/hook")
+        ).not.toThrow();
+      });
+
+      it("rejects destinations with embedded user credentials", () => {
+        expect(() =>
+          webhookService.register(
+            EVENT_TYPES.MATCH_CREATED,
+            "https://admin:secret123@example.com/hook"
+          )
+        ).toThrow("must not contain embedded user credentials");
+
+        expect(() =>
+          webhookService.register(EVENT_TYPES.MATCH_CREATED, "https://user@example.com/hook")
+        ).toThrow("must not contain embedded user credentials");
+      });
+    });
+
+    describe("prohibited IPv4 destinations and metadata endpoints", () => {
+      it("rejects loopback and RFC 1918 private IPv4 literals at registration", () => {
+        const privateIps = [
+          "https://127.0.0.1/hook",
+          "https://127.0.0.100/hook",
+          "https://10.0.0.1/hook",
+          "https://10.254.254.254/hook",
+          "https://172.16.0.1/hook",
+          "https://172.31.255.255/hook",
+          "https://192.168.0.1/hook",
+          "https://192.168.100.50/hook",
+          "https://169.254.1.1/hook",
+        ];
+
+        for (const url of privateIps) {
+          expect(() => webhookService.register(EVENT_TYPES.MATCH_CREATED, url)).toThrow(
+            "Webhook destination to private or reserved IP address is blocked"
+          );
+        }
+      });
+
+      it("rejects cloud metadata IP and well-known metadata hostnames", () => {
+        expect(() =>
+          webhookService.register(
+            EVENT_TYPES.MATCH_CREATED,
+            "https://169.254.169.254/latest/meta-data"
+          )
+        ).toThrow("blocked");
+
+        expect(() =>
+          webhookService.register(
+            EVENT_TYPES.MATCH_CREATED,
+            "https://metadata.google.internal/computeMetadata/v1"
+          )
+        ).toThrow("blocked");
+
+        expect(() =>
+          webhookService.register(
+            EVENT_TYPES.MATCH_CREATED,
+            "https://instance-data/latest/meta-data"
+          )
+        ).toThrow("blocked");
+      });
+
+      it("rejects localhost hostnames", () => {
+        expect(() =>
+          webhookService.register(EVENT_TYPES.MATCH_CREATED, "https://localhost/hook")
+        ).toThrow("blocked");
+
+        expect(() =>
+          webhookService.register(EVENT_TYPES.MATCH_CREATED, "https://api.localhost/hook")
+        ).toThrow("blocked");
+      });
+    });
+
+    describe("prohibited IPv6 destinations", () => {
+      it("rejects loopback, ULA, link-local, and IPv4-mapped private IPv6 addresses", () => {
+        const privateIpv6Urls = [
+          "https://[::1]/hook",
+          "https://[fe80::1]/hook",
+          "https://[fe80::abcd:1234]/hook",
+          "https://[fc00::1]/hook",
+          "https://[fd12:3456:789a::1]/hook",
+          "https://[::ffff:127.0.0.1]/hook",
+          "https://[::ffff:10.0.0.1]/hook",
+          "https://[::ffff:192.168.1.1]/hook",
+        ];
+
+        for (const url of privateIpv6Urls) {
+          expect(() => webhookService.register(EVENT_TYPES.MATCH_CREATED, url)).toThrow("blocked");
+        }
+      });
+    });
+
+    describe("isPrivateOrReservedIp helper", () => {
+      it("correctly identifies private, loopback, and public IPv4 and IPv6 addresses", () => {
+        // Blocked
+        expect(isPrivateOrReservedIp("127.0.0.1")).toBe(true);
+        expect(isPrivateOrReservedIp("10.0.0.1")).toBe(true);
+        expect(isPrivateOrReservedIp("172.16.0.1")).toBe(true);
+        expect(isPrivateOrReservedIp("172.31.255.255")).toBe(true);
+        expect(isPrivateOrReservedIp("192.168.1.1")).toBe(true);
+        expect(isPrivateOrReservedIp("169.254.169.254")).toBe(true);
+        expect(isPrivateOrReservedIp("::1")).toBe(true);
+        expect(isPrivateOrReservedIp("fe80::1")).toBe(true);
+        expect(isPrivateOrReservedIp("fc00::1")).toBe(true);
+        expect(isPrivateOrReservedIp("::ffff:127.0.0.1")).toBe(true);
+
+        // Allowed public IPs
+        expect(isPrivateOrReservedIp("8.8.8.8")).toBe(false);
+        expect(isPrivateOrReservedIp("1.1.1.1")).toBe(false);
+        expect(isPrivateOrReservedIp("93.184.216.34")).toBe(false);
+        expect(isPrivateOrReservedIp("2606:4700:4700::1111")).toBe(false);
+      });
+    });
+
+    describe("DNS resolution validation & DNS rebinding defense at dispatch", () => {
+      it("blocks dispatch when DNS resolution yields a private IP (DNS rebinding)", async () => {
+        // Simulate a DNS resolver that returns a private IP at dispatch time
+        const rebindLookup = jest.fn().mockResolvedValue([{ address: "10.0.0.99", family: 4 }]);
+        const mockFetch = jest.fn();
+
+        const secureSvc = new WebhookService({
+          deadLetterStore,
+          sleep,
+          dnsLookup: rebindLookup,
+          fetch: mockFetch,
+        });
+
+        // Registration of the public domain name passes initial syntax check
+        secureSvc.register(EVENT_TYPES.MATCH_CREATED, "https://rebind.attacker.com/hook");
+
+        const results = await secureSvc.dispatch(EVENT_TYPES.MATCH_CREATED, { gameCode: "G1" });
+
+        expect(results).toHaveLength(1);
+        expect(results[0].success).toBe(false);
+        expect(results[0].error).toMatch(/resolved to blocked private or reserved IP/);
+        // The outbound HTTP request was blocked before connecting
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      it("blocks dispatch when DNS lookup returns loopback IPv6 (::1)", async () => {
+        const loopbackIpv6Lookup = jest.fn().mockResolvedValue([{ address: "::1", family: 6 }]);
+        const mockFetch = jest.fn();
+
+        const secureSvc = new WebhookService({
+          deadLetterStore,
+          sleep,
+          dnsLookup: loopbackIpv6Lookup,
+          fetch: mockFetch,
+        });
+
+        secureSvc.register(EVENT_TYPES.MATCH_CREATED, "https://loopback6.attacker.com/hook");
+
+        const results = await secureSvc.dispatch(EVENT_TYPES.MATCH_CREATED, { gameCode: "G1" });
+
+        expect(results[0].success).toBe(false);
+        expect(results[0].error).toMatch(/resolved to blocked private or reserved IP/);
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("redirect SSRF prevention", () => {
+      it("blocks redirects targeting cloud metadata or private IPs", async () => {
+        const publicLookup = jest.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+        // First request returns 302 redirecting to cloud metadata
+        const mockFetch = jest.fn().mockResolvedValue({
+          ok: false,
+          status: 302,
+          headers: {
+            get: (h) =>
+              h.toLowerCase() === "location" ? "http://169.254.169.254/latest/meta-data" : null,
+          },
+        });
+
+        const secureSvc = new WebhookService({
+          deadLetterStore,
+          sleep,
+          dnsLookup: publicLookup,
+          fetch: mockFetch,
+        });
+
+        secureSvc.register(EVENT_TYPES.MATCH_CREATED, "https://redirector.example.com/hook");
+
+        const results = await secureSvc.dispatch(EVENT_TYPES.MATCH_CREATED, { gameCode: "G1" });
+
+        expect(results).toHaveLength(1);
+        expect(results[0].success).toBe(false);
+        expect(results[0].error).toMatch(/blocked|HTTPS/);
+        // Did not follow the redirect into the metadata destination
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it("safely follows redirects to approved public HTTPS destinations", async () => {
+        const publicLookup = jest.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+        const mockFetch = jest
+          .fn()
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 302,
+            headers: {
+              get: (h) =>
+                h.toLowerCase() === "location" ? "https://partner.example.com/v2/hook" : null,
+            },
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+          });
+
+        const secureSvc = new WebhookService({
+          deadLetterStore,
+          sleep,
+          dnsLookup: publicLookup,
+          fetch: mockFetch,
+        });
+
+        secureSvc.register(EVENT_TYPES.MATCH_CREATED, "https://partner.example.com/v1/hook");
+
+        const results = await secureSvc.dispatch(EVENT_TYPES.MATCH_CREATED, { gameCode: "G1" });
+
+        expect(results).toHaveLength(1);
+        expect(results[0].success).toBe(true);
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+      });
     });
   });
 });

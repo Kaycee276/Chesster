@@ -337,6 +337,13 @@ button:disabled {
 	animation: slideIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
+/* Chessboard mobile touch wrapper (#439) */
+.chessboard-wrapper {
+	touch-action: none;
+	-webkit-user-select: none;
+	user-select: none;
+}
+
 @media screen and (max-width: 768px) {
 	h1 {
 		font-size: 1.5rem;

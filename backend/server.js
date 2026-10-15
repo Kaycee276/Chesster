@@ -37,6 +37,7 @@ const { moderateMessage, checkSlowMode } = require("./services/chatService");
 const { JWT_SECRET } = require("./middleware/authMiddleware");
 const { createSocketRateLimiter } = require("./middleware/socketRateLimiter");
 const { csrfProtection, generateSignedToken, setCsrfCookie } = require("./middleware/csrfMiddleware");
+const { fetchMetadataPolicy } = require("./middleware/fetchMetadata");
 const {
   validateSocketPayload,
   JoinRoomPayload,
@@ -97,34 +98,9 @@ app.use(enforceHttps);
 
 // Reject insecure (non-wss) WebSocket handshakes in production (Issue #143).
 io.use(enforceSecureSocket());
-// Strict Content Security Policy via Helmet (Issue #325)
-const isProduction = process.env.NODE_ENV === "production";
-app.use(
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: isProduction
-          ? ["'self'"]
-          : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "blob:", "https:"],
-        connectSrc: [
-          "'self'",
-          "https://soroban-testnet.stellar.org",
-          "https://horizon-testnet.stellar.org",
-          "https://*.supabase.co",
-          "wss:",
-          "ws:",
-        ],
-        fontSrc: ["'self'", "data:"],
-        objectSrc: ["'none'"],
-        upgradeInsecureRequests: isProduction ? [] : null,
-      },
-    },
-    crossOriginEmbedderPolicy: false,
-  })
-);
+// Strict Content Security Policy via Helmet (Issue #325 & Issue #444)
+const { createCspMiddleware } = require("./middleware/securityHeaders");
+app.use(createCspMiddleware());
 
 // Apply structured logging middleware
 app.use(logger.requestMiddleware());
@@ -137,6 +113,7 @@ app.use(
   }),
 );
 app.use(express.json());
+app.use(fetchMetadataPolicy);
 app.use(csrfProtection);
 
 app.get("/api/csrf-token", (req, res) => {
@@ -164,10 +141,16 @@ app.use("/api/escrow", escrowRoutes);
 app.use("/api", authRoutes);
 app.use("/api", botRoutes);
 app.use("/api", healthRoutes);
+app.use("/health", healthRoutes);
 app.use("/api/referrals", referralRoutes);
 app.use("/api/puzzles", puzzleRoutes);
 app.use("/api", tournamentRoutes);
 app.use(metricsRoutes);
+
+// Root endpoint
+app.get("/", (req, res) => {
+  res.json({ status: "ok", name: "Chesster API", message: "Chesster backend running" });
+});
 
 // Legacy health endpoint
 app.get("/health", (req, res) => {
@@ -404,6 +387,7 @@ io.on("connection", (socket) => {
     presence[playerColor].socketId = null;
     broadcastPresence(gameCode, playerColor, "reconnecting");
     io.to(gameCode).emit('player_status', { color: playerColor, status: 'disconnected', graceMs: 60 * 1000 });
+    io.to(gameCode).emit('opponent_disconnected', { gameCode, color: playerColor, graceTimeSeconds: 60 });
 
     // Give the player a 60-second grace period to reconnect before the
     // match is auto-forfeited on their behalf (see timerService).
@@ -543,6 +527,7 @@ io.on("connection", (socket) => {
         timestamp: new Date().toISOString(),
       });
       socket.to(gameId).emit('player_status', { color: playerColor, status: 'reconnected' });
+      socket.to(gameId).emit('opponent_reconnected', { gameCode: gameId, color: playerColor });
 
       // Confirm success via ack
       sendAck(null, { success: true, gameId, playerColor });

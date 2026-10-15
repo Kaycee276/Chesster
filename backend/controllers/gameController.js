@@ -439,10 +439,11 @@ class GameController {
 				status,
 				dateFrom,
 				dateTo,
-				page = 1,
-				pageSize = 20,
-				sortBy = "created_at",
-				sortOrder = "desc",
+				page,
+				pageSize,
+				sortBy,
+				sortOrder,
+				cursor,
 			} = req.query;
 
 			const filters = {
@@ -450,16 +451,20 @@ class GameController {
 				status: status || null,
 				dateFrom: dateFrom || null,
 				dateTo: dateTo || null,
-				page: page || 1,
-				pageSize: pageSize || 20,
-				sortBy: sortBy || "created_at",
-				sortOrder: sortOrder || "desc",
+				page: page !== undefined ? page : 1,
+				pageSize: pageSize !== undefined ? pageSize : 20,
+				sortBy: sortBy !== undefined ? sortBy : "created_at",
+				sortOrder: sortOrder !== undefined ? sortOrder : "desc",
+				cursor: cursor || null,
 			};
 
 			const result = await gameModel.getGameHistory(filters);
 			res.json({ success: true, ...result });
 		} catch (error) {
-			res.status(500).json({ success: false, error: error.message });
+			const isClientError =
+				error.message?.startsWith("Invalid") ||
+				error.message?.includes("exceeds");
+			res.status(isClientError ? 400 : 500).json({ success: false, error: error.message });
 		}
 	}
 
@@ -535,10 +540,14 @@ class GameController {
 			let tournamentAdvancement = null;
 			const match = await tournamentModel.getMatchByGameCode(gameCode);
 			if (match && winningAddress) {
-				tournamentAdvancement = await tournamentService.advanceRound(
-					match.tournament_id,
-					match.id,
-					winningAddress,
+				const { executeWithRetry } = require("../database/transactionRetry");
+				tournamentAdvancement = await executeWithRetry(
+					async () => tournamentService.advanceRound(
+						match.tournament_id,
+						match.id,
+						winningAddress,
+					),
+					{ context: `endGame-advanceRound-${gameCode}` }
 				);
 			}
 

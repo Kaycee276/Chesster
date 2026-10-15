@@ -14,9 +14,9 @@ jest.mock("@stellar/stellar-sdk", () => ({
 const request = require("supertest");
 const { app } = require("../server");
 
-describe("Content Security Policy & Third-Party Isolation (Issue #325)", () => {
-  test("serves Content-Security-Policy header with restricted origins", async () => {
-    const res = await request(app).get("/health");
+describe("Content Security Policy & Strict Headers (Issue #325 & Issue #444)", () => {
+  test("serves Content-Security-Policy header on / with restricted origins and WASM support", async () => {
+    const res = await request(app).get("/");
 
     expect(res.status).toBe(200);
     const csp = res.headers["content-security-policy"];
@@ -26,8 +26,27 @@ describe("Content Security Policy & Third-Party Isolation (Issue #325)", () => {
     expect(csp).toContain("default-src 'self'");
     // Object source must be 'none'
     expect(csp).toContain("object-src 'none'");
-    // Scripts must include 'self'
+    // Scripts must include 'self' and 'wasm-unsafe-eval' for Stockfish engine
     expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("'wasm-unsafe-eval'");
+    // Frame ancestors must be 'none' to prevent clickjacking
+    expect(csp).toContain("frame-ancestors 'none'");
+    // Connect sources must support Stellar Horizon and RPC nodes
+    expect(csp).toContain("https://horizon.stellar.org");
+    expect(csp).toContain("https://*.stellar.org");
+    expect(csp).toContain("wss:");
+    expect(csp).toContain("ws:");
+  });
+
+  test("serves Content-Security-Policy header on /api/health", async () => {
+    const res = await request(app).get("/api/health");
+
+    expect(res.status).toBe(200);
+    const csp = res.headers["content-security-policy"];
+    expect(csp).toBeDefined();
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("'wasm-unsafe-eval'");
   });
 
   test("disallows unauthorized external scripts in CSP header", async () => {

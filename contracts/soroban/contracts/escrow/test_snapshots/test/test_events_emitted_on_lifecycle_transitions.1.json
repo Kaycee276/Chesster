@@ -1908,6 +1908,48 @@
           "v0": {
             "topics": [
               {
+                "symbol": "escrow"
+              },
+              {
+                "symbol": "settled"
+              },
+              {
+                "u64": 1
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 190
+                  }
+                },
+                {
+                  "i128": {
+                    "hi": 0,
+                    "lo": 10
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000006",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
                 "symbol": "resolved"
               },
               {

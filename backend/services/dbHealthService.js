@@ -2,6 +2,10 @@ const supabase = require("../config/supabase");
 
 const DEFAULT_TIMEOUT_MS = 2000;
 const SLOW_QUERY_THRESHOLD_MS = 1000;
+const DB_HEALTH_CACHE_TTL_MS = 3000;
+
+let cachedDbHealth = null;
+let cacheExpiresAt = 0;
 
 function roundLatency(durationMs) {
   return Math.round(durationMs * 100) / 100;
@@ -19,7 +23,12 @@ function withTimeout(promise, timeoutMs) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function checkDbHealth({ client = supabase, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+async function checkDbHealth({ client = supabase, timeoutMs = DEFAULT_TIMEOUT_MS, bypassCache = false } = {}) {
+  const now = Date.now();
+  if (!bypassCache && cachedDbHealth && now < cacheExpiresAt) {
+    return { ...cachedDbHealth, cached: true };
+  }
+
   const start = process.hrtime.bigint();
 
   try {
@@ -29,28 +38,48 @@ async function checkDbHealth({ client = supabase, timeoutMs = DEFAULT_TIMEOUT_MS
 
     if (result?.error) throw new Error(result.error.message || "Database query failed");
     if (latencyMs >= SLOW_QUERY_THRESHOLD_MS) {
-      return {
+      const payload = {
         status: "unhealthy",
         latencyMs,
         error: `Database response exceeded ${SLOW_QUERY_THRESHOLD_MS}ms threshold`,
         pool: { active: null, idle: null },
       };
+      cachedDbHealth = payload;
+      cacheExpiresAt = Date.now() + DB_HEALTH_CACHE_TTL_MS;
+      return payload;
     }
 
-    return {
+    const payload = {
       status: "healthy",
       latencyMs,
       pool: { active: null, idle: null },
     };
+    cachedDbHealth = payload;
+    cacheExpiresAt = Date.now() + DB_HEALTH_CACHE_TTL_MS;
+    return payload;
   } catch (error) {
     const latencyMs = roundLatency(Number(process.hrtime.bigint() - start) / 1e6);
-    return {
+    const payload = {
       status: "unhealthy",
       latencyMs,
       error: error instanceof Error ? error.message : "Database health check failed",
       pool: { active: null, idle: null },
     };
+    cachedDbHealth = payload;
+    cacheExpiresAt = Date.now() + DB_HEALTH_CACHE_TTL_MS;
+    return payload;
   }
 }
 
-module.exports = { checkDbHealth, DEFAULT_TIMEOUT_MS, SLOW_QUERY_THRESHOLD_MS };
+function clearDbHealthCache() {
+  cachedDbHealth = null;
+  cacheExpiresAt = 0;
+}
+
+module.exports = {
+  checkDbHealth,
+  clearDbHealthCache,
+  DEFAULT_TIMEOUT_MS,
+  SLOW_QUERY_THRESHOLD_MS,
+  DB_HEALTH_CACHE_TTL_MS,
+};

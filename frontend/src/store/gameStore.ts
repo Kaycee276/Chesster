@@ -87,6 +87,9 @@ interface GameStore {
   // Streamer mode for broadcasting matches securely
   isStreamerMode: boolean;
   toggleStreamerMode: () => void;
+  // Haptic feedback for touch and interactions (#439)
+  isHapticsEnabled: boolean;
+  toggleHaptics: () => void;
   // Settings modal visibility
   isSettingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
@@ -157,12 +160,15 @@ export const useGameStore = create<GameStore>()(
       chatOpen: false,
       isBlindfoldMode: false,
       isStreamerMode: false,
+      isHapticsEnabled: true,
       isSettingsOpen: false,
 
       toggleBlindfoldMode: () =>
         set((s) => ({ isBlindfoldMode: !s.isBlindfoldMode })),
       toggleStreamerMode: () =>
         set((s) => ({ isStreamerMode: !s.isStreamerMode })),
+      toggleHaptics: () =>
+        set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
       setSettingsOpen: (open: boolean) =>
         set({ isSettingsOpen: open }),
 
@@ -558,6 +564,7 @@ export const useGameStore = create<GameStore>()(
         playerColor: state.playerColor,
         isBlindfoldMode: state.isBlindfoldMode,
         isStreamerMode: state.isStreamerMode,
+        isHapticsEnabled: state.isHapticsEnabled,
       }),
     },
   ),
