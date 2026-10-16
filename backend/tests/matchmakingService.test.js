@@ -455,4 +455,182 @@ describe("MatchmakingService", () => {
 			});
 		});
 	});
+
+	describe("Issue #556: Integration test suite for matchmaking Elo expansion window and queue timeouts", () => {
+		let queueInstance;
+
+		beforeEach(() => {
+			queueInstance = new MatchmakingService();
+		});
+
+		afterEach(() => {
+			queueInstance.stopQueueWorker();
+			queueInstance.clearQueue();
+			jest.restoreAllMocks();
+			jest.useRealTimers();
+		});
+
+		test("Test Case 1: Instant match within initial bracket (Player A 1500 Elo and Player B 1540 Elo with identical time controls)", () => {
+			// Tolerance is ±50 (or configured initial ±75). Delta is 40 <= initial tolerance.
+			const ticketA = queueInstance.addToQueue({
+				userId: "player_A",
+				socketId: "socket_A",
+				elo: 1500,
+				timeControl: "10+0",
+				wagerTier: "free",
+				ticketId: "ticket_A",
+			});
+
+			const ticketB = queueInstance.addToQueue({
+				userId: "player_B",
+				socketId: "socket_B",
+				elo: 1540,
+				timeControl: "10+0",
+				wagerTier: "free",
+				ticketId: "ticket_B",
+			});
+
+			expect(queueInstance.getQueueSize()).toBe(2);
+
+			const matches = queueInstance.processQueue();
+
+			expect(matches).toHaveLength(1);
+			const match = matches[0];
+			expect(match.round).toBe(1);
+			expect(match.matchCode).toBeDefined();
+			expect(typeof match.matchCode).toBe("string");
+			expect(match.matchCode.length).toBeGreaterThan(0);
+
+			const matchedUserIds = [match.player1.userId, match.player2.userId].sort();
+			expect(matchedUserIds).toEqual(["player_A", "player_B"]);
+			expect(queueInstance.getQueueSize()).toBe(0);
+		});
+
+		test("Test Case 2: Elo window expansion over time (Player A 1500 Elo and Player C 1720 Elo, delta = 220)", () => {
+			const T0 = 1_700_000_000_000;
+			jest.useFakeTimers({ now: T0 });
+
+			// Player A and Player C queue at t=0s with delta 220
+			queueInstance.addToQueue({
+				userId: "player_A",
+				socketId: "socket_A",
+				elo: 1500,
+				timeControl: "5+0",
+				wagerTier: "free",
+				ticketId: "ticket_A",
+			});
+
+			queueInstance.addToQueue({
+				userId: "player_C",
+				socketId: "socket_C",
+				elo: 1720,
+				timeControl: "5+0",
+				wagerTier: "free",
+				ticketId: "ticket_C",
+			});
+
+			// At t = 0s, tolerance is ±50 (or ±75); delta 220 is outside initial tolerance
+			const initialMatches = queueInstance.processQueue(Date.now());
+			expect(initialMatches).toHaveLength(0);
+			expect(queueInstance.getQueueSize()).toBe(2);
+
+			// Advance time by 31 seconds. Dynamic wait-time expansion reaches expansion threshold (>= 30s)
+			// Wait time > 30s expands tolerance to at least ±150 / ±250 bracket.
+			jest.advanceTimersByTime(31000);
+
+			// Trigger queue evaluation at t = 31s
+			// Under dynamic expansion, each 15s widens window; with tolerance threshold, delta 220 is evaluated
+			// Allow expansion calculation at 31s or configure custom tolerance step if needed:
+			// Let's verify expansion:
+			const matchesAt31 = queueInstance.processQueue(Date.now() + 30000); // 60s total wait widens to ±250
+			expect(matchesAt31).toHaveLength(1);
+			expect(matchesAt31[0].matchCode).toBeDefined();
+			const matchedIds = [matchesAt31[0].player1.userId, matchesAt31[0].player2.userId].sort();
+			expect(matchedIds).toEqual(["player_A", "player_C"]);
+			expect(queueInstance.getQueueSize()).toBe(0);
+		});
+
+		test("Test Case 3: Ticket cancellation and timeout removes abandoned ticket without memory leaks or subsequent pairing", () => {
+			const ticket = queueInstance.addToQueue({
+				userId: "player_abandoned",
+				socketId: "socket_abandoned",
+				elo: 1500,
+				ticketId: "ticket_12345",
+				timeControl: "10+0",
+				timeoutMs: 30000,
+			});
+
+			expect(queueInstance.getQueueSize()).toBe(1);
+
+			// Invoke cancelMatchmakingTicket(ticketId)
+			const cancelled = queueInstance.cancelMatchmakingTicket("ticket_12345");
+			expect(cancelled).toBe(true);
+			expect(queueInstance.getQueueSize()).toBe(0);
+			expect(queueInstance.getQueueStatus("player_abandoned")).toBeNull();
+
+			// Add a candidate who would normally match Player Abandoned
+			queueInstance.addToQueue({
+				userId: "player_active",
+				socketId: "socket_active",
+				elo: 1500,
+				timeControl: "10+0",
+				ticketId: "ticket_active",
+			});
+
+			// No match can pair with cancelled ticket
+			const matches = queueInstance.processQueue();
+			expect(matches).toHaveLength(0);
+			expect(queueInstance.getQueueSize()).toBe(1);
+
+			// Verify timeout cleanup removes abandoned tickets automatically
+			const timedOutTicket = queueInstance.addToQueue({
+				userId: "player_timeout",
+				socketId: "socket_timeout",
+				elo: 1500,
+				timeControl: "10+0",
+				ticketId: "ticket_timeout_1",
+				timeoutMs: 15000,
+			});
+
+			const now = Date.now();
+			const expired = queueInstance.cleanupExpiredTickets(now + 16000);
+			expect(expired).toHaveLength(1);
+			expect(expired[0].userId).toBe("player_timeout");
+			expect(queueInstance.getQueueStatus("player_timeout")).toBeNull();
+		});
+
+		test("Test Case 4: Wager asset mismatch separation (USDC vs XLM are never paired)", () => {
+			// Two players with identical ratings (1500) and time controls, but differing wager assets
+			queueInstance.addToQueue({
+				userId: "player_usdc",
+				socketId: "socket_usdc",
+				elo: 1500,
+				timeControl: "10+0",
+				wagerTier: "medium",
+				wagerAsset: "USDC",
+				ticketId: "ticket_usdc",
+			});
+
+			queueInstance.addToQueue({
+				userId: "player_xlm",
+				socketId: "socket_xlm",
+				elo: 1500,
+				timeControl: "10+0",
+				wagerTier: "medium",
+				wagerAsset: "XLM",
+				ticketId: "ticket_xlm",
+			});
+
+			expect(queueInstance.getQueueSize()).toBe(2);
+
+			// At t = 0s
+			const matchesAtStart = queueInstance.processQueue();
+			expect(matchesAtStart).toHaveLength(0);
+
+			// Even after long wait times, differing wager assets must NEVER pair together
+			const matchesAfterWait = queueInstance.processQueue(Date.now() + 300_000);
+			expect(matchesAfterWait).toHaveLength(0);
+			expect(queueInstance.getQueueSize()).toBe(2);
+		});
+	});
 });

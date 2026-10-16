@@ -43,12 +43,21 @@ class MatchmakingService {
 
 	/**
 	 * Add a player to the matchmaking queue. Re-queuing a player who is already
-	 * waiting in the same wager tier (e.g. after a socket reconnect) keeps their
+	 * waiting in the same wager tier and asset (e.g. after a socket reconnect) keeps their
 	 * original queuedAt so they do not lose their accumulated tolerance.
-	 * @param {object} player - { userId, socketId, elo, wagerTier }
+	 * @param {object} player - { userId, socketId, elo, wagerTier, timeControl, wagerAsset, ticketId, timeoutMs }
 	 * @returns {object} queue entry
 	 */
-	addToQueue({ userId, socketId, elo, wagerTier = "free" }) {
+	addToQueue({
+		userId,
+		socketId,
+		elo,
+		wagerTier = "free",
+		timeControl = null,
+		wagerAsset = null,
+		ticketId = null,
+		timeoutMs = null,
+	}) {
 		if (!userId) {
 			throw new Error("userId is required for matchmaking");
 		}
@@ -58,28 +67,81 @@ class MatchmakingService {
 
 		const id = String(userId);
 		const tier = String(wagerTier || "free").toLowerCase();
+		const asset = wagerAsset ? String(wagerAsset).toUpperCase() : null;
+		const tc = timeControl ? String(timeControl) : null;
+		const tid = ticketId ? String(ticketId) : null;
 		const existing = this.queue.get(id);
+		const sameTier = existing && existing.wagerTier === tier;
+		const sameAsset = existing && (existing.wagerAsset || null) === asset;
+		const sameTimeControl = existing && (existing.timeControl || null) === tc;
 
 		const entry = {
 			userId: id,
 			socketId: String(socketId),
 			elo: this._normalizeElo(elo),
 			wagerTier: tier,
-			queuedAt: existing && existing.wagerTier === tier ? existing.queuedAt : Date.now(),
+			queuedAt: sameTier && sameAsset && sameTimeControl ? existing.queuedAt : Date.now(),
 		};
+
+		if (tid) entry.ticketId = tid;
+		if (asset !== null) entry.wagerAsset = asset;
+		if (tc !== null) entry.timeControl = tc;
+		if (typeof timeoutMs === "number") entry.timeoutMs = timeoutMs;
 
 		this.queue.set(entry.userId, entry);
 		return entry;
 	}
 
 	/**
-	 * Remove a player from the queue by userId.
-	 * @param {string} userId
+	 * Remove a player from the queue by userId or ticketId.
+	 * @param {string} userIdOrTicketId
 	 * @returns {boolean} true if removed, false otherwise
 	 */
-	removeFromQueue(userId) {
-		if (!userId) return false;
-		return this.queue.delete(String(userId));
+	removeFromQueue(userIdOrTicketId) {
+		if (!userIdOrTicketId) return false;
+		const target = String(userIdOrTicketId);
+		if (this.queue.delete(target)) return true;
+		for (const [userId, entry] of this.queue.entries()) {
+			if (entry.ticketId === target) {
+				this.queue.delete(userId);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Explicit ticket cancellation helper (Issue #556).
+	 * Removes ticket from queue and cancels any pending timeouts.
+	 * @param {string} ticketId
+	 * @returns {boolean} true if removed, false otherwise
+	 */
+	cancelMatchmakingTicket(ticketId) {
+		return this.removeFromQueue(ticketId);
+	}
+
+	/**
+	 * Remove tickets that have exceeded their timeoutMs duration.
+	 * @param {number} [now=Date.now()]
+	 * @param {(entry: object) => void} [onTimeout]
+	 * @returns {Array<object>} list of removed expired tickets
+	 */
+	cleanupExpiredTickets(now = Date.now(), onTimeout = null) {
+		const expired = [];
+		for (const [userId, entry] of this.queue.entries()) {
+			if (entry.timeoutMs && now - entry.queuedAt >= entry.timeoutMs) {
+				this.queue.delete(userId);
+				expired.push(entry);
+				if (typeof onTimeout === "function") {
+					try {
+						onTimeout(entry);
+					} catch (err) {
+						console.error("Matchmaking onTimeout handler failed:", err);
+					}
+				}
+			}
+		}
+		return expired;
 	}
 
 	/**
@@ -100,11 +162,15 @@ class MatchmakingService {
 
 	/**
 	 * Whether two queue entries may be paired at time `now`: same wager tier,
-	 * and a rating gap within both players' tolerances and the hard ceiling.
+	 * compatible wager asset, matching time control, and a rating gap within both
+	 * players' tolerances and the hard ceiling.
 	 * @returns {boolean}
 	 */
 	canPair(a, b, now = Date.now()) {
-		if (a.userId === b.userId || a.wagerTier !== b.wagerTier) return false;
+		if (a.userId === b.userId) return false;
+		if (a.wagerTier !== b.wagerTier) return false;
+		if ((a.wagerAsset || null) !== (b.wagerAsset || null)) return false;
+		if ((a.timeControl || null) !== (b.timeControl || null)) return false;
 		const gap = Math.abs(a.elo - b.elo);
 		const mutualTolerance = Math.min(getPlayerTolerance(a, now), getPlayerTolerance(b, now));
 		return gap <= Math.min(mutualTolerance, this.maxRatingGap);
@@ -124,6 +190,8 @@ class MatchmakingService {
 			userId: String(player.userId),
 			elo: this._normalizeElo(player.elo),
 			wagerTier: String(player.wagerTier || "free").toLowerCase(),
+			wagerAsset: player.wagerAsset ? String(player.wagerAsset).toUpperCase() : null,
+			timeControl: player.timeControl ? String(player.timeControl) : null,
 			queuedAt: player.queuedAt || now,
 		};
 
@@ -139,20 +207,36 @@ class MatchmakingService {
 
 		this.removeFromQueue(target.userId);
 		this.removeFromQueue(bestMatch.userId);
-		return { player1: target, player2: bestMatch };
+		const matchCode = this.generateMatchCode();
+		return {
+			matchCode,
+			round: 1,
+			player1: target,
+			player2: bestMatch,
+		};
+	}
+
+	/**
+	 * Generate a unique match code.
+	 * @returns {string}
+	 */
+	generateMatchCode() {
+		return `MATCH_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 	}
 
 	/**
 	 * Scan the queue and pair every eligible player, closest rating gaps first.
 	 * Ties on rating gap go to the pair containing the longest-waiting player.
 	 * @param {number} [now=Date.now()]
-	 * @returns {Array<{player1: object, player2: object}>} list of matched pairs
+	 * @returns {Array<{matchCode: string, round: number, player1: object, player2: object}>} list of matched pairs
 	 */
 	processQueue(now = Date.now()) {
+		this.cleanupExpiredTickets(now);
 		const tiers = new Map();
 		for (const entry of this.queue.values()) {
-			if (!tiers.has(entry.wagerTier)) tiers.set(entry.wagerTier, []);
-			tiers.get(entry.wagerTier).push(entry);
+			const groupKey = `${entry.wagerTier}:${entry.wagerAsset || "DEFAULT"}:${entry.timeControl || "DEFAULT"}`;
+			if (!tiers.has(groupKey)) tiers.set(groupKey, []);
+			tiers.get(groupKey).push(entry);
 		}
 
 		const candidatePairs = [];
@@ -181,8 +265,14 @@ class MatchmakingService {
 			if (!this.queue.has(a.userId) || !this.queue.has(b.userId)) continue;
 			this.removeFromQueue(a.userId);
 			this.removeFromQueue(b.userId);
+			const matchCode = this.generateMatchCode();
 			// The longer-waiting player is listed first.
-			matches.push(a.queuedAt <= b.queuedAt ? { player1: a, player2: b } : { player1: b, player2: a });
+			const pair = a.queuedAt <= b.queuedAt ? { player1: a, player2: b } : { player1: b, player2: a };
+			matches.push({
+				matchCode,
+				round: 1,
+				...pair,
+			});
 		}
 
 		return matches;
