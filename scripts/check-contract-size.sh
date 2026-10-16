@@ -1,16 +1,11 @@
 #!/bin/bash
+set -euo pipefail
+
 # Check contract size regression
-# This script builds the escrow contract and checks its WASM size against a threshold
+# This script checks the WASM size against a threshold
 
 # Set threshold (64 KB = 65536 bytes)
 MAX_SIZE=65536
-
-# Change to contracts/soroban directory
-cd contracts/soroban
-
-# Build the contract
-echo "Building escrow contract..."
-cargo build --target wasm32-unknown-unknown --release
 
 # Check if WASM file exists
 WASM_FILE="target/wasm32-unknown-unknown/release/escrow.wasm"
