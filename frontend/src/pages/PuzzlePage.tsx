@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { type Puzzle, puzzleApi } from "../api/puzzleApi";
 import { useToastStore } from "../store/toastStore";
-import { Loader2, RotateCcw, Lightbulb, Home } from "lucide-react";
+import { Loader2, RotateCcw, Lightbulb, Home, Flame, Check, Trophy, X } from "lucide-react";
+import { usePuzzleStreak } from "../hooks/usePuzzleStreak";
 
 interface PuzzleMove {
   from: [number, number];
@@ -113,13 +114,16 @@ function PuzzleBoard({
   lastMove?: { from: [number, number]; to: [number, number] } | null;
 }) {
   const boardWrapperRef = useRef<HTMLDivElement>(null);
-  const [boardPx, setBoardPx] = useState(0);
+  const [boardPx, setBoardPx] = useState(400);
   const [selectedSquare, setSelectedSquare] = useState<[number, number] | null>(null);
 
   useEffect(() => {
     const el = boardWrapperRef.current;
     if (!el) return;
-    const update = () => setBoardPx(Math.min(el.clientWidth, el.clientHeight));
+    const update = () => {
+      const size = Math.min(el.clientWidth, el.clientHeight);
+      setBoardPx(size > 0 ? size : 400);
+    };
     const obs = new ResizeObserver(update);
     obs.observe(el);
     update();
@@ -300,6 +304,16 @@ export default function PuzzlePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const {
+    currentStreak,
+    longestStreak,
+    solvedToday,
+    weeklyDays,
+    isNewBestStreak,
+    recordPuzzleSolved,
+    dismissNewBestStreak,
+  } = usePuzzleStreak();
+
   const [board, setBoard] = useState<string[][]>([]);
   const [moveStep, setMoveStep] = useState(0);
   const [status, setStatus] = useState<"solving" | "correct" | "failed">("solving");
@@ -378,6 +392,7 @@ export default function PuzzlePage() {
     if (moveStep + 1 >= puzzle.solution.length) {
       setStatus("correct");
       setShowConfetti(true);
+      recordPuzzleSolved();
       addToast("Puzzle solved! 🎉", "success");
       return;
     }
@@ -399,6 +414,7 @@ export default function PuzzlePage() {
       if (moveStep + 2 >= puzzle.solution.length) {
         setStatus("correct");
         setShowConfetti(true);
+        recordPuzzleSolved();
         addToast("Puzzle solved! 🎉", "success");
       }
 
@@ -472,33 +488,121 @@ export default function PuzzlePage() {
     <div className="h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg) select-none p-1 gap-1">
       {showConfetti && <Confetti />}
 
-      {/* Header: Puzzle info */}
-      <div className="shrink-0 flex items-center justify-between px-3 sm:px-4 h-12 rounded-xl bg-(--bg-secondary) border border-(--border) gap-2">
-        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <div className="flex flex-col gap-0.5 shrink-0">
-            <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-widest text-(--text-tertiary)">
-              Daily Puzzle
-            </p>
-            <p className="text-xs sm:text-sm font-bold text-(--text)">Rating: {puzzle.rating}</p>
+      {/* Congratulatory new personal best streak banner */}
+      {isNewBestStreak && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="shrink-0 flex items-center justify-between px-3 py-2 rounded-xl bg-linear-to-r from-amber-500/20 via-orange-500/20 to-amber-500/20 border border-amber-500/40 text-amber-200 text-xs sm:text-sm animate-fade-in"
+        >
+          <div className="flex items-center gap-2">
+            <Trophy size={16} className="text-amber-400 shrink-0 animate-bounce" />
+            <span className="font-bold">
+              🎉 New Personal Best Streak: {currentStreak} {currentStreak === 1 ? "day" : "days"}!
+            </span>
           </div>
-          <div className="hidden sm:flex items-center gap-1 flex-wrap">
-            {puzzle.themes.map((theme) => (
-              <span
-                key={theme}
-                className="px-2 py-0.5 text-xs font-semibold bg-(--accent-primary)/20 text-(--accent-primary) rounded-full border border-(--accent-primary)/30"
-              >
-                {theme}
-              </span>
-            ))}
+          <button
+            onClick={dismissNewBestStreak}
+            aria-label="Dismiss new record notification"
+            className="p-1 rounded hover:bg-amber-500/20 text-amber-300 hover:text-white transition-colors"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Header: Puzzle info & Streak tracker */}
+      <div className="shrink-0 flex flex-col gap-1.5 p-2 sm:px-4 sm:py-2.5 rounded-xl bg-(--bg-secondary) border border-(--border)">
+        <div className="flex items-center justify-between gap-2">
+          {/* Left: Title & Rating */}
+          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+            <div className="flex flex-col gap-0.5 shrink-0">
+              <div className="flex items-center gap-1.5">
+                <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-widest text-(--text-tertiary)">
+                  Daily Tactics
+                </p>
+                {/* Streak Badge */}
+                <span
+                  title={`Current Streak: ${currentStreak} days | Longest: ${longestStreak} days`}
+                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-bold border transition-colors ${
+                    solvedToday
+                      ? "bg-orange-500/20 text-orange-400 border-orange-500/40"
+                      : currentStreak > 0
+                      ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                      : "bg-(--bg-tertiary) text-(--text-secondary) border-(--border)"
+                  }`}
+                >
+                  <Flame size={12} className={solvedToday ? "text-orange-400 fill-orange-400" : "text-amber-400"} />
+                  {currentStreak} {currentStreak === 1 ? "Day" : "Days"}
+                  <span className="text-[10px] opacity-75 font-normal">(Best: {longestStreak})</span>
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm font-bold text-(--text)">Rating: {puzzle.rating}</p>
+            </div>
+            <div className="hidden md:flex items-center gap-1 flex-wrap">
+              {puzzle.themes.map((theme) => (
+                <span
+                  key={theme}
+                  className="px-2 py-0.5 text-xs font-semibold bg-(--accent-primary)/20 text-(--accent-primary) rounded-full border border-(--accent-primary)/30"
+                >
+                  {theme}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* Right: Moves & Turn */}
+          <div className="text-right flex flex-col gap-0.5 shrink-0">
+            <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-widest text-(--text-tertiary)">
+              {puzzle.sideToMove === "white" ? "White to move" : "Black to move"}
+            </p>
+            <p className="text-xs sm:text-sm font-mono text-(--text-secondary)">
+              {moveStep} / {puzzle.solution.length} moves
+            </p>
           </div>
         </div>
-        <div className="text-right flex flex-col gap-0.5 shrink-0">
-          <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-widest text-(--text-tertiary)">
-            {puzzle.sideToMove === "white" ? "White to move" : "Black to move"}
-          </p>
-          <p className="text-xs sm:text-sm font-mono text-(--text-secondary)">
-            {moveStep} / {puzzle.solution.length} moves
-          </p>
+
+        {/* Weekly Streak Calendar Row */}
+        <div className="flex items-center justify-between sm:justify-start gap-1 sm:gap-2 pt-1 border-t border-(--border)/60">
+          <span className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-(--text-tertiary) shrink-0 mr-1 hidden xs:inline">
+            Week:
+          </span>
+          <div className="flex items-center gap-1 sm:gap-1.5 flex-1 sm:flex-none justify-between sm:justify-start">
+            {weeklyDays.map((d) => (
+              <div
+                key={d.dateStr}
+                title={`${d.dateStr}: ${
+                  d.isSolved
+                    ? "Solved ✓"
+                    : d.isToday
+                    ? "Today (unsolved)"
+                    : d.isFuture
+                    ? "Upcoming"
+                    : "Missed"
+                }`}
+                className={`flex flex-col items-center justify-center px-1.5 py-0.5 rounded-md text-[10px] min-w-[26px] sm:min-w-[32px] border transition-all ${
+                  d.isSolved
+                    ? "bg-green-500/20 text-green-300 border-green-500/40 font-bold"
+                    : d.isToday
+                    ? "bg-(--accent-primary)/25 text-white border-(--accent-primary) font-bold ring-1 ring-(--accent-primary)"
+                    : d.isFuture
+                    ? "bg-(--bg) text-(--text-tertiary) border-(--border)/40 opacity-60"
+                    : "bg-(--bg) text-(--text-secondary) border-(--border)"
+                }`}
+              >
+                <span className="text-[9px] font-medium leading-none">{d.dayName}</span>
+                <span className="text-[10px] leading-tight flex items-center justify-center h-3 mt-0.5">
+                  {d.isSolved ? (
+                    <Check size={10} className="stroke-[3]" />
+                  ) : d.isToday ? (
+                    <span className="w-1.5 h-1.5 rounded-full bg-(--accent-primary) animate-pulse" />
+                  ) : (
+                    <span className="text-[9px] text-(--text-tertiary)">•</span>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
