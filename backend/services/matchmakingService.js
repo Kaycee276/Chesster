@@ -2,25 +2,45 @@
  * MatchmakingService
  *
  * In-memory Elo matchmaking queue with time-decayed rating tolerance
- * ("bucket expansion"). A freshly queued player only accepts opponents within
- * ±50 rating points; every 15 seconds of waiting widens that window by another
- * 50 points, up to a hard ceiling of 350 so long waits never produce wildly
- * unfair pairings.
+ * ("bracket expansion"). A freshly queued player only accepts opponents within
+ * ±50 rating points. As a player waits, the window expands at specific time
+ * boundaries (10s, 25s, 45s) in exponential steps (50 → 100 → 200 → 400),
+ * capped at ±400 to prevent wildly unfair pairings.
  *
  * Two players are paired only when their mutual tolerances allow it: the
  * rating gap must fit inside BOTH players' current windows. Among all eligible
  * pairs, the closest ratings are paired first.
  */
 
-const BASE_TOLERANCE = 50; // rating points accepted on entering the queue
-const TOLERANCE_STEP = 50; // extra rating points per expansion step
-const EXPANSION_INTERVAL_SEC = 15; // seconds of waiting per expansion step
-const MAX_RATING_GAP = 350; // hard ceiling for any pairing
+const MAX_RATING_GAP = 400; // hard ceiling for any pairing (±400)
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
 /**
+ * Compute the eligible rating delta for a queue entry based on wait time.
+ * This implements exponential bracket expansion at specific time boundaries:
+ *   - 0s to <10s:   ±50
+ *   - 10s to <25s:  ±100
+ *   - 25s to <45s:  ±200
+ *   - 45s+:         ±400
+ *
+ * Boundary behavior (exact values):
+ *   - At exactly 10s, the bracket is ±100 (upper boundary is included)
+ *   - At exactly 25s, the bracket is ±200 (upper boundary is included)
+ *   - At exactly 45s, the bracket is ±400 (upper boundary is included)
+ *
+ * @param {number} waitSeconds - Seconds the player has been in the queue
+ * @returns {number} Rating delta in ±points
+ */
+function getEligibleRatingDelta(waitSeconds) {
+	if (waitSeconds < 10) return 50;
+	if (waitSeconds < 25) return 100;
+	if (waitSeconds < 45) return 200;
+	return 400;
+}
+
+/**
  * Current rating tolerance for a queue entry:
- *   min(350, 50 + floor(waitSeconds / 15) * 50)
+ * Uses getEligibleRatingDelta() to determine the bracket, then caps at MAX_RATING_GAP.
  *
  * @param {{ queuedAt: number }} entry
  * @param {number} [now=Date.now()]
@@ -28,8 +48,7 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
  */
 function getPlayerTolerance(entry, now = Date.now()) {
 	const waitSeconds = Math.max(0, (now - entry.queuedAt) / 1000);
-	const expansionSteps = Math.floor(waitSeconds / EXPANSION_INTERVAL_SEC);
-	return Math.min(MAX_RATING_GAP, BASE_TOLERANCE + expansionSteps * TOLERANCE_STEP);
+	return Math.min(MAX_RATING_GAP, getEligibleRatingDelta(waitSeconds));
 }
 
 class MatchmakingService {
@@ -287,9 +306,7 @@ class MatchmakingService {
 module.exports = new MatchmakingService();
 module.exports.MatchmakingService = MatchmakingService;
 module.exports.getPlayerTolerance = getPlayerTolerance;
+module.exports.getEligibleRatingDelta = getEligibleRatingDelta;
 module.exports.MATCHMAKING_CONFIG = Object.freeze({
-	BASE_TOLERANCE,
-	TOLERANCE_STEP,
-	EXPANSION_INTERVAL_SEC,
 	MAX_RATING_GAP,
 });
