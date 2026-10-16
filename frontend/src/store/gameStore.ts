@@ -91,6 +91,9 @@ interface GameStore {
   chatMessages: ChatMessage[];
   unreadCount: number;
   chatOpen: boolean;
+  isOpponentMuted: boolean;
+  setIsOpponentMuted: (muted: boolean) => void;
+  toggleOpponentMuted: () => void;
   // Blindfold mode for training calculation skills
   isBlindfoldMode: boolean;
   toggleBlindfoldMode: () => void;
@@ -166,6 +169,9 @@ export const useGameStore = create<GameStore>()(
       chatMessages: [],
       unreadCount: 0,
       chatOpen: false,
+      isOpponentMuted: false,
+      setIsOpponentMuted: (muted: boolean) => set({ isOpponentMuted: muted }),
+      toggleOpponentMuted: () => set((s) => ({ isOpponentMuted: !s.isOpponentMuted })),
       // Network state (Issue #401)
       pingMs: 0,
       socketStatus: "disconnected",
@@ -562,6 +568,7 @@ export const useGameStore = create<GameStore>()(
           chatMessages: [],
           unreadCount: 0,
           chatOpen: false,
+          isOpponentMuted: false,
         });
       },
 
@@ -585,10 +592,14 @@ export const useGameStore = create<GameStore>()(
       },
 
       addChatMessage: (msg: ChatMessage) => {
-        set((s) => ({
-          chatMessages: [...s.chatMessages, msg],
-          unreadCount: s.chatOpen ? 0 : s.unreadCount + 1,
-        }));
+        set((s) => {
+          const isFromOpponent = Boolean(s.playerColor && msg.playerColor !== s.playerColor);
+          const shouldIncrementUnread = !s.chatOpen && (!s.isOpponentMuted || !isFromOpponent);
+          return {
+            chatMessages: [...s.chatMessages, msg],
+            unreadCount: shouldIncrementUnread ? s.unreadCount + 1 : s.unreadCount,
+          };
+        });
       },
 
       setChatOpen: (open: boolean) => {

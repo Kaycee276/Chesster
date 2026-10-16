@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from "react";
-import { MessageCircle, X, Send, Smile, Download, Check } from "lucide-react";
+import { MessageCircle, X, Send, Smile, Download, Check, VolumeX } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 import { boardToFen, moveToAlgebraic } from "../utils/chessUtils";
 import { sanitizeChatMessage } from "../utils/sanitize";
 
 const MAX_CHARS = 50;
-const QUICK_REACTIONS = ["Good luck!", "Nice move", "Well played", "Good game"];
+export const QUICK_PHRASES = ["Good luck!", "Nice move!", "Well played!", "Thanks!"];
+export const QUICK_REACTIONS = QUICK_PHRASES;
 const EMOJI_REACTIONS = ["😀", "🔥", "👏", "🤝", "♟️", "🏆"];
 
 interface ChatPanelProps {
@@ -29,6 +30,8 @@ export default function ChatPanel({
 	const chatOpen = useGameStore((s) => s.chatOpen);
 	const setChatOpen = useGameStore((s) => s.setChatOpen);
 	const sendChatMessage = useGameStore((s) => s.sendChatMessage);
+	const isOpponentMuted = useGameStore((s) => s.isOpponentMuted);
+	const toggleOpponentMuted = useGameStore((s) => s.toggleOpponentMuted);
 	const status = useGameStore((s) => s.status);
 	const board = useGameStore((s) => s.board);
 	const currentTurn = useGameStore((s) => s.currentTurn);
@@ -60,7 +63,7 @@ export default function ChatPanel({
 	// Scroll to bottom when new messages arrive or panel opens
 	useEffect(() => {
 		if (isOpen && activeTab === "chat") {
-			messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+			messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
 		}
 	}, [chatMessages, isOpen, activeTab]);
 
@@ -69,7 +72,7 @@ export default function ChatPanel({
 		if (isOpen && activeTab === "moves" && viewingIndex !== null) {
 			document
 				.getElementById(`move-${viewingIndex}`)
-				?.scrollIntoView({ block: "nearest" });
+				?.scrollIntoView?.({ block: "nearest" });
 		}
 	}, [isOpen, activeTab, viewingIndex, moveHistory.length]);
 
@@ -140,21 +143,36 @@ export default function ChatPanel({
 				</div>
 				<div className="flex items-center gap-1">
 					{activeTab === "chat" && (
-						<button
-							title="Copy FEN to clipboard"
-							onClick={() => {
-								if (!board.length) return;
-								const fen = boardToFen(board, currentTurn);
-								navigator.clipboard.writeText(fen).then(() => {
-									setCopiedFen(true);
-									setTimeout(() => setCopiedFen(false), 1500);
-								}).catch(() => {});
-							}}
-							className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
-						>
-							{copiedFen ? <Check size={12} className="text-green-400" /> : <Download size={12} />}
-							FEN
-						</button>
+						<>
+							<button
+								type="button"
+								onClick={toggleOpponentMuted}
+								title={isOpponentMuted ? "Unmute opponent" : "Mute opponent"}
+								aria-label={isOpponentMuted ? "Unmute opponent" : "Mute opponent"}
+								className={`flex items-center gap-1 p-1 rounded-lg text-xs transition-colors ${
+									isOpponentMuted
+										? "text-red-400 bg-red-500/10 hover:bg-red-500/20"
+										: "text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary)"
+								}`}
+							>
+								<VolumeX size={14} />
+							</button>
+							<button
+								title="Copy FEN to clipboard"
+								onClick={() => {
+									if (!board.length) return;
+									const fen = boardToFen(board, currentTurn);
+									navigator.clipboard.writeText(fen).then(() => {
+										setCopiedFen(true);
+										setTimeout(() => setCopiedFen(false), 1500);
+									}).catch(() => {});
+								}}
+								className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+							>
+								{copiedFen ? <Check size={12} className="text-green-400" /> : <Download size={12} />}
+								FEN
+							</button>
+						</>
 					)}
 					{(showCloseButton || !inline) && (
 						<button
@@ -172,12 +190,16 @@ export default function ChatPanel({
 						<>
 							{/* Messages */}
 					<div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5 min-h-0">
-						{chatMessages.length === 0 ? (
+						{chatMessages.filter((msg) => !isOpponentMuted || msg.playerColor === playerColor).length === 0 ? (
 							<p className="text-xs text-(--text-tertiary) text-center mt-6">
-								No messages yet. Say hi!
+								{isOpponentMuted && chatMessages.length > 0
+									? "Opponent is muted."
+									: "No messages yet. Say hi!"}
 							</p>
 						) : (
-							chatMessages.map((msg) => {
+							chatMessages
+								.filter((msg) => !isOpponentMuted || msg.playerColor === playerColor)
+								.map((msg) => {
 								const isMe = msg.playerColor === playerColor;
 								return (
 									<div
@@ -211,16 +233,16 @@ export default function ChatPanel({
 						<div ref={messagesEndRef} />
 					</div>
 
-					{/* Quick reactions */}
+					{/* Quick phrases */}
 					<div className="shrink-0 flex flex-wrap gap-1.5 px-2 py-2 border-t border-(--border) bg-(--bg)/50">
-						{QUICK_REACTIONS.map((reaction) => (
+						{QUICK_PHRASES.map((phrase) => (
 							<button
-								key={reaction}
+								key={phrase}
 								type="button"
-								onClick={() => sendMessage(reaction)}
-								className="rounded-full border border-(--border) px-2 py-1 text-[10px] text-(--text-secondary) hover:border-(--accent-primary)/60 hover:text-(--text) transition-colors"
+								onClick={() => sendMessage(phrase)}
+								className="rounded-full border border-(--border) px-2 py-1 text-[10px] text-(--text-secondary) hover:border-(--accent-primary)/60 hover:text-(--text) transition-colors cursor-pointer"
 							>
-								{reaction}
+								{phrase}
 							</button>
 						))}
 					</div>
