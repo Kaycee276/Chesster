@@ -1,7 +1,7 @@
 const os = require("os");
 const path = require("path");
 const { Worker } = require("worker_threads");
-const { parseUciMove, getLegalMoves } = require("./botHeuristics");
+const { parseUciMove, getLegalMoves, getOpeningBookMove } = require("./botHeuristics");
 
 // Path to a UCI-speaking Stockfish binary. Not bundled with this repo (the
 // official `stockfish` npm package ships 100MB+ of prebuilt WASM binaries
@@ -395,6 +395,15 @@ class BotService {
 	async getBestMove(board, turn, lastMove = null, difficulty = "medium", moveCount = 0) {
 		const { skillLevel, depth } = resolveDifficulty(difficulty);
 		const fen = boardToFEN(board, turn, moveCount);
+		if (moveCount < 12) {
+			const bookMove = getOpeningBookMove(fen);
+			if (bookMove) {
+				const parsed = parseUciMove(bookMove);
+				const legal = parsed && getLegalMoves(board, turn, lastMove)
+					.some((move) => JSON.stringify(move.from) === JSON.stringify(parsed.from) && JSON.stringify(move.to) === JSON.stringify(parsed.to));
+				if (legal) return { ...parsed, uci: bookMove, engine: "opening-book", skillLevel, depth };
+			}
+		}
 
 		const result = await this.pool.executeMove({
 			fen,
@@ -430,6 +439,7 @@ module.exports.BotWorkerPool = BotWorkerPool;
 module.exports.DIFFICULTY_PRESETS = DIFFICULTY_PRESETS;
 module.exports.boardToFEN = boardToFEN;
 module.exports.parseUciMove = parseUciMove;
+module.exports.getOpeningBookMove = getOpeningBookMove;
 module.exports.getLegalMoves = getLegalMoves;
 module.exports.resolveDifficulty = resolveDifficulty;
 module.exports.resolveSkillLevel = resolveSkillLevel;
