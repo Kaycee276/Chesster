@@ -14,6 +14,13 @@
 * **platform:** implement openapi specs, release automation, disconnect grace tests, and e2e lobby flow ([#455](https://github.com/Kaycee276/Chesster/issues/455)) ([5c5d40e](https://github.com/Kaycee276/Chesster/commit/5c5d40e486d65dfa29cd80f33c9da495378e2503)), closes [#450](https://github.com/Kaycee276/Chesster/issues/450) [#449](https://github.com/Kaycee276/Chesster/issues/449) [#448](https://github.com/Kaycee276/Chesster/issues/448) [#446](https://github.com/Kaycee276/Chesster/issues/446)
 * **security,db:** resolve issues [#442](https://github.com/Kaycee276/Chesster/issues/442), [#443](https://github.com/Kaycee276/Chesster/issues/443), [#444](https://github.com/Kaycee276/Chesster/issues/444), [#445](https://github.com/Kaycee276/Chesster/issues/445) (closes [#442](https://github.com/Kaycee276/Chesster/issues/442), closes [#443](https://github.com/Kaycee276/Chesster/issues/443), closes [#444](https://github.com/Kaycee276/Chesster/issues/444), closes [#445](https://github.com/Kaycee276/Chesster/issues/445)) ([#454](https://github.com/Kaycee276/Chesster/issues/454)) ([167f37f](https://github.com/Kaycee276/Chesster/commit/167f37fd344cab9fbfd94a947ee1a7e8e458e16c))
 
+## [1.39.1](https://github.com/Kaycee276/Chesster/compare/v1.39.0...v1.39.1) (2026-10-16)
+
+
+### Continuous Integration
+
+* **release:** upgrade release-please action and fix workflow permissions ([b09166f](https://github.com/Kaycee276/Chesster/commit/b09166f6760c74987f66426da8409a636d2c59f3))
+
 ## [1.39.0](https://github.com/Kaycee276/Chesster/compare/v1.38.4...v1.39.0) (2026-10-16)
 
 
