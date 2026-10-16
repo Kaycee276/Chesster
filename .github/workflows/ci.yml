@@ -206,6 +206,9 @@ jobs:
       - name: Verify WASM Size Budget & Output Metrics
         run: ./scripts/check-wasm-size.sh target/wasm32-unknown-unknown/release/escrow.wasm
 
+      - name: Check Contract Size Regression
+        run: ../../scripts/check-contract-size.sh
+
       - name: Generate Coverage Report
         run: cargo tarpaulin --out Lcov --output-dir coverage || true
 
