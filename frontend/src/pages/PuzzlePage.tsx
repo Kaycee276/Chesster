@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { type Puzzle, puzzleApi } from "../api/puzzleApi";
 import { useToastStore } from "../store/toastStore";
-import { Loader2, RotateCcw, Lightbulb, Home } from "lucide-react";
+import { Loader2, RotateCcw, Lightbulb, Home, Flame } from "lucide-react";
+import { usePuzzleStreak } from "../hooks/usePuzzleStreak";
 
 interface PuzzleMove {
   from: [number, number];
@@ -295,6 +296,7 @@ function Confetti() {
 export default function PuzzlePage() {
   const navigate = useNavigate();
   const { addToast } = useToastStore();
+  const { streakData, recordSolve, weekDays } = usePuzzleStreak();
 
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
   const [loading, setLoading] = useState(true);
@@ -378,7 +380,12 @@ export default function PuzzlePage() {
     if (moveStep + 1 >= puzzle.solution.length) {
       setStatus("correct");
       setShowConfetti(true);
-      addToast("Puzzle solved! 🎉", "success");
+      const { isNewRecord, currentStreak } = recordSolve();
+      if (isNewRecord) {
+        addToast(`🔥 New Record! ${currentStreak} day streak!`, "success");
+      } else {
+        addToast(`Puzzle solved! 🎉 (${currentStreak} day streak)`, "success");
+      }
       return;
     }
 
@@ -399,7 +406,12 @@ export default function PuzzlePage() {
       if (moveStep + 2 >= puzzle.solution.length) {
         setStatus("correct");
         setShowConfetti(true);
-        addToast("Puzzle solved! 🎉", "success");
+        const { isNewRecord, currentStreak } = recordSolve();
+        if (isNewRecord) {
+          addToast(`🔥 New Record! ${currentStreak} day streak!`, "success");
+        } else {
+          addToast(`Puzzle solved! 🎉 (${currentStreak} day streak)`, "success");
+        }
       }
 
       autoReplyTimerRef.current = null;
@@ -481,6 +493,35 @@ export default function PuzzlePage() {
             </p>
             <p className="text-xs sm:text-sm font-bold text-(--text)">Rating: {puzzle.rating}</p>
           </div>
+
+          {/* Daily Streak Indicator */}
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-(--bg-tertiary)/60 border border-(--border)/60 shrink-0">
+            <div className="flex items-center gap-1.5 text-amber-500 font-bold text-xs sm:text-sm">
+              <Flame size={15} className="fill-amber-500 text-amber-500" />
+              <span>{streakData.currentStreak}d</span>
+              <span className="text-[10px] text-(--text-tertiary) font-normal hidden md:inline">
+                (Best: {streakData.longestStreak}d)
+              </span>
+            </div>
+            <div className="hidden lg:flex items-center gap-1 border-l border-(--border) pl-2">
+              {weekDays.map((d) => (
+                <span
+                  key={d.dateStr}
+                  title={`${d.dateStr} - ${d.isSolved ? "Solved" : d.isToday ? "Today" : "Unsolved"}`}
+                  className={`text-[9px] font-mono px-1 py-0.5 rounded ${
+                    d.isSolved
+                      ? "bg-green-500/20 text-green-400 font-bold border border-green-500/30"
+                      : d.isToday
+                      ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                      : "text-(--text-tertiary)"
+                  }`}
+                >
+                  {d.dayLabel}
+                </span>
+              ))}
+            </div>
+          </div>
+
           <div className="hidden sm:flex items-center gap-1 flex-wrap">
             {puzzle.themes.map((theme) => (
               <span
