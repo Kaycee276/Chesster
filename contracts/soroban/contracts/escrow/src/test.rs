@@ -1821,7 +1821,8 @@ fn test_asset_decimal_normalization_for_six_and_eighteen_decimal_tokens() {
         (18_u32, 1_000_000_000_000_000_000_i128),
     ] {
         let (token, token_admin_client) = create_token_contract(&env, &token_admin);
-        client.add_whitelisted_token(&token.address);
+        client.add_whitelisted_token_decimals(&token.address, &decimals);
+        assert_eq!(client.get_asset_decimals(&token.address), decimals);
         client.set_asset_config(
             &token.address,
             &AssetConfig {

@@ -810,6 +810,8 @@ pub enum DataKey {
     DrainSchedule,
     /// Per-asset wager limits, fee tier, and enablement flag (Issue #431).
     AssetConfig(Address),
+    /// Decimal precision recorded when a wager token is whitelisted (Issue #504).
+    AssetDecimals(Address),
     /// Cumulative protocol fees collected for a token.
     TotalFeesCollected(Address),
 }
@@ -2143,7 +2145,23 @@ impl ChessterEscrow {
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
 
-        let key = Self::whitelist_key(&env);
+        Self::add_whitelisted_token_with_decimals_internal(&env, token, 7);
+    }
+
+    /// Admin-gated: whitelist a wager token and record its decimal precision (Issue #504).
+    pub fn add_whitelisted_token_decimals(env: Env, token: Address, decimals: u32) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+
+        Self::add_whitelisted_token_with_decimals_internal(&env, token, decimals);
+    }
+
+    fn add_whitelisted_token_with_decimals_internal(env: &Env, token: Address, decimals: u32) {
+        if decimals > 18 {
+            panic_with_error!(env, EscrowError::InvalidWager);
+        }
+
+        let key = Self::whitelist_key(env);
         let mut tokens: Vec<Address> = env
             .storage()
             .instance()
@@ -2151,14 +2169,18 @@ impl ChessterEscrow {
             .unwrap_or_else(|| Vec::new(&env));
 
         if tokens.contains(&token) {
-            panic_with_error!(&env, EscrowError::TokenAlreadyWhitelisted);
+            panic_with_error!(env, EscrowError::TokenAlreadyWhitelisted);
         }
 
         tokens.push_back(token.clone());
         env.storage().instance().set(&key, &tokens);
         env.storage()
             .instance()
-            .set(&(Symbol::new(&env, "sup_tok"), token), &true);
+            .set(&(Symbol::new(env, "sup_tok"), token.clone()), &true);
+
+        let decimals_key = DataKey::AssetDecimals(token);
+        env.storage().persistent().set(&decimals_key, &decimals);
+        Self::bump_entry_ttl(env, &decimals_key);
     }
 
     /// Admin-gated: remove a token from the wager-asset whitelist (Issue #40).
@@ -2186,7 +2208,10 @@ impl ChessterEscrow {
         env.storage().instance().set(&key, &filtered);
         env.storage()
             .instance()
-            .remove(&(Symbol::new(&env, "sup_tok"), token));
+            .remove(&(Symbol::new(&env, "sup_tok"), token.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AssetDecimals(token));
     }
 
     /// Whether a token is currently whitelisted as a supported wager asset (Issue #40).
@@ -2349,7 +2374,8 @@ impl ChessterEscrow {
             if !config.enabled {
                 panic_with_error!(env, EscrowError::TokenNotWhitelisted);
             }
-            let normalized_amount = Self::normalize_wager(env, amount, config.decimals);
+            let decimals = Self::asset_decimals(env, token);
+            let normalized_amount = Self::normalize_wager(env, amount, decimals);
             if normalized_amount < config.min_wager {
                 panic_with_error!(env, EscrowError::WagerBelowMinimum);
             }
@@ -2359,11 +2385,13 @@ impl ChessterEscrow {
             return;
         }
 
+        let decimals = Self::asset_decimals(env, token);
+        let normalized_amount = Self::normalize_wager(env, amount, decimals);
         let limits = Self::get_token_wager_limits(env.clone(), token.clone());
-        if amount < limits.min_wager {
+        if normalized_amount < limits.min_wager {
             panic_with_error!(env, EscrowError::WagerBelowMinimum);
         }
-        if amount > limits.max_wager {
+        if normalized_amount > limits.max_wager {
             panic_with_error!(env, EscrowError::WagerAboveMaximum);
         }
     }
@@ -2417,9 +2445,7 @@ impl ChessterEscrow {
     }
 
     fn normalized_fee(env: &Env, token: &Address, amount: i128, fee_bps: u32) -> i128 {
-        let decimals = Self::get_asset_config(env.clone(), token.clone())
-            .map(|config| config.decimals)
-            .unwrap_or(7);
+        let decimals = Self::asset_decimals(env, token);
         let normalized_amount = Self::normalize_wager(env, amount, decimals);
         let fee = checked_mul_div(env, normalized_amount, fee_bps as i128, 10_000);
         Self::denormalize_wager(env, fee, decimals)
@@ -2444,6 +2470,11 @@ impl ChessterEscrow {
         let key = DataKey::AssetConfig(token.clone());
         env.storage().persistent().set(&key, &config);
         Self::bump_entry_ttl(&env, &key);
+        let decimals_key = DataKey::AssetDecimals(token.clone());
+        env.storage()
+            .persistent()
+            .set(&decimals_key, &config.decimals);
+        Self::bump_entry_ttl(&env, &decimals_key);
         Self::bump_instance_ttl(&env);
 
         env.events().publish(
@@ -2467,6 +2498,27 @@ impl ChessterEscrow {
             Self::bump_entry_ttl(&env, &key);
         }
         config
+    }
+
+    /// Returns the registered token precision, defaulting to seven decimals (Issue #504).
+    pub fn get_asset_decimals(env: Env, token: Address) -> u32 {
+        let key = DataKey::AssetDecimals(token);
+        let decimals = env.storage().persistent().get(&key).unwrap_or(7);
+        if env.storage().persistent().has(&key) {
+            Self::bump_entry_ttl(&env, &key);
+        }
+        decimals
+    }
+
+    fn asset_decimals(env: &Env, token: &Address) -> u32 {
+        let key = DataKey::AssetDecimals(token.clone());
+        if let Some(decimals) = env.storage().persistent().get(&key) {
+            Self::bump_entry_ttl(env, &key);
+            return decimals;
+        }
+        Self::get_asset_config(env.clone(), token.clone())
+            .map(|config| config.decimals)
+            .unwrap_or(7)
     }
 
     /// Creates a match and deposits Player 1's wager with default expiration duration (Issue #34).
@@ -2590,9 +2642,7 @@ impl ChessterEscrow {
             });
         metrics.total_matches_created += 1;
         metrics.active_matches_count += 1;
-        let decimals = Self::get_asset_config(env.clone(), token.clone())
-            .map(|config| config.decimals)
-            .unwrap_or(7);
+        let decimals = Self::asset_decimals(&env, &token);
         metrics.total_volume_xlm += Self::normalize_wager(&env, amount, decimals);
         env.storage().persistent().set(&DataKey::Metrics, &metrics);
         Self::bump_entry_ttl(&env, &DataKey::Metrics);
@@ -2694,9 +2744,7 @@ impl ChessterEscrow {
                 total_volume_xlm: 0,
                 total_rake_collected: 0,
             });
-        let decimals = Self::get_asset_config(env.clone(), m.token.clone())
-            .map(|config| config.decimals)
-            .unwrap_or(7);
+        let decimals = Self::asset_decimals(&env, &m.token);
         metrics.total_volume_xlm += Self::normalize_wager(&env, m.wager_amount, decimals);
         env.storage().persistent().set(&DataKey::Metrics, &metrics);
         Self::bump_entry_ttl(&env, &DataKey::Metrics);
@@ -3846,9 +3894,7 @@ impl ChessterEscrow {
                     total_volume_xlm: 0,
                     total_rake_collected: 0,
                 });
-            let decimals = Self::get_asset_config(env.clone(), m.token.clone())
-                .map(|config| config.decimals)
-                .unwrap_or(7);
+            let decimals = Self::asset_decimals(&env, &m.token);
             metrics.total_volume_xlm += Self::normalize_wager(&env, amount, decimals);
             env.storage().persistent().set(&DataKey::Metrics, &metrics);
             Self::bump_entry_ttl(&env, &DataKey::Metrics);
@@ -3955,9 +4001,7 @@ impl ChessterEscrow {
                 });
             metrics.total_matches_created += 1;
             metrics.active_matches_count += 1;
-            let decimals = Self::get_asset_config(env.clone(), token.clone())
-                .map(|config| config.decimals)
-                .unwrap_or(7);
+            let decimals = Self::asset_decimals(&env, &token);
             metrics.total_volume_xlm += Self::normalize_wager(&env, amount, decimals);
             env.storage().persistent().set(&DataKey::Metrics, &metrics);
             Self::bump_entry_ttl(&env, &DataKey::Metrics);
