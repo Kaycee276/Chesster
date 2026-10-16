@@ -204,10 +204,10 @@ export default function AnalysisPage() {
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         goToMove(currentIndex + 1);
-      } else if (e.key === "ArrowUp") {
+      } else if (e.key === "ArrowUp" || e.key === "Home") {
         e.preventDefault();
         goToMove(-1);
-      } else if (e.key === "ArrowDown") {
+      } else if (e.key === "ArrowDown" || e.key === "End") {
         e.preventDefault();
         goToMove(moves.length - 1);
       }

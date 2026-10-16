@@ -41,13 +41,60 @@ export default function MoveNavigator({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [isPlaying, currentMoveIndex, totalMoves]);
 
+	// Keyboard shortcut navigation (#555): ArrowLeft, ArrowRight, Home/ArrowUp, End/ArrowDown
+	// Suppressed when user is typing in an input, textarea, or contentEditable element.
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement | null;
+			if (
+				target &&
+				(target.tagName === "INPUT" ||
+					target.tagName === "TEXTAREA" ||
+					Boolean(target.isContentEditable) ||
+					target.getAttribute?.("contenteditable") === "true" ||
+					(typeof target.closest === "function" && Boolean(target.closest('[contenteditable="true"]'))))
+			) {
+				return;
+			}
+
+			switch (e.key) {
+				case "ArrowLeft":
+					e.preventDefault();
+					if (currentMoveIndex > -1) {
+						onMoveChange(currentMoveIndex - 1);
+					}
+					break;
+				case "ArrowRight":
+					e.preventDefault();
+					if (currentMoveIndex < totalMoves - 1) {
+						onMoveChange(currentMoveIndex + 1);
+					}
+					break;
+				case "Home":
+				case "ArrowUp":
+					e.preventDefault();
+					onMoveChange(-1);
+					break;
+				case "End":
+				case "ArrowDown":
+					e.preventDefault();
+					onMoveChange(totalMoves - 1);
+					break;
+			}
+		};
+
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [currentMoveIndex, totalMoves, onMoveChange]);
+
 	return (
 		<div className="flex flex-col gap-2 w-full">
 			<div className="flex items-center justify-center gap-2 py-2">
 				<button
 					onClick={() => onMoveChange(-1)}
 					disabled={atStart}
-					title="First move"
+					title="First move (Home / Up Arrow)"
+					aria-label="First move (Home / Up Arrow)"
 					className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
 				>
 					<ChevronsLeft size={16} />
@@ -55,7 +102,8 @@ export default function MoveNavigator({
 				<button
 					onClick={() => onMoveChange(currentMoveIndex - 1)}
 					disabled={atStart}
-					title="Previous move"
+					title="Previous move (Left Arrow)"
+					aria-label="Previous move (Left Arrow)"
 					className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
 				>
 					<ChevronLeft size={16} />
@@ -64,6 +112,7 @@ export default function MoveNavigator({
 					onClick={onTogglePlay}
 					disabled={totalMoves === 0}
 					title={isPlaying ? "Pause" : "Play"}
+					aria-label={isPlaying ? "Pause" : "Play"}
 					className="p-2.5 rounded-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-white"
 				>
 					{isPlaying ? <Pause size={16} /> : <Play size={16} />}
@@ -71,7 +120,8 @@ export default function MoveNavigator({
 				<button
 					onClick={() => onMoveChange(currentMoveIndex + 1)}
 					disabled={atEnd}
-					title="Next move"
+					title="Next move (Right Arrow)"
+					aria-label="Next move (Right Arrow)"
 					className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
 				>
 					<ChevronRight size={16} />
@@ -79,7 +129,8 @@ export default function MoveNavigator({
 				<button
 					onClick={() => onMoveChange(totalMoves - 1)}
 					disabled={atEnd}
-					title="Last move"
+					title="Last move (End / Down Arrow)"
+					aria-label="Last move (End / Down Arrow)"
 					className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
 				>
 					<ChevronsRight size={16} />
