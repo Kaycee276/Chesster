@@ -22,6 +22,13 @@ describe("BotService", () => {
 	});
 
 	describe("parseUciMove", () => {
+		it("selects a weighted move from the initial ECO position", () => {
+			const move = botService.getOpeningBookMove(
+				"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+				() => 0,
+			);
+			expect(["e2e4", "d2d4", "c2c4", "g1f3"]).toContain(move);
+		});
 		it("parses a simple move", () => {
 			const move = botService.parseUciMove("e2e4");
 			expect(move.from).toEqual([6, 4]);
