@@ -2,12 +2,12 @@ import { useEffect } from "react";
 import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Play, Pause } from "lucide-react";
 
 interface MoveNavigatorProps {
-	/** -1 = starting position, otherwise the index of the last played move. */
-	currentMoveIndex: number;
-	totalMoves: number;
-	isPlaying: boolean;
-	onMoveChange: (index: number) => void;
-	onTogglePlay: () => void;
+  /** -1 = starting position, otherwise the index of the last played move. */
+  currentMoveIndex: number;
+  totalMoves: number;
+  isPlaying: boolean;
+  onMoveChange: (index: number) => void;
+  onTogglePlay: () => void;
 }
 
 /**
@@ -17,94 +17,163 @@ interface MoveNavigatorProps {
  * board position.
  */
 export default function MoveNavigator({
-	currentMoveIndex,
-	totalMoves,
-	isPlaying,
-	onMoveChange,
-	onTogglePlay,
+  currentMoveIndex,
+  totalMoves,
+  isPlaying,
+  onMoveChange,
+  onTogglePlay,
 }: MoveNavigatorProps) {
-	const atStart = currentMoveIndex <= -1;
-	const atEnd = currentMoveIndex >= totalMoves - 1;
+  const atStart = currentMoveIndex <= -1;
+  const atEnd = currentMoveIndex >= totalMoves - 1;
 
-	// Auto-advance one ply at a time while playing; pausing again once the
-	// mainline runs out, via the same callback the pause button uses.
-	useEffect(() => {
-		if (!isPlaying || totalMoves === 0) return;
-		if (currentMoveIndex >= totalMoves - 1) {
-			onTogglePlay();
-			return;
-		}
-		const t = setTimeout(() => {
-			onMoveChange(Math.min(totalMoves - 1, currentMoveIndex + 1));
-		}, 800);
-		return () => clearTimeout(t);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [isPlaying, currentMoveIndex, totalMoves]);
+  // Auto-advance one ply at a time while playing; pausing again once the
+  // mainline runs out, via the same callback the pause button uses.
+  useEffect(() => {
+    if (!isPlaying || totalMoves === 0) return;
+    if (currentMoveIndex >= totalMoves - 1) {
+      onTogglePlay();
+      return;
+    }
+    const t = setTimeout(() => {
+      onMoveChange(Math.min(totalMoves - 1, currentMoveIndex + 1));
+    }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, currentMoveIndex, totalMoves]);
 
-	return (
-		<div className="flex flex-col gap-2 w-full">
-			<div className="flex items-center justify-center gap-2 py-2">
-				<button
-					onClick={() => onMoveChange(-1)}
-					disabled={atStart}
-					title="First move"
-					className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-				>
-					<ChevronsLeft size={16} />
-				</button>
-				<button
-					onClick={() => onMoveChange(currentMoveIndex - 1)}
-					disabled={atStart}
-					title="Previous move"
-					className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-				>
-					<ChevronLeft size={16} />
-				</button>
-				<button
-					onClick={onTogglePlay}
-					disabled={totalMoves === 0}
-					title={isPlaying ? "Pause" : "Play"}
-					className="p-2.5 rounded-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-white"
-				>
-					{isPlaying ? <Pause size={16} /> : <Play size={16} />}
-				</button>
-				<button
-					onClick={() => onMoveChange(currentMoveIndex + 1)}
-					disabled={atEnd}
-					title="Next move"
-					className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-				>
-					<ChevronRight size={16} />
-				</button>
-				<button
-					onClick={() => onMoveChange(totalMoves - 1)}
-					disabled={atEnd}
-					title="Last move"
-					className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-				>
-					<ChevronsRight size={16} />
-				</button>
-			</div>
+  // Keyboard shortcuts for move navigation (Left/Right, Home/End, Up/Down)
+  // Suppressed when focus is inside text fields, inputs, or contentEditable elements.
+  useEffect(() => {
+    if (totalMoves <= 0) return;
 
-			{totalMoves > 0 && (
-				<div className="flex items-center gap-2 px-1">
-					<span className="text-[10px] font-mono text-(--text-tertiary) w-6 text-right">
-						{currentMoveIndex + 1}
-					</span>
-					<input
-						type="range"
-						min={-1}
-						max={totalMoves - 1}
-						value={currentMoveIndex}
-						onChange={(e) => onMoveChange(Number(e.target.value))}
-						className="flex-1 accent-(--accent-primary)"
-						aria-label="Move scrubber"
-					/>
-					<span className="text-[10px] font-mono text-(--text-tertiary) w-6">
-						{totalMoves}
-					</span>
-				</div>
-			)}
-		</div>
-	);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const target = e.target as HTMLElement | null;
+      let isEditable = false;
+      let curr: HTMLElement | null = target;
+      while (curr && curr !== document.body && curr !== document.documentElement) {
+        if (
+          curr.tagName === "INPUT" ||
+          curr.tagName === "TEXTAREA" ||
+          curr.tagName === "SELECT" ||
+          curr.isContentEditable ||
+          curr.contentEditable === "true" ||
+          curr.contentEditable === "plaintext-only" ||
+          curr.getAttribute?.("contenteditable") === "true" ||
+          curr.getAttribute?.("contenteditable") === "plaintext-only" ||
+          curr.getAttribute?.("contenteditable") === ""
+        ) {
+          isEditable = true;
+          break;
+        }
+        curr = curr.parentElement;
+      }
+      if (isEditable) {
+        return;
+      }
+
+      switch (e.key) {
+        case "ArrowLeft":
+          if (currentMoveIndex > -1) {
+            e.preventDefault();
+            onMoveChange(currentMoveIndex - 1);
+          }
+          break;
+        case "ArrowRight":
+          if (currentMoveIndex < totalMoves - 1) {
+            e.preventDefault();
+            onMoveChange(currentMoveIndex + 1);
+          }
+          break;
+        case "Home":
+        case "ArrowUp":
+          if (currentMoveIndex > -1) {
+            e.preventDefault();
+            onMoveChange(-1);
+          }
+          break;
+        case "End":
+        case "ArrowDown":
+          if (currentMoveIndex < totalMoves - 1) {
+            e.preventDefault();
+            onMoveChange(totalMoves - 1);
+          }
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentMoveIndex, totalMoves, onMoveChange]);
+
+  return (
+    <div className="flex flex-col gap-2 w-full">
+      <div className="flex items-center justify-center gap-2 py-2">
+        <button
+          onClick={() => onMoveChange(-1)}
+          disabled={atStart}
+          title="First move (Home or Arrow Up)"
+          aria-label="First move (Home or Arrow Up)"
+          className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <ChevronsLeft size={16} />
+        </button>
+        <button
+          onClick={() => onMoveChange(currentMoveIndex - 1)}
+          disabled={atStart}
+          title="Previous move (Left Arrow)"
+          aria-label="Previous move (Left Arrow)"
+          className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <ChevronLeft size={16} />
+        </button>
+        <button
+          onClick={onTogglePlay}
+          disabled={totalMoves === 0}
+          title={isPlaying ? "Pause" : "Play"}
+          aria-label={isPlaying ? "Pause" : "Play"}
+          className="p-2.5 rounded-lg bg-(--accent-dark) hover:bg-(--accent-primary) disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-white"
+        >
+          {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+        </button>
+        <button
+          onClick={() => onMoveChange(currentMoveIndex + 1)}
+          disabled={atEnd}
+          title="Next move (Right Arrow)"
+          aria-label="Next move (Right Arrow)"
+          className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <ChevronRight size={16} />
+        </button>
+        <button
+          onClick={() => onMoveChange(totalMoves - 1)}
+          disabled={atEnd}
+          title="Last move (End or Down Arrow)"
+          aria-label="Last move (End or Down Arrow)"
+          className="p-2 rounded-lg bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <ChevronsRight size={16} />
+        </button>
+      </div>
+
+      {totalMoves > 0 && (
+        <div className="flex items-center gap-2 px-1">
+          <span className="text-[10px] font-mono text-(--text-tertiary) w-6 text-right">
+            {currentMoveIndex + 1}
+          </span>
+          <input
+            type="range"
+            min={-1}
+            max={totalMoves - 1}
+            value={currentMoveIndex}
+            onChange={(e) => onMoveChange(Number(e.target.value))}
+            className="flex-1 accent-(--accent-primary)"
+            aria-label="Move scrubber"
+          />
+          <span className="text-[10px] font-mono text-(--text-tertiary) w-6">{totalMoves}</span>
+        </div>
+      )}
+    </div>
+  );
 }
