@@ -98,6 +98,10 @@ fn test_create_and_join_match() {
     assert_eq!(match_data.status, MatchStatus::Pending);
     assert_eq!(match_data.wager_amount, 100);
     assert_eq!(match_data.nonce, 1); // Issue #34 Nonce test
+    assert_eq!(
+        client.get_player_active_matches(&player1),
+        vec![&env, game_code.clone()]
+    );
 
     // Player 2 joins match
     client.join_match(&game_code, &player2);
@@ -108,6 +112,10 @@ fn test_create_and_join_match() {
     let match_data = client.get_match(&game_code);
     assert_eq!(match_data.status, MatchStatus::Active);
     assert_eq!(match_data.total_staked, 200);
+    assert_eq!(
+        client.get_player_active_matches(&player2),
+        vec![&env, game_code.clone()]
+    );
 }
 
 #[test]
@@ -168,6 +176,9 @@ fn test_resolve_match_winner() {
     client.join_match(&game_code, &player2);
 
     client.resolve_match(&game_code, &Some(player1.clone()));
+
+    assert!(client.get_player_active_matches(&player1).is_empty());
+    assert!(client.get_player_active_matches(&player2).is_empty());
 
     let match_data = client.get_match(&game_code);
     assert_eq!(match_data.status, MatchStatus::Resolved);
@@ -1775,6 +1786,7 @@ fn test_asset_config_happy_path() {
         min_wager: 10,
         max_wager: 1_000,
         fee_bps: 250,
+        decimals: 7,
         enabled: true,
     };
     client.set_asset_config(&token.address, &config);
@@ -1792,6 +1804,143 @@ fn test_asset_config_happy_path() {
     let game_code = String::from_str(&env, "ASSET_OK");
     client.create_match(&game_code, &player1, &token.address, &500);
     assert_eq!(client.get_match(&game_code).wager_amount, 500);
+}
+
+#[test]
+fn test_asset_decimal_normalization_for_six_and_eighteen_decimal_tokens() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let coordinator = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    for (decimals, wager) in [
+        (6_u32, 1_000_000_i128),
+        (18_u32, 1_000_000_000_000_000_000_i128),
+    ] {
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+        client.add_whitelisted_token(&token.address);
+        client.set_asset_config(
+            &token.address,
+            &AssetConfig {
+                min_wager: 10_000_000,
+                max_wager: 20_000_000,
+                fee_bps: 500,
+                decimals,
+                enabled: true,
+            },
+        );
+
+        let player1 = Address::generate(&env);
+        let player2 = Address::generate(&env);
+        token_admin_client.mint(&player1, &(wager * 2));
+        token_admin_client.mint(&player2, &(wager * 2));
+        approve(&env, &token, &player1, &contract_id, wager * 2);
+        approve(&env, &token, &player2, &contract_id, wager * 2);
+
+        let below_min = String::from_str(&env, "DECIMALS_BELOW_MIN");
+        let above_max = String::from_str(&env, "DECIMALS_ABOVE_MAX");
+        let invalid_wager = if decimals == 6 { 999_999 } else { wager - 1 };
+        assert!(client
+            .try_create_match(&below_min, &player1, &token.address, &invalid_wager)
+            .is_err());
+        let invalid_wager = if decimals == 6 {
+            2_000_001
+        } else {
+            wager * 2 + 100_000_000_000
+        };
+        assert!(client
+            .try_create_match(&above_max, &player1, &token.address, &invalid_wager)
+            .is_err());
+
+        let game_code = if decimals == 6 {
+            String::from_str(&env, "DECIMALS_USDC")
+        } else {
+            String::from_str(&env, "DECIMALS_EIGHTEEN")
+        };
+        client.create_match(&game_code, &player1, &token.address, &wager);
+        client.join_match(&game_code, &player2);
+        client.resolve_match(&game_code, &Some(player1.clone()));
+
+        let expected_fee = if decimals == 6 { 100_000 } else { wager / 10 };
+        assert_eq!(token.balance(&coordinator), expected_fee);
+        assert_eq!(token.balance(&contract_id), 0);
+        assert_eq!(client.get_asset_config(&token.address).unwrap().decimals, decimals);
+    }
+}
+
+#[test]
+fn test_batch_refund_expired_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &200);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+    approve(&env, &token, &player1, &contract_id, 200);
+
+    let first = String::from_str(&env, "BATCH_REFUND_1");
+    let second = String::from_str(&env, "BATCH_REFUND_2");
+    client.create_match_with_duration(&first, &player1, &token.address, &100, &120);
+    client.create_match_with_duration(&second, &player1, &token.address, &100, &120);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 121);
+
+    assert_eq!(client.batch_refund_expired(&vec![&env, first.clone(), second.clone()]), 2);
+    assert_eq!(token.balance(&player1), 200);
+    assert_eq!(token.balance(&contract_id), 0);
+    assert_eq!(client.get_match(&first).status, MatchStatus::Refunded);
+    assert_eq!(client.get_match(&second).status, MatchStatus::Refunded);
+    assert!(client.get_player_active_matches(&player1).is_empty());
+}
+
+#[test]
+fn test_batch_refund_expired_rejects_invalid_batches_atomically() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &300);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+    approve(&env, &token, &player1, &contract_id, 300);
+
+    let expired = String::from_str(&env, "BATCH_EXPIRED");
+    let not_expired = String::from_str(&env, "BATCH_NOT_EXPIRED");
+    client.create_match_with_duration(&expired, &player1, &token.address, &100, &120);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 121);
+    client.create_match_with_duration(&not_expired, &player1, &token.address, &100, &120);
+
+    assert!(client
+        .try_batch_refund_expired(&Vec::new(&env))
+        .is_err());
+    let mut oversized = Vec::new(&env);
+    for _ in 0..=MAX_BATCH_REFUNDS {
+        oversized.push_back(String::from_str(&env, "UNUSED"));
+    }
+    assert!(client.try_batch_refund_expired(&oversized).is_err());
+    assert!(client
+        .try_batch_refund_expired(&vec![&env, expired.clone(), not_expired.clone()])
+        .is_err());
+
+    assert_eq!(token.balance(&player1), 100);
+    assert_eq!(token.balance(&contract_id), 200);
+    assert_eq!(client.get_match(&expired).status, MatchStatus::Pending);
+    assert_eq!(client.get_match(&not_expired).status, MatchStatus::Pending);
+    assert_eq!(
+        client.get_player_active_matches(&player1).len(),
+        2
+    );
 }
 
 #[test]
@@ -1813,6 +1962,7 @@ fn test_set_asset_config_rejects_unauthorized_caller() {
         min_wager: 10,
         max_wager: 1_000,
         fee_bps: 100,
+        decimals: 7,
         enabled: true,
     };
     let res = client.try_set_asset_config(&token.address, &config);
@@ -1837,6 +1987,7 @@ fn test_asset_config_rejects_invalid_fee_bps() {
         min_wager: 10,
         max_wager: 1_000,
         fee_bps: MAX_ASSET_FEE_BPS + 1,
+        decimals: 7,
         enabled: true,
     };
     assert!(client
@@ -1859,6 +2010,7 @@ fn test_asset_config_rejects_invalid_wager_bounds() {
         min_wager: 0,
         max_wager: 1_000,
         fee_bps: 100,
+        decimals: 7,
         enabled: true,
     };
     assert!(client
@@ -1869,6 +2021,7 @@ fn test_asset_config_rejects_invalid_wager_bounds() {
         min_wager: 2_000,
         max_wager: 1_000,
         fee_bps: 100,
+        decimals: 7,
         enabled: true,
     };
     assert!(client
@@ -1893,6 +2046,7 @@ fn test_create_match_rejects_disabled_asset() {
             min_wager: 10,
             max_wager: 1_000,
             fee_bps: 100,
+            decimals: 7,
             enabled: false,
         },
     );
@@ -1922,6 +2076,7 @@ fn test_create_match_rejects_out_of_bounds_wager_for_asset_config() {
             min_wager: 50,
             max_wager: 200,
             fee_bps: 100,
+            decimals: 7,
             enabled: true,
         },
     );

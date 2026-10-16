@@ -47,6 +47,7 @@ npm install
   npm install
   npm run dev
   ```
+  Interactive API documentation is available at `http://localhost:3001/api/docs` and is generated from `backend/docs/openapi.yaml`.
 - **Smart Contracts**:
   ```bash
   cd contracts/soroban

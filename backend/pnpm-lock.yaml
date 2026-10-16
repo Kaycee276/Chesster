@@ -38,6 +38,9 @@ importers:
       ioredis:
         specifier: ^5.11.1
         version: 5.11.1(supports-color@5.5.0)
+      js-yaml:
+        specifier: ^3.15.2
+        version: 3.15.2
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3

@@ -3,6 +3,7 @@ const { validateEnv } = require("./config/envValidator");
 validateEnv();
 
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const helmet = require("helmet");
 const http = require("http");
@@ -54,7 +55,8 @@ const {
   SpectatorMessageSchema,
 } = require("./validators/socketSchemas");
 const swaggerUi = require("swagger-ui-express");
-const swaggerDocument = require("./docs/swagger.json");
+const YAML = require("js-yaml");
+const swaggerDocument = YAML.load(path.join(__dirname, "docs/openapi.yaml"));
 
 const app = express();
 const server = http.createServer(app);
@@ -129,6 +131,7 @@ app.get("/api/csrf-token", (req, res) => {
 
 // Swagger API documentation (Issue #152)
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // Security middleware: strip/reject malicious input before it reaches any route
 // handler, and rate-limit the API surface to blunt brute-forcing and DoS.
