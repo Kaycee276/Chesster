@@ -38,6 +38,8 @@ pub const MAX_TOURNAMENT_FEE_BPS: u32 = 500;
 pub const MAX_ASSET_FEE_BPS: u32 = 1_000;
 /// Basis points denominator (10,000 bps = 100%) (Issue #221).
 pub const BPS_DENOMINATOR: i128 = 10_000;
+/// Mutual cancellation proposals expire after fifteen minutes.
+pub const CANCELLATION_PROPOSAL_TIMEOUT_SECS: u64 = 900;
 
 /// Errors returned by the Chesster Escrow smart contract.
 #[contracterror]
@@ -144,6 +146,8 @@ pub enum EscrowError {
     CannotConfirmOwnProposal = 48,
     /// Caller is not an authorized participant in this match (Issue #290).
     UnauthorizedPlayer = 49,
+    /// Mutual cancellation proposal is older than the confirmation window.
+    ProposalExpired = 50,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -338,6 +342,8 @@ pub struct Match {
     pub max_duration_seconds: u64,
     /// Address of player who proposed mutual cancellation (Issue #290).
     pub cancellation_proposed_by: Option<Address>,
+    /// Ledger timestamp at which the mutual cancellation was proposed.
+    pub cancellation_proposed_at: Option<u64>,
 }
 
 pub type MatchData = Match;
@@ -791,6 +797,8 @@ pub enum DataKey {
     DrainSchedule,
     /// Per-asset wager limits, fee tier, and enablement flag (Issue #431).
     AssetConfig(Address),
+    /// Cumulative protocol fees collected for a token.
+    TotalFeesCollected(Address),
 }
 
 /// Aggregated operational metrics for off-chain indexing and monitoring (Issue #288).
@@ -1337,6 +1345,14 @@ impl ChessterEscrow {
             .instance()
             .get(&symbol_short!("fee"))
             .unwrap_or(500)
+    }
+
+    /// Returns cumulative protocol fees collected for the supplied token.
+    pub fn get_total_fees_collected(env: Env, token: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalFeesCollected(token))
+            .unwrap_or(0)
     }
 
     /// Configures base platform fee basis points (Issue #19).
@@ -2483,6 +2499,7 @@ impl ChessterEscrow {
             flags: 0,
             max_duration_seconds,
             cancellation_proposed_by: None,
+            cancellation_proposed_at: None,
         };
 
         env.storage().persistent().set(&game_code, &m);
@@ -3227,6 +3244,10 @@ impl ChessterEscrow {
                 Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
             if admin_fee > 0 {
                 token_client.transfer(&env.current_contract_address(), &fee_recipient, &admin_fee);
+                let fee_key = DataKey::TotalFeesCollected(m.token.clone());
+                let total = env.storage().persistent().get::<_, i128>(&fee_key).unwrap_or(0);
+                env.storage().persistent().set(&fee_key, &checked_add(env, total, admin_fee));
+                Self::bump_entry_ttl(env, &fee_key);
             }
         } else {
             token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
@@ -3782,6 +3803,7 @@ impl ChessterEscrow {
                 flags: 0,
                 max_duration_seconds: MATCH_EXPIRATION_SECS,
                 cancellation_proposed_by: None,
+                cancellation_proposed_at: None,
             };
 
             env.storage().persistent().set(&game_code, &m);
@@ -3869,6 +3891,7 @@ impl ChessterEscrow {
         }
 
         m.cancellation_proposed_by = Some(player);
+        m.cancellation_proposed_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&game_code, &m);
         Self::bump_entry_ttl(&env, &game_code);
     }
@@ -3894,6 +3917,12 @@ impl ChessterEscrow {
             .clone()
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::NoCancellationProposed));
 
+        if env.ledger().timestamp()
+            > m.cancellation_proposed_at.unwrap_or(0) + CANCELLATION_PROPOSAL_TIMEOUT_SECS
+        {
+            panic_with_error!(&env, EscrowError::ProposalExpired);
+        }
+
         if proposer == opponent {
             panic_with_error!(&env, EscrowError::CannotConfirmOwnProposal);
         }
@@ -3905,6 +3934,7 @@ impl ChessterEscrow {
         Self::execute_refund(&env, &game_code, &mut m);
 
         m.cancellation_proposed_by = None;
+        m.cancellation_proposed_at = None;
         env.storage().persistent().set(&game_code, &m);
         Self::bump_entry_ttl(&env, &game_code);
 
@@ -3940,6 +3970,7 @@ impl ChessterEscrow {
         }
 
         m.cancellation_proposed_by = None;
+        m.cancellation_proposed_at = None;
         env.storage().persistent().set(&game_code, &m);
         Self::bump_entry_ttl(&env, &game_code);
     }
@@ -4867,3 +4898,5 @@ impl ChessterEscrow {
 }
 
 mod test;
+#[cfg(test)]
+mod error_tests;
