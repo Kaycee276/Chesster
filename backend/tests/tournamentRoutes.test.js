@@ -11,10 +11,14 @@ jest.mock("../models/tournamentModel", () => ({
 	isParticipant: jest.fn(),
 	addParticipant: jest.fn(),
 }));
+jest.mock("../services/replayService", () => ({
+	generateTournamentPgnArchive: jest.fn(),
+}));
 
 const tournamentModel = require("../models/tournamentModel");
 const tournamentRoutes = require("../routes/tournamentRoutes");
 const tournamentController = require("../controllers/tournamentController");
+const replayService = require("../services/replayService");
 
 const TOURNAMENT_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -40,6 +44,21 @@ describe("tournament REST API", () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 		app = buildApp();
+	});
+
+	describe("GET /api/tournaments/:id/pgn", () => {
+		test("returns a downloadable PGN archive", async () => {
+			tournamentModel.getTournamentById.mockResolvedValue({ id: TOURNAMENT_ID });
+			replayService.generateTournamentPgnArchive.mockResolvedValue('[Event "Tournament"]\n\n1. e4 *\n');
+
+			const response = await request(app).get(`/api/tournaments/${TOURNAMENT_ID}/pgn`);
+
+			expect(response.status).toBe(200);
+			expect(response.headers["content-type"]).toContain("application/x-chess-pgn");
+			expect(response.headers["content-disposition"]).toContain(`tournament-${TOURNAMENT_ID}.pgn`);
+			expect(response.text).toContain("1. e4 *");
+			expect(replayService.generateTournamentPgnArchive).toHaveBeenCalledWith(TOURNAMENT_ID);
+		});
 	});
 
 	describe("GET /api/tournaments", () => {

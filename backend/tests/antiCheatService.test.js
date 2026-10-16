@@ -11,6 +11,7 @@ const {
 	calculateAnomalyScore,
 	calculateTimingEntropy,
 	summarizeCentipawnLoss,
+	computeWindowedCentipawnLoss,
 } = require("../services/antiCheatService");
 
 describe("AntiCheatService", () => {
@@ -45,6 +46,33 @@ describe("AntiCheatService", () => {
 			median: 25,
 			p90: 40,
 		});
+	});
+
+	test("computes rolling ten-move centipawn loss and engine match rate", () => {
+		const windows = computeWindowedCentipawnLoss([
+			...Array.from({ length: 11 }, (_, i) => ({ centipawnLoss: i === 10 ? 20 : 2, matchesTopMove: i < 9 })),
+		]);
+
+		expect(windows).toHaveLength(2);
+		expect(windows[0]).toMatchObject({ start: 0, end: 9, averageCentipawnLoss: 2, engineMatchRate: 0.9 });
+		expect(windows[1].averageCentipawnLoss).toBe(3.8);
+	});
+
+	test("flags an engine-like ten-move streak for a low-rated player only", () => {
+		const service = new AntiCheatService({ db: {}, games: {} });
+		const telemetry = [500, 2500, 8000, 900, 5200, 300, 10000, 1200, 3000, 250]
+			.map((move_duration_ms) => ({ move_duration_ms }));
+		const engineResults = Array.from({ length: 10 }, () => ({ matchesTopMove: true, centipawnLoss: 2 }));
+
+		const lowRated = service.buildPlayerAnalysis("white", "GAMATEUR", telemetry, engineResults, 1400);
+		const experienced = service.buildPlayerAnalysis("white", "EXPERIENCED", telemetry, engineResults, 1800);
+		const unknown = service.buildPlayerAnalysis("white", "UNKNOWN", telemetry, engineResults);
+
+		expect(lowRated.flagged).toBe(true);
+		expect(lowRated.suspicionScore).toBeGreaterThan(0);
+		expect(lowRated.reasons).toContain("low-rated player has a 10-move engine-like ACPL streak");
+		expect(experienced.flagged).toBe(false);
+		expect(unknown.flagged).toBe(false);
 	});
 
 	test("records millisecond move telemetry in match audit logs", async () => {

@@ -116,10 +116,33 @@ class GameModel {
 				reasons: player.reasons,
 			}));
 		if (flags.length > 0) {
-			const { error: flagError } = await supabase
-				.from("player_flags")
-				.upsert(flags, { onConflict: "game_id,player_address", ignoreDuplicates: true });
-			if (flagError) throw flagError;
+			const alerts = flags.map((flag) => {
+				const player = [white, black].find((item) => item.playerAddress === flag.player_address);
+				return {
+					game_id: gameId,
+					player_address: flag.player_address,
+					suspicion_score: player?.suspicionScore ?? Math.round(flag.anomaly_score * 100),
+					reasons: flag.reasons,
+				};
+			});
+			for (const flag of flags) {
+				await queryWithRetry(
+					`INSERT INTO player_flags (game_id, player_address, anomaly_score, reasons)
+					 VALUES ($1, $2, $3, $4::jsonb)
+					 ON CONFLICT (game_id, player_address) DO NOTHING`,
+					[gameId, flag.player_address, flag.anomaly_score, JSON.stringify(flag.reasons)],
+					{ isReadOnly: false },
+				);
+			}
+			for (const alert of alerts) {
+				await queryWithRetry(
+					`INSERT INTO anti_cheat_alerts (game_id, player_address, suspicion_score, reasons)
+					 VALUES ($1, $2, $3, $4::jsonb)
+					 ON CONFLICT (game_id, player_address) DO NOTHING`,
+					[gameId, alert.player_address, alert.suspicion_score, JSON.stringify(alert.reasons)],
+					{ isReadOnly: false },
+				);
+			}
 		}
 	}
 

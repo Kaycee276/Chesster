@@ -20,6 +20,7 @@
     "test:e2e": "playwright test e2e/gameplay.spec.ts"
   },
   "dependencies": {
+    "@creit.tech/stellar-wallets-kit": "2.7.1",
     "@stellar/freighter-api": "^6.0.1",
     "@stellar/stellar-sdk": "^17.2.1",
     "@tailwindcss/vite": "^4.1.18",

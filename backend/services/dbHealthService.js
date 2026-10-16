@@ -1,4 +1,5 @@
 const supabase = require("../config/supabase");
+const { getPool } = require("../config/db");
 
 const DEFAULT_TIMEOUT_MS = 2000;
 const SLOW_QUERY_THRESHOLD_MS = 1000;
@@ -76,10 +77,20 @@ function clearDbHealthCache() {
   cacheExpiresAt = 0;
 }
 
+function getPoolMetrics(pool = getPool()) {
+	return {
+		total: pool.totalCount,
+		idle: pool.idleCount,
+		waiting: pool.waitingCount,
+		timestamp: new Date().toISOString(),
+	};
+}
+
 module.exports = {
   checkDbHealth,
   clearDbHealthCache,
   DEFAULT_TIMEOUT_MS,
   SLOW_QUERY_THRESHOLD_MS,
   DB_HEALTH_CACHE_TTL_MS,
+  getPoolMetrics,
 };

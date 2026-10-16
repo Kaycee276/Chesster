@@ -128,6 +128,50 @@ function formatSSE({ event, id, data }) {
 	return chunk;
 }
 
+/** Build a multi-game PGN for completed tournament bracket games. */
+async function generateTournamentPgnArchive(tournamentId, db = require("../config/supabase")) {
+	const { data: matches, error: matchError } = await db
+		.from("bracket_matches")
+		.select("*")
+		.eq("tournament_id", tournamentId)
+		.eq("status", "completed")
+		.order("round", { ascending: true })
+		.order("match_number", { ascending: true });
+	if (matchError) throw matchError;
+
+	const games = [];
+	const orderedMatches = [...(matches || [])].sort((a, b) => a.round - b.round || a.match_number - b.match_number);
+	for (const match of orderedMatches) {
+		if (!match.game_code) continue;
+		const { data: game, error: gameError } = await db
+			.from("games")
+			.select("*")
+			.eq("game_code", match.game_code)
+			.maybeSingle();
+		if (gameError) throw gameError;
+		if (!game || game.status !== "finished") continue;
+
+		const { data: moves, error: movesError } = await db
+			.from("moves")
+			.select("*")
+			.eq("game_id", game.id)
+			.order("move_number", { ascending: true });
+		if (movesError) throw movesError;
+
+		const result = game.winner === "white" ? "1-0" : game.winner === "black" ? "0-1" : game.winner === "draw" ? "1/2-1/2" : "*";
+		games.push(chessEngine.generateRichPgn(moves || [], {
+			event: `Tournament #${tournamentId}`,
+			round: `${match.round}.${match.match_number}`,
+			white: game.player_white_address || match.player_white || match.player_one || "?",
+			black: game.player_black_address || match.player_black || match.player_two || "?",
+			result,
+			createdAt: game.created_at,
+			timeControl: game.time_control_seconds ? String(game.time_control_seconds) : "-",
+		}));
+	}
+	return games.join("\n\n");
+}
+
 module.exports = {
 	MIN_SPEED,
 	MAX_SPEED,
@@ -137,4 +181,5 @@ module.exports = {
 	capturedPiece,
 	buildReplayFrames,
 	formatSSE,
+	generateTournamentPgnArchive,
 };

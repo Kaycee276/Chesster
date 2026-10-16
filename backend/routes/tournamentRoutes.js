@@ -15,6 +15,12 @@ router.get(
 );
 
 router.get(
+	"/tournaments/:id/pgn",
+	validate(tournamentIdSchema, "params"),
+	tournamentController.downloadTournamentPgn,
+);
+
+router.get(
 	"/tournaments/:id",
 	validate(tournamentIdSchema, "params"),
 	tournamentController.getTournamentById,

@@ -26,6 +26,46 @@ function playMoves(moves) {
 }
 
 describe("replayService", () => {
+	describe("generateTournamentPgnArchive", () => {
+		it("exports completed games in round and board order with standard PGN tags", async () => {
+			const rows = {
+				bracket_matches: [
+					{ game_code: "G2", round: 2, match_number: 1, status: "completed" },
+					{ game_code: "G1", round: 1, match_number: 2, status: "completed" },
+				],
+				games: {
+					G1: { id: "game-1", game_code: "G1", status: "finished", winner: "white", player_white_address: "GWHITE", player_black_address: "GBLACK" },
+					G2: { id: "game-2", game_code: "G2", status: "finished", winner: "draw" },
+				},
+				moves: { "game-1": [], "game-2": [] },
+			};
+			const db = {
+				from(table) {
+					let filters = {};
+					const builder = {
+						select() { return this; },
+						eq(key, value) { filters[key] = value; return this; },
+						order() { return this; },
+						maybeSingle() { return Promise.resolve({ data: rows[table][filters.game_code], error: null }); },
+						then(resolve, reject) {
+							const data = table === "bracket_matches" ? rows[table] : rows[table][filters.game_id];
+							return Promise.resolve({ data, error: null }).then(resolve, reject);
+						},
+					};
+					return builder;
+				},
+			};
+
+			const archive = await replayService.generateTournamentPgnArchive("tournament-1", db);
+
+			expect(archive.match(/\[Event "Tournament #tournament-1"\]/g)).toHaveLength(2);
+			expect(archive.indexOf('[Round "1.2"]')).toBeLessThan(archive.indexOf('[Round "2.1"]'));
+			expect(archive).toContain('[White "GWHITE"]');
+			expect(archive).toContain('[Result "1-0"]');
+			expect(archive).toContain('[Result "1/2-1/2"]');
+		});
+	});
+
 	describe("parseSpeed", () => {
 		it("defaults to 1x", () => {
 			expect(replayService.parseSpeed(undefined)).toBe(1);

@@ -1,20 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getNetworkDetails } from "@stellar/freighter-api";
 import { WifiOff, AlertTriangle, X, Wifi } from "lucide-react";
 import { useWalletStore } from "../store/walletStore";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 import { describeNetwork, isNetworkMismatch } from "../utils/networkUtils";
 import { socketService } from "../api/socket";
+import { getWalletNetwork } from "../services/walletKit";
 
 const TARGET_PASSPHRASE =
   import.meta.env.VITE_STELLAR_NETWORK_PASSPHRASE || "Test SDF Network ; September 2015";
 
 const TARGET_NETWORK_LABEL = describeNetwork(TARGET_PASSPHRASE);
 
-// Freighter re-checks its own network state on every call, but doesn't push
-// change events — poll while a wallet is connected so a mismatch clears
-// automatically once the user switches inside the extension.
+// Poll the selected provider so changes made inside a wallet are reflected.
 const WALLET_POLL_MS = 5000;
 
 export default function NetworkBanner() {
@@ -78,19 +76,19 @@ export default function NetworkBanner() {
       return;
     }
     try {
-      const details = await getNetworkDetails();
-      if (details.error || !details.networkPassphrase) {
+      const networkPassphrase = await getWalletNetwork();
+      if (!networkPassphrase) {
         setNetworkMismatch(false);
         wasMismatchedRef.current = false;
         return;
       }
-      setWalletNetworkLabel(describeNetwork(details.networkPassphrase));
-      const mismatch = isNetworkMismatch(details.networkPassphrase, TARGET_PASSPHRASE);
+      setWalletNetworkLabel(describeNetwork(networkPassphrase));
+      const mismatch = isNetworkMismatch(networkPassphrase, TARGET_PASSPHRASE);
       setNetworkMismatch(mismatch);
       if (mismatch && !wasMismatchedRef.current) setMismatchDismissed(false);
       wasMismatchedRef.current = mismatch;
     } catch {
-      // Wallet extension not installed or call rejected — nothing to warn about.
+      // Wallet is disconnected or the provider rejected the network query.
       setNetworkMismatch(false);
       wasMismatchedRef.current = false;
     }

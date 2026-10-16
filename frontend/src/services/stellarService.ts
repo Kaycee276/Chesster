@@ -1,5 +1,5 @@
 import { rpc, TransactionBuilder, Networks, Contract, nativeToScVal, Transaction } from "@stellar/stellar-sdk";
-import { signTransaction } from "@stellar/freighter-api";
+import { signTransactionWithWalletKit } from "./walletKit";
 
 const RPC_URL = import.meta.env.VITE_STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = import.meta.env.VITE_STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -122,16 +122,7 @@ export async function depositXLM(fnName: "create_match" | "join_match", gameCode
     .build();
 
     const preparedTx = await server.prepareTransaction(tx);
-    const signedResponse = await signTransaction(preparedTx.toXDR(), {
-        networkPassphrase: NETWORK_PASSPHRASE,
-    });
-
-    if ("error" in signedResponse && signedResponse.error) {
-        throw new Error(String(signedResponse.error));
-    }
-
-    const xdr = "signedTxXdr" in signedResponse ? signedResponse.signedTxXdr : "";
-    if (!xdr) throw new Error("Signing failed: no signed XDR returned");
+    const xdr = await signTransactionWithWalletKit(preparedTx.toXDR(), publicKey, NETWORK_PASSPHRASE);
 
     const sendResponse = await server.sendTransaction(
         TransactionBuilder.fromXDR(xdr, NETWORK_PASSPHRASE) as unknown as Transaction

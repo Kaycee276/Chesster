@@ -5,6 +5,9 @@ const { boardToFEN } = require("./botService");
 
 const FLAG_THRESHOLD = 0.85;
 const MIN_TIMED_MOVES = 5;
+const ACPL_WINDOW_SIZE = 10;
+const ENGINE_STREAK_MAX_ACPL = 5;
+const ENGINE_STREAK_MIN_CORRELATION = 0.9;
 
 function mean(values) {
 	return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -35,6 +38,19 @@ function summarizeCentipawnLoss(losses) {
 		median: percentile(losses, 0.5),
 		p90: percentile(losses, 0.9),
 	};
+}
+
+function computeWindowedCentipawnLoss(evaluations, windowSize = ACPL_WINDOW_SIZE) {
+	if (!Number.isInteger(windowSize) || windowSize < 1) return [];
+	const windows = [];
+	for (let start = 0; start <= evaluations.length - windowSize; start += 1) {
+		const slice = evaluations.slice(start, start + windowSize);
+		if (slice.some((evaluation) => !evaluation || evaluation.centipawnLoss == null || !Number.isFinite(Number(evaluation.centipawnLoss)))) continue;
+		const averageCentipawnLoss = mean(slice.map((evaluation) => Number(evaluation.centipawnLoss)));
+		const engineMatchRate = slice.filter((evaluation) => evaluation.matchesTopMove === true).length / windowSize;
+		windows.push({ start, end: start + windowSize - 1, averageCentipawnLoss, engineMatchRate });
+	}
+	return windows;
 }
 
 function calculateAnomalyScore({ moveDurationsMs, engineMatches, centipawnLosses }) {
@@ -138,7 +154,7 @@ class AntiCheatService {
 		};
 	}
 
-	buildPlayerAnalysis(color, playerAddress, telemetry, engineResults) {
+	buildPlayerAnalysis(color, playerAddress, telemetry, engineResults, rating = null) {
 		const durations = telemetry
 			.map((entry) => entry.move_duration_ms)
 			.filter((value) => Number.isFinite(value) && value >= 0);
@@ -154,6 +170,20 @@ class AntiCheatService {
 			engineMatches,
 			centipawnLosses,
 		});
+		const hasRating = rating !== null && rating !== undefined && Number.isFinite(Number(rating));
+		const evaluationWindows = computeWindowedCentipawnLoss(engineResults);
+		const suspiciousEngineWindow = evaluationWindows.find((window) =>
+			hasRating && Number(rating) < 1500 &&
+			window.averageCentipawnLoss < ENGINE_STREAK_MAX_ACPL &&
+			window.engineMatchRate > ENGINE_STREAK_MIN_CORRELATION
+		);
+		const ratingRisk = hasRating ? Math.max(0, Math.min(1, (2000 - Number(rating)) / 1200)) : 0;
+		const suspicionScore = Math.round(Math.min(100, Math.max(0,
+			score * 35 +
+			(engineMatches.length ? engineMatches.filter(Boolean).length / engineMatches.length : 0) * 40 +
+			(centipawnLosses.length ? Math.max(0, 1 - mean(centipawnLosses) / 200) : 0) * 15 +
+			ratingRisk * 10,
+		)));
 
 		const reasons = [];
 		if (durations.length >= MIN_TIMED_MOVES && calculateTimingEntropy(durations) < 0.15) {
@@ -165,6 +195,7 @@ class AntiCheatService {
 		if (engineCorrelation != null && engineCorrelation >= 0.9) {
 			reasons.push("at least 90% correlation with Stockfish top moves");
 		}
+		if (suspiciousEngineWindow) reasons.push("low-rated player has a 10-move engine-like ACPL streak");
 
 		return {
 			color,
@@ -174,9 +205,13 @@ class AntiCheatService {
 			stdDevMoveMs,
 			timingEntropy: Number(calculateTimingEntropy(durations).toFixed(4)),
 			engineCorrelation: engineCorrelation == null ? null : Number(engineCorrelation.toFixed(4)),
+			engineMatchRate: engineCorrelation == null ? null : Number(engineCorrelation.toFixed(4)),
 			centipawnLoss: summarizeCentipawnLoss(centipawnLosses),
+			evaluationWindows,
+			rating: hasRating ? Number(rating) : null,
+			suspicionScore,
 			score,
-			flagged: score > FLAG_THRESHOLD,
+			flagged: score > FLAG_THRESHOLD || Boolean(suspiciousEngineWindow),
 			reasons,
 		};
 	}
@@ -185,6 +220,24 @@ class AntiCheatService {
 		const pendingWrite = this.pendingTelemetry.get(gameId);
 		if (pendingWrite) await pendingWrite;
 		const telemetry = await this.getTelemetry(gameId);
+		let ratings = { white: null, black: null };
+		try {
+			const { data: game, error: gameError } = await this.db.from("games")
+				.select("player_white_address, player_black_address").eq("id", gameId).maybeSingle();
+			if (gameError) throw gameError;
+			for (const color of ["white", "black"]) {
+				const address = game?.[`player_${color}_address`];
+				if (!address) continue;
+				const { data: player, error } = await this.db.from("players")
+					.select("elo_rating").eq("wallet_address", address).maybeSingle();
+				if (error) throw error;
+				ratings[color] = player?.elo_rating !== null && player?.elo_rating !== undefined && Number.isFinite(Number(player.elo_rating))
+					? Number(player.elo_rating)
+					: null;
+			}
+		} catch (error) {
+			this.logger.warn(`[AntiCheat] Player ratings unavailable: ${error.message}`);
+		}
 		const grouped = { white: [], black: [] };
 		for (const entry of telemetry) {
 			const color = entry.event_data?.color;
@@ -208,6 +261,7 @@ class AntiCheatService {
 				entries[0]?.player_address || null,
 				entries,
 				engineResults,
+				ratings[color],
 			);
 		}
 
@@ -222,4 +276,5 @@ module.exports.FLAG_THRESHOLD = FLAG_THRESHOLD;
 module.exports.calculateTimingEntropy = calculateTimingEntropy;
 module.exports.calculateAnomalyScore = calculateAnomalyScore;
 module.exports.summarizeCentipawnLoss = summarizeCentipawnLoss;
+module.exports.computeWindowedCentipawnLoss = computeWindowedCentipawnLoss;
 module.exports.moveToUci = moveToUci;
