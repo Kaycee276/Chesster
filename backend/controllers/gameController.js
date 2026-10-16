@@ -665,6 +665,8 @@ class GameController {
 				limit: limit ? parseInt(limit, 10) : 50,
 				offset: offset ? parseInt(offset, 10) : 0,
 			});
+			const cacheStatus = leaderboard && leaderboard._cacheHit ? "HIT" : "MISS";
+			res.setHeader("X-Cache", cacheStatus);
 			res.json({ success: true, data: leaderboard });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });

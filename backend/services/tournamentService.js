@@ -258,6 +258,15 @@ class TournamentService {
 					});
 				}
 
+				try {
+					const leaderboardService = require("./leaderboardService");
+					if (leaderboardService && typeof leaderboardService.invalidateLeaderboardCache === "function") {
+						await leaderboardService.invalidateLeaderboardCache();
+					}
+				} catch (err) {
+					logger.warn("[TournamentService] Failed to invalidate leaderboard cache:", err.message);
+				}
+
 				return {
 					completedMatchId: matchId,
 					winner: winnerAddress,
