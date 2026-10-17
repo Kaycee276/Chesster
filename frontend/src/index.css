@@ -283,6 +283,11 @@ button:disabled {
 	vertical-align: 1px;
 }
 
+.acc-brilliant {
+	background: #06b6d4;
+	color: #ffffff;
+}
+
 .acc-best {
 	background: #15803d;
 	color: #ffffff;

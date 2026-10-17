@@ -140,7 +140,7 @@ export default function AnalysisPage() {
     );
   };
 
-  const QUALITY_ORDER: MoveQuality[] = ["best", "good", "inaccuracy", "mistake", "blunder"];
+  const QUALITY_ORDER: MoveQuality[] = ["brilliant", "best", "good", "inaccuracy", "mistake", "blunder"];
 
   const accuracyRow = (label: string, summary: AccuracySummary) => {
     if (summary.total === 0) return null;

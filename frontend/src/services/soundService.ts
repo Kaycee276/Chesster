@@ -36,6 +36,7 @@ interface SoundProfile {
   gameEnd: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
   draw: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
   lowTimeTick: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
+  brilliant: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
 }
 
 /**
@@ -84,6 +85,12 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     lowTimeTick: [
       { freq: 1200, duration: 0.05, type: "sine", volume: 0.2, delay: 0 },
     ],
+    brilliant: [
+      { freq: 523.25, duration: 0.1, type: "sine", volume: 0.25, delay: 0 },
+      { freq: 659.25, duration: 0.1, type: "sine", volume: 0.25, delay: 0.08 },
+      { freq: 783.99, duration: 0.12, type: "sine", volume: 0.28, delay: 0.16 },
+      { freq: 1046.5, duration: 0.25, type: "sine", volume: 0.3, delay: 0.24 },
+    ],
   },
   plastic: {
     // Modern plastic piece sounds - brighter and snappier
@@ -125,6 +132,12 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     ],
     lowTimeTick: [
       { freq: 1400, duration: 0.04, type: "triangle", volume: 0.2, delay: 0 },
+    ],
+    brilliant: [
+      { freq: 587.33, duration: 0.09, type: "triangle", volume: 0.22, delay: 0 },
+      { freq: 739.99, duration: 0.09, type: "triangle", volume: 0.22, delay: 0.07 },
+      { freq: 880, duration: 0.12, type: "triangle", volume: 0.25, delay: 0.14 },
+      { freq: 1174.66, duration: 0.22, type: "triangle", volume: 0.28, delay: 0.22 },
     ],
   },
   arcade: {
@@ -168,6 +181,12 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     lowTimeTick: [
       { freq: 1600, duration: 0.04, type: "sawtooth", volume: 0.18, delay: 0 },
     ],
+    brilliant: [
+      { freq: 500, duration: 0.08, type: "sawtooth", volume: 0.2, delay: 0 },
+      { freq: 700, duration: 0.08, type: "sawtooth", volume: 0.2, delay: 0.06 },
+      { freq: 900, duration: 0.08, type: "sawtooth", volume: 0.22, delay: 0.12 },
+      { freq: 1300, duration: 0.2, type: "sawtooth", volume: 0.25, delay: 0.18 },
+    ],
   },
   retro: {
     // 8-bit chiptune sounds - classic video game vibe
@@ -209,6 +228,12 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     ],
     lowTimeTick: [
       { freq: 2000, duration: 0.03, type: "square", volume: 0.18, delay: 0 },
+    ],
+    brilliant: [
+      { freq: 660, duration: 0.06, type: "square", volume: 0.18, delay: 0 },
+      { freq: 880, duration: 0.06, type: "square", volume: 0.18, delay: 0.05 },
+      { freq: 1100, duration: 0.08, type: "square", volume: 0.2, delay: 0.1 },
+      { freq: 1760, duration: 0.18, type: "square", volume: 0.22, delay: 0.16 },
     ],
   },
 };
@@ -323,6 +348,11 @@ class SoundService {
   /** Low time warning tick (active player under 10 seconds) */
   lowTimeTick() {
     this.playSoundEffect("lowTimeTick");
+  }
+
+  /** Brilliant move celebratory sound cue */
+  brilliant() {
+    this.playSoundEffect("brilliant");
   }
 
   /** Clock has dropped into the "urgent" low-time zone */
