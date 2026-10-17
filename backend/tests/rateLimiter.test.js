@@ -161,7 +161,7 @@ describe("rateLimiter", () => {
 	});
 	describe("createAuthChallengeRateLimiter", () => {
 		it("allows requests under both the IP and address limits", () => {
-			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 10, addressMax: 3 });
+			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 10, subnetMax: 50, addressMax: 3 });
 			const req = mockReq({ body: { address: "GABC" } });
 			const res = mockRes();
 			const next = jest.fn();
@@ -173,7 +173,7 @@ describe("rateLimiter", () => {
 		});
 
 		it("rejects the 11th request from the same IP with 429 and Retry-After", () => {
-			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 10, addressMax: 100 });
+			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 10, subnetMax: 100, addressMax: 100 });
 			const req = mockReq({ ip: "9.9.9.9", body: { address: null } });
 
 			for (let i = 0; i < 10; i++) {
@@ -194,7 +194,7 @@ describe("rateLimiter", () => {
 		});
 
 		it("rejects the 4th pending challenge for the same wallet address with 429", () => {
-			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 100, addressMax: 3 });
+			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 100, subnetMax: 100, addressMax: 3 });
 
 			for (let i = 0; i < 3; i++) {
 				const req = mockReq({ ip: `1.1.1.${i}`, body: { address: "GSAME" } });
@@ -213,7 +213,7 @@ describe("rateLimiter", () => {
 		});
 
 		it("does not enforce the address limit when no address is present", () => {
-			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 100, addressMax: 1 });
+			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 100, subnetMax: 100, addressMax: 1 });
 
 			for (let i = 0; i < 5; i++) {
 				const req = mockReq({ ip: `2.2.2.${i}`, body: {} });
@@ -229,7 +229,7 @@ describe("rateLimiter", () => {
 		});
 
 		it("tracks separate address windows independently of IP", () => {
-			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 100, addressMax: 3 });
+			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 100, subnetMax: 100, addressMax: 3 });
 
 			for (let i = 0; i < 3; i++) {
 				limiter(mockReq({ ip: "3.3.3.1", body: { address: "GWALLET" } }), mockRes(), jest.fn());
@@ -246,7 +246,7 @@ describe("rateLimiter", () => {
 		});
 
 		it("exposes a reset() helper that clears both windows", () => {
-			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 1, addressMax: 1 });
+			const limiter = createAuthChallengeRateLimiter({ windowMs: 60_000, ipMax: 1, subnetMax: 1, addressMax: 1 });
 			const req = mockReq({ ip: "4.4.4.4", body: { address: "GRESET" } });
 
 			limiter(req, mockRes(), jest.fn());
@@ -258,6 +258,273 @@ describe("rateLimiter", () => {
 
 			expect(next).toHaveBeenCalled();
 			expect(res.status).not.toHaveBeenCalled();
+		});
+
+		describe("Subnet rate limiting (three-tier: IP, subnet, address)", () => {
+			it("enforces per-IP limit independently", () => {
+				const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 2,
+					subnetMax: 100,
+					addressMax: 100,
+					subnetKeyGenerator: mockSubnetKeyGen,
+				});
+
+				// First IP, 2 requests should pass
+				const req1a = mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } });
+				const req1b = mockReq({ ip: "10.0.0.1", body: { address: "GADDR2" } });
+				limiter(req1a, mockRes(), jest.fn());
+				limiter(req1b, mockRes(), jest.fn());
+
+				// Third request from same IP should be rejected
+				const req1c = mockReq({ ip: "10.0.0.1", body: { address: "GADDR3" } });
+				const res1c = mockRes();
+				limiter(req1c, res1c, jest.fn());
+				expect(res1c.status).toHaveBeenCalledWith(429);
+
+				// Different IP in same /24 should still have its own limit
+				const req2a = mockReq({ ip: "10.0.0.2", body: { address: "GADDR4" } });
+				const res2a = mockRes();
+				const next2a = jest.fn();
+				limiter(req2a, res2a, next2a);
+				expect(next2a).toHaveBeenCalled(); // First request from this IP passes
+			});
+
+			it("enforces subnet limit across different IPs", () => {
+				const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 100,
+					subnetMax: 3,
+					addressMax: 100,
+					subnetKeyGenerator: mockSubnetKeyGen,
+				});
+
+				// Make 3 requests from different IPs in same /24
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+				limiter(mockReq({ ip: "10.0.0.2", body: { address: "GADDR2" } }), mockRes(), jest.fn());
+				limiter(mockReq({ ip: "10.0.0.3", body: { address: "GADDR3" } }), mockRes(), jest.fn());
+
+				// Fourth request from different IP in same subnet should fail (subnet limit exceeded)
+				const req4 = mockReq({ ip: "10.0.0.4", body: { address: "GADDR4" } });
+				const res4 = mockRes();
+				limiter(req4, res4, jest.fn());
+				expect(res4.status).toHaveBeenCalledWith(429);
+			});
+
+			it("subnet limit does not affect requests from different subnet", () => {
+				const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 100,
+					subnetMax: 2,
+					addressMax: 100,
+					subnetKeyGenerator: mockSubnetKeyGen,
+				});
+
+				// Exhaust subnet limit for first subnet
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+				limiter(mockReq({ ip: "10.0.0.2", body: { address: "GADDR2" } }), mockRes(), jest.fn());
+
+				// Request from different subnet should not be affected
+				const diffSubnet = mockReq({ ip: "10.0.1.1", body: { address: "GADDR3" } });
+				const res = mockRes();
+				const next = jest.fn();
+				limiter(diffSubnet, res, next);
+				expect(next).toHaveBeenCalled();
+				expect(res.status).not.toHaveBeenCalled();
+			});
+
+			it("IP limit takes precedence and is checked first", () => {
+				const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 1,
+					subnetMax: 100,
+					addressMax: 100,
+					subnetKeyGenerator: mockSubnetKeyGen,
+				});
+
+				// First request passes
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+
+				// Second request from same IP is rejected by IP limit
+				const res2 = mockRes();
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR2" } }), res2, jest.fn());
+				expect(res2.status).toHaveBeenCalledWith(429);
+			});
+
+			it("subnet limit is checked after IP limit", () => {
+				const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 10,
+					subnetMax: 1,
+					addressMax: 100,
+					subnetKeyGenerator: mockSubnetKeyGen,
+				});
+
+				// First request from IP 1 passes (within IP limit, subnet limit)
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+
+				// Second request from IP 2 should be rejected by subnet limit
+				const res2 = mockRes();
+				limiter(mockReq({ ip: "10.0.0.2", body: { address: "GADDR2" } }), res2, jest.fn());
+				expect(res2.status).toHaveBeenCalledWith(429);
+			});
+
+			it("both counters increment on each request regardless of rejection", () => {
+				const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 1,
+					subnetMax: 3,
+					addressMax: 100,
+					subnetKeyGenerator: mockSubnetKeyGen,
+				});
+
+				// First request from IP 1 passes
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+
+				// Second request from IP 1 fails (IP limit), but subnet counter still incremented
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR2" } }), mockRes(), jest.fn());
+
+				// Third request from IP 2 passes (within IP limit for that IP)
+				const res3 = mockRes();
+				const next3 = jest.fn();
+				limiter(mockReq({ ip: "10.0.0.2", body: { address: "GADDR3" } }), res3, next3);
+				expect(next3).toHaveBeenCalled();
+
+				// Fourth request from IP 3 fails because subnet already has 2 increments (from first and second), this makes 3
+				const res4 = mockRes();
+				limiter(mockReq({ ip: "10.0.0.3", body: { address: "GADDR4" } }), res4, jest.fn());
+				expect(res4.status).toHaveBeenCalledWith(429);
+			});
+
+			it("abusive single IP does not completely exhaust subnet budget for neighbors", () => {
+				const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 2,
+					subnetMax: 10,
+					addressMax: 100,
+					subnetKeyGenerator: mockSubnetKeyGen,
+				});
+
+				// One IP tries to flood: makes 2 requests (hits its own limit)
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR2" } }), mockRes(), jest.fn());
+
+				// Third request from same IP fails
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR3" } }), mockRes(), jest.fn());
+
+				// But neighbors can still make requests (subnet has used 2 of 10)
+				for (let i = 2; i <= 7; i++) {
+					const res = mockRes();
+					const next = jest.fn();
+					limiter(mockReq({ ip: `10.0.0.${i}`, body: { address: `GADDR${i}` } }), res, next);
+					expect(next).toHaveBeenCalled(); // Should pass until subnet limit hit
+					expect(res.status).not.toHaveBeenCalled();
+				}
+
+				// Eighth different IP would exceed subnet (8 total), should fail
+				const res8 = mockRes();
+				limiter(mockReq({ ip: "10.0.0.8", body: { address: "GADDR8" } }), res8, jest.fn());
+				expect(res8.status).toHaveBeenCalledWith(429);
+			});
+
+			it("window reset clears all three counters", () => {
+				const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 1,
+					subnetMax: 1,
+					addressMax: 1,
+					subnetKeyGenerator: mockSubnetKeyGen,
+				});
+
+				// Fill up all counters
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+
+				// Verify they are blocked
+				const res2 = mockRes();
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), res2, jest.fn());
+				expect(res2.status).toHaveBeenCalledWith(429);
+
+				// Reset all counters
+				limiter.reset();
+
+				// Should be able to make requests again
+				const res3 = mockRes();
+				const next3 = jest.fn();
+				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), res3, next3);
+				expect(next3).toHaveBeenCalled();
+				expect(res3.status).not.toHaveBeenCalled();
+			});
+
+			it("Retry-After header reflects remaining window time", () => {
+				jest.useFakeTimers();
+				try {
+					const mockSubnetKeyGen = (ip) => `subnet-${ip.split(".").slice(0, 3).join(".")}`;
+					const limiter = createAuthChallengeRateLimiter({
+						windowMs: 10_000,
+						ipMax: 1,
+						subnetMax: 100,
+						addressMax: 100,
+						subnetKeyGenerator: mockSubnetKeyGen,
+					});
+
+					// First request
+					limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+
+					// Second request immediately after (IP limit exceeded)
+					const res = mockRes();
+					limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR2" } }), res, jest.fn());
+
+					expect(res.set).toHaveBeenCalledWith("Retry-After", "10");
+					expect(res.json).toHaveBeenCalledWith(
+						expect.objectContaining({ retryAfter: 10 }),
+					);
+
+					// Advance time 5 seconds
+					jest.advanceTimersByTime(5000);
+
+					const res2 = mockRes();
+					limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR3" } }), res2, jest.fn());
+
+					// Should now report ~5 seconds remaining (allowing for timing variance)
+					const retryAfterCall = res2.json.mock.calls[0][0];
+					expect(retryAfterCall.retryAfter).toBeLessThanOrEqual(5);
+					expect(retryAfterCall.retryAfter).toBeGreaterThan(0);
+				} finally {
+					jest.useRealTimers();
+				}
+			});
+
+			it("uses getSubnetFromIp by default when no custom subnet key generator provided", () => {
+				const limiter = createAuthChallengeRateLimiter({
+					windowMs: 60_000,
+					ipMax: 100,
+					subnetMax: 2,
+					addressMax: 100,
+				});
+
+				// Requests from IPv4 /24 should share subnet limit
+				limiter(mockReq({ ip: "192.0.2.1", body: { address: "GADDR1" } }), mockRes(), jest.fn());
+				limiter(mockReq({ ip: "192.0.2.2", body: { address: "GADDR2" } }), mockRes(), jest.fn());
+
+				// Third request should fail (subnet limit of 2 exceeded)
+				const res3 = mockRes();
+				limiter(mockReq({ ip: "192.0.2.3", body: { address: "GADDR3" } }), res3, jest.fn());
+				expect(res3.status).toHaveBeenCalledWith(429);
+
+				// But different /24 should work
+				const res4 = mockRes();
+				const next4 = jest.fn();
+				limiter(mockReq({ ip: "192.0.3.1", body: { address: "GADDR4" } }), res4, next4);
+				expect(next4).toHaveBeenCalled();
+			});
 		});
 	});
 });
