@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from "react";
-import { MessageCircle, X, Send, Smile, Download, Check } from "lucide-react";
+import { MessageCircle, X, Send, Smile, Download, Check, Volume2, VolumeX } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 import { boardToFen, moveToAlgebraic } from "../utils/chessUtils";
 import { sanitizeChatMessage } from "../utils/sanitize";
 
 const MAX_CHARS = 50;
-const QUICK_REACTIONS = ["Good luck!", "Nice move", "Well played", "Good game"];
+const QUICK_PHRASES = ["Good luck!", "Nice move!", "Well played!", "Thanks!"];
 const EMOJI_REACTIONS = ["😀", "🔥", "👏", "🤝", "♟️", "🏆"];
 
 interface ChatPanelProps {
@@ -25,6 +25,8 @@ export default function ChatPanel({
 }: ChatPanelProps = {}) {
 	const playerColor = useGameStore((s) => s.playerColor);
 	const chatMessages = useGameStore((s) => s.chatMessages);
+	const isOpponentMuted = useGameStore((s) => s.isOpponentMuted);
+	const toggleOpponentMute = useGameStore((s) => s.toggleOpponentMute);
 	const unreadCount = useGameStore((s) => s.unreadCount);
 	const chatOpen = useGameStore((s) => s.chatOpen);
 	const setChatOpen = useGameStore((s) => s.setChatOpen);
@@ -51,6 +53,9 @@ export default function ChatPanel({
 	const setViewingIndex = useGameStore((s) => s.setViewingIndex);
 
 	const isOpen = inline || chatOpen;
+	const visibleMessages = isOpponentMuted
+		? chatMessages.filter((message) => message.playerColor === playerColor)
+		: chatMessages;
 
 	const handleClose = () => {
 		setChatOpen(false);
@@ -139,6 +144,17 @@ export default function ChatPanel({
 					</button>
 				</div>
 				<div className="flex items-center gap-1">
+					<button
+						type="button"
+						onClick={toggleOpponentMute}
+						aria-label={isOpponentMuted ? "Unmute opponent" : "Mute opponent"}
+						aria-pressed={isOpponentMuted}
+						title={isOpponentMuted ? "Unmute opponent" : "Mute opponent"}
+						className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors ${isOpponentMuted ? "text-red-400 bg-red-500/10" : "text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary)"}`}
+					>
+						{isOpponentMuted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+						<span className="sr-only">{isOpponentMuted ? "Unmute opponent" : "Mute opponent"}</span>
+					</button>
 					{activeTab === "chat" && (
 						<button
 							title="Copy FEN to clipboard"
@@ -172,12 +188,12 @@ export default function ChatPanel({
 						<>
 							{/* Messages */}
 					<div className="flex-1 overflow-y-auto px-3 py-2 flex flex-col gap-1.5 min-h-0">
-						{chatMessages.length === 0 ? (
+						{visibleMessages.length === 0 ? (
 							<p className="text-xs text-(--text-tertiary) text-center mt-6">
-								No messages yet. Say hi!
+								{isOpponentMuted && chatMessages.length > 0 ? "Opponent messages are muted." : "No messages yet. Say hi!"}
 							</p>
 						) : (
-							chatMessages.map((msg) => {
+							visibleMessages.map((msg) => {
 								const isMe = msg.playerColor === playerColor;
 								return (
 									<div
@@ -213,14 +229,14 @@ export default function ChatPanel({
 
 					{/* Quick reactions */}
 					<div className="shrink-0 flex flex-wrap gap-1.5 px-2 py-2 border-t border-(--border) bg-(--bg)/50">
-						{QUICK_REACTIONS.map((reaction) => (
+						{QUICK_PHRASES.map((phrase) => (
 							<button
-								key={reaction}
+								key={phrase}
 								type="button"
-								onClick={() => sendMessage(reaction)}
+								onClick={() => sendMessage(phrase)}
 								className="rounded-full border border-(--border) px-2 py-1 text-[10px] text-(--text-secondary) hover:border-(--accent-primary)/60 hover:text-(--text) transition-colors"
 							>
-								{reaction}
+								{phrase}
 							</button>
 						))}
 					</div>

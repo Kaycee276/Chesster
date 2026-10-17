@@ -1,46 +1,58 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Timer } from "lucide-react";
 import { soundService } from "../services/soundService";
+import { formatTime } from "../utils/timeControl";
 
 interface GameTimerProps {
 	secondsLeft: number;
 	totalSeconds: number;
 	isCurrentTurn?: boolean;
+	isClockRunning?: boolean;
 }
 
 /** Clock is considered "low" once it drops to this many seconds or fewer. */
 const LOW_TIME_THRESHOLD = 10;
 
-function formatTime(s: number): string {
-	const clamped = Math.max(0, s);
-	const m = Math.floor(clamped / 60);
-	const sec = Math.max(0, Math.ceil(clamped % 60));
-	return `${m}:${sec.toString().padStart(2, "0")}`;
-}
+export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = false, isClockRunning = true }: GameTimerProps) {
+	const [clock, setClock] = useState<{ deadline: number; now: number } | null>(null);
 
-export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = false }: GameTimerProps) {
-	const pct = totalSeconds > 0 ? (secondsLeft / totalSeconds) * 100 : 0;
-	const urgent = secondsLeft <= 60;
+	useEffect(() => {
+		if (secondsLeft >= 10 || !isClockRunning) return;
+		let deadline: number | null = null;
+		const interval = window.setInterval(() => {
+			const now = Date.now();
+			deadline ??= now + Math.max(0, secondsLeft) * 1000;
+			setClock({ deadline, now });
+		}, 100);
+		return () => window.clearInterval(interval);
+	}, [isClockRunning, secondsLeft]);
+
+	const displayMs = secondsLeft < 10 && isClockRunning
+		? Math.max(0, clock ? clock.deadline - clock.now : secondsLeft * 1000)
+		: Math.max(0, secondsLeft * 1000);
+	const pct = totalSeconds > 0 ? (displayMs / (totalSeconds * 1000)) * 100 : 0;
+	const urgent = displayMs <= 60_000;
 	
 	// Low time danger: <= 20s OR <= 10% of total time, AND it's the active player's turn
-	const isLowTime = isCurrentTurn && (secondsLeft <= 20 || secondsLeft <= totalSeconds * 0.1);
+	const isLowTime = isCurrentTurn && (displayMs <= 20_000 || displayMs <= totalSeconds * 100);
 	// Critical scramble: under 10s on your turn — pulse accelerates (#474).
-	const isCritical = isCurrentTurn && secondsLeft <= 10 && secondsLeft > 0;
+	const isCritical = isCurrentTurn && displayMs <= 10_000 && displayMs > 0;
 	
-	const lowTime = secondsLeft <= LOW_TIME_THRESHOLD;
-	const display = formatTime(secondsLeft);
+	const lowTime = displayMs <= LOW_TIME_THRESHOLD * 1000;
+	const isScramble = displayMs < 10_000;
+	const display = formatTime(displayMs);
 
 	// Play a warning tick once when the clock crosses into the low-time zone.
 	const wasLowRef = useRef(false);
 	useEffect(() => {
-		if (lowTime && secondsLeft > 0 && !wasLowRef.current) {
+		if (isCurrentTurn && lowTime && secondsLeft > 0 && !wasLowRef.current) {
 			soundService.lowTime();
 		}
-		wasLowRef.current = lowTime && secondsLeft > 0;
-	}, [lowTime, secondsLeft]);
+		wasLowRef.current = isCurrentTurn && lowTime && secondsLeft > 0;
+	}, [isCurrentTurn, lowTime, secondsLeft]);
 
 	const ariaLabel = isLowTime
-		? `Low time warning: ${Math.ceil(Math.max(0, secondsLeft))} seconds remaining`
+		? `Low time warning: ${Math.ceil(displayMs / 1000)} seconds remaining`
 		: `Time remaining: ${display}`;
 
 	return (
@@ -57,7 +69,7 @@ export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = f
 		>
 			<Timer size={12} className={urgent ? "text-red-500" : "text-(--text-tertiary)"} />
 			<span
-				className={`font-mono font-bold text-sm tabular-nums ${urgent ? "text-red-400 animate-pulse" : "text-(--text-secondary)"}`}
+				className={`font-mono font-bold text-sm tabular-nums ${isScramble ? "text-red-400 animate-pulse" : urgent ? "text-red-400 animate-pulse" : "text-(--text-secondary)"}`}
 			>
 				{display}
 			</span>

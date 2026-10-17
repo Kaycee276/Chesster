@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge, FileUp } from "lucide-react";
 import MoveNavigator from "../components/MoveNavigator";
+import EvaluationGraph from "../components/EvaluationGraph";
 import PromotionModal from "../components/PromotionModal";
 import { useToastStore } from "../store/toastStore";
 import { api } from "../api/gameApi";
@@ -734,6 +735,14 @@ export default function AnalysisPage() {
             onMoveChange={goToMove}
             onTogglePlay={() => setIsPlaying((p) => !p)}
           />
+
+          {moves.length > 0 && (
+            <EvaluationGraph
+              evaluations={accuracy.evaluations}
+              currentMoveIndex={currentIndex}
+              onMoveChange={goToMove}
+            />
+          )}
 
           {/* Accuracy summary (#313) */}
           {moves.length > 0 && (

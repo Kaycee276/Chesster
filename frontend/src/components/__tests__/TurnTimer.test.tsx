@@ -14,17 +14,18 @@ describe("GameTimer (TurnTimer)", () => {
 			expect(render(65, 300)).toContain("1:05");
 		});
 
-		it("formats a sub-minute value with a leading zero minute", () => {
-			expect(render(9, 300)).toContain("0:09");
+		it("formats tenths of a second below ten seconds", () => {
+			expect(render(8.45, 300)).toContain("0:08.4");
+			expect(render(10, 300)).toContain("0:10");
 		});
 
-		it("renders 0:00 at zero", () => {
-			expect(render(0, 300)).toContain("0:00");
+		it("renders tenths at zero", () => {
+			expect(render(0, 300)).toContain("0:00.0");
 		});
 
-		it("clamps negative time to 0:00 rather than showing a negative value", () => {
+		it("clamps negative time rather than showing a negative value", () => {
 			const markup = render(-5, 300);
-			expect(markup).toContain("0:00");
+			expect(markup).toContain("0:00.0");
 			expect(markup).not.toContain("-0:");
 		});
 	});
