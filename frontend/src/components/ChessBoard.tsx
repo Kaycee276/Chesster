@@ -71,20 +71,6 @@ import TurnTimer from "./TurnTimer";
 import ChatPanel from "./ChatPanel";
 import MoveInputBar from "./MoveInputBar";
 
-const PIECE_SYMBOLS: Record<string, string> = {
-  K: "♔",
-  Q: "♕",
-  R: "♖",
-  B: "♗",
-  N: "♘",
-  P: "♙",
-  k: "♚",
-  q: "♛",
-  r: "♜",
-  b: "♝",
-  n: "♞",
-  p: "♟",
-};
 
 // Piece set configurations for different visual styles
 const PIECE_SET_SYMBOLS: Record<"classic" | "neo" | "wood", Record<string, string>> = {
@@ -380,9 +366,9 @@ function ChessBoardInner() {
     viewingIndex,
     setViewingIndex,
     loadMoveHistory,
+    blindfoldMode,
     isBlindfoldMode,
     isStreamerMode,
-    pieceSet,
   } = useGameStore();
   const { addToast, removeToast } = useToastStore();
   const navigate = useNavigate();
@@ -427,6 +413,16 @@ function ChessBoardInner() {
 
   const safeHaptic = (type: "pickup" | "drop" | "error") => {
     if (isHapticsEnabled) triggerHaptic(type);
+  };
+
+  const shouldHidePiece = (piece: string) => {
+    if (blindfoldMode === "all") return true;
+    if (blindfoldMode === "white" && piece === piece.toUpperCase()) return true;
+    if (blindfoldMode === "black" && piece === piece.toLowerCase()) return true;
+    if (blindfoldMode === "none") return false;
+    // Fallback for legacy isBlindfoldMode boolean
+    if (isBlindfoldMode) return true;
+    return false;
   };
 
   const boardTheme = useThemeStore((s) => s.boardTheme);
@@ -2143,7 +2139,7 @@ function ChessBoardInner() {
                         {/* Piece */}
                         {piece !== "." && (
                           <>
-                            {isBlindfoldMode && !isPeeking ? (
+                            {shouldHidePiece(piece) && !isPeeking ? (
                               // Blindfold mode: render subtle dot instead of piece
                               <div
                                 className="absolute rounded-full bg-black/40 dark:bg-white/30 pointer-events-none"

@@ -92,6 +92,8 @@ interface GameStore {
   unreadCount: number;
   chatOpen: boolean;
   // Blindfold mode for training calculation skills
+  blindfoldMode: "none" | "white" | "black" | "all";
+  setBlindfoldMode: (mode: "none" | "white" | "black" | "all") => void;
   isBlindfoldMode: boolean;
   toggleBlindfoldMode: () => void;
   // Streamer mode for broadcasting matches securely
@@ -175,7 +177,7 @@ export const useGameStore = create<GameStore>()(
       // Network state (Issue #401)
       pingMs: 0,
       socketStatus: "disconnected",
-      reconnectAttempts: 0,
+      blindfoldMode: "none" as "none" | "white" | "black" | "all",
       isBlindfoldMode: false,
       isStreamerMode: false,
       isHapticsEnabled: true,
@@ -184,8 +186,14 @@ export const useGameStore = create<GameStore>()(
       masterVolume: soundService.getVolume(),
       isSettingsOpen: false,
 
+      setBlindfoldMode: (mode: "none" | "white" | "black" | "all") =>
+        set({ blindfoldMode: mode, isBlindfoldMode: mode !== "none" }),
       toggleBlindfoldMode: () =>
-        set((s) => ({ isBlindfoldMode: !s.isBlindfoldMode })),
+        set((s) => {
+          const isActive = s.blindfoldMode !== "none" || s.isBlindfoldMode;
+          const next = isActive ? "none" : "all";
+          return { blindfoldMode: next, isBlindfoldMode: !isActive };
+        }),
       toggleStreamerMode: () =>
         set((s) => ({ isStreamerMode: !s.isStreamerMode })),
       toggleHaptics: () =>
@@ -612,6 +620,7 @@ export const useGameStore = create<GameStore>()(
       partialize: (state) => ({
         gameCode: state.gameCode,
         playerColor: state.playerColor,
+        blindfoldMode: state.blindfoldMode,
         isBlindfoldMode: state.isBlindfoldMode,
         isStreamerMode: state.isStreamerMode,
         isHapticsEnabled: state.isHapticsEnabled,

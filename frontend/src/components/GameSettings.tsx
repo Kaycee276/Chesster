@@ -7,6 +7,8 @@ import { soundService } from "../services/soundService";
 export default function GameSettings({ hideFloating = false }: { hideFloating?: boolean } = {}) {
   const isBlindfoldMode = useGameStore((s) => s.isBlindfoldMode);
   const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
+  const blindfoldMode = useGameStore((s) => s.blindfoldMode);
+  const setBlindfoldMode = useGameStore((s) => s.setBlindfoldMode);
   const isStreamerMode = useGameStore((s) => s.isStreamerMode);
   const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
   const isHapticsEnabled = useGameStore((s) => s.isHapticsEnabled);
@@ -169,7 +171,7 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
               </div>
             </div>
 
-            {/* Blindfold Mode Toggle */}
+            {/* Blindfold Mode Toggle & Options */}
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <div className="flex flex-col gap-1">
@@ -195,11 +197,40 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   />
                 </button>
               </div>
+
+              {/* Progressive Blindfold Radio Options */}
+              <div className="grid grid-cols-2 gap-2 pt-1" role="radiogroup" aria-label="Blindfold Mode Options">
+                {[
+                  { value: "none", label: "Visible (None)" },
+                  { value: "white", label: "Hide White" },
+                  { value: "black", label: "Hide Black" },
+                  { value: "all", label: "Hide All" },
+                ].map((opt) => (
+                  <label
+                    key={opt.value}
+                    className={`flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors ${
+                      blindfoldMode === opt.value
+                        ? "border-(--accent-primary) bg-(--accent-primary)/10 text-(--text)"
+                        : "border-(--border) hover:bg-(--bg-tertiary) text-(--text-secondary)"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="blindfoldMode"
+                      value={opt.value}
+                      checked={blindfoldMode === opt.value}
+                      onChange={() => setBlindfoldMode(opt.value as "none" | "white" | "black" | "all")}
+                      className="accent-(--accent-primary)"
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
             </div>
 
             <p className="text-xs text-(--text-secondary) leading-relaxed">
-              When enabled, pieces appear as dots. Use the peek button (eye icon) in the action bar
-              to reveal pieces for 2 seconds.
+              Configure partial blindfold (hide white or black pieces) or full blindfold.
+              When hidden, pieces appear as subtle markers. Use the peek button to reveal pieces.
             </p>
 
             {/* Streamer Mode Toggle */}

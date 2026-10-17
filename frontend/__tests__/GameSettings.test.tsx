@@ -6,6 +6,7 @@ import { useGameStore } from "../src/store/gameStore";
 describe("GameSettings Component", () => {
 	beforeEach(() => {
 		useGameStore.setState({
+			blindfoldMode: "none",
 			isBlindfoldMode: false,
 		});
 		localStorage.clear();
@@ -142,10 +143,43 @@ describe("GameSettings Component", () => {
 			).toBeTruthy();
 			expect(
 				screen.getByText(
-					/When enabled, pieces appear as dots. Use the peek button/i,
+					/Configure partial blindfold/i,
 				),
 			).toBeTruthy();
 		});
+	});
+
+	it("renders progressive blindfold radio options and updates store", async () => {
+		useGameStore.setState({ blindfoldMode: "none" });
+		render(<GameSettings />);
+
+		const triggerButton = screen.getByRole("button", { name: /game settings/i });
+		fireEvent.click(triggerButton);
+
+		await waitFor(() => {
+			expect(screen.getByRole("radiogroup", { name: /blindfold mode options/i })).toBeTruthy();
+		});
+
+		const whiteRadio = screen.getByLabelText(/hide white/i) as HTMLInputElement;
+		const blackRadio = screen.getByLabelText(/hide black/i) as HTMLInputElement;
+		const allRadio = screen.getByLabelText(/hide all/i) as HTMLInputElement;
+		const noneRadio = screen.getByLabelText(/visible \(none\)/i) as HTMLInputElement;
+
+		expect(noneRadio.checked).toBe(true);
+
+		fireEvent.click(whiteRadio);
+		expect(useGameStore.getState().blindfoldMode).toBe("white");
+		expect(useGameStore.getState().isBlindfoldMode).toBe(true);
+
+		fireEvent.click(blackRadio);
+		expect(useGameStore.getState().blindfoldMode).toBe("black");
+
+		fireEvent.click(allRadio);
+		expect(useGameStore.getState().blindfoldMode).toBe("all");
+
+		fireEvent.click(noneRadio);
+		expect(useGameStore.getState().blindfoldMode).toBe("none");
+		expect(useGameStore.getState().isBlindfoldMode).toBe(false);
 	});
 
 	it("toggle switch has correct visual state when on", async () => {
