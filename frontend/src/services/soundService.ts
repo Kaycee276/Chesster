@@ -399,6 +399,51 @@ class SoundService {
   getSoundPack(): SoundPack {
     return this._soundPack;
   }
+
+  getAudioContext(): AudioContext | null {
+    return this.getCtx();
+  }
+
+  playTone(freq: number, duration: number = 0.08, type: OscType = "sine") {
+    this.tone(freq, duration, type);
+  }
+
+  synthesizeBeep(freq: number = 440, duration: number = 0.08, type: OscType = "sine") {
+    this.playTone(freq, duration, type);
+  }
+
+  /**
+   * Attempts to play an audio element or audio asset URL.
+   * If play fails or asset fails to load, gracefully falls back to Web Audio API tone synthesis.
+   */
+  async playWithFallback(
+    audioOrPlayFn: HTMLAudioElement | (() => Promise<void>),
+    fallbackFreq: number = 440,
+    fallbackDuration: number = 0.08,
+    fallbackType: OscType = "sine"
+  ) {
+    try {
+      if (typeof audioOrPlayFn === "function") {
+        await audioOrPlayFn();
+      } else if (audioOrPlayFn && typeof audioOrPlayFn.play === "function") {
+        await audioOrPlayFn.play();
+      }
+    } catch {
+      this.playTone(fallbackFreq, fallbackDuration, fallbackType);
+    }
+  }
 }
 
 export const soundService = new SoundService();
+
+export function getAudioContext(): AudioContext | null {
+  return soundService.getAudioContext();
+}
+
+export function playTone(freq: number, duration: number = 0.08, type: OscType = "sine") {
+  soundService.playTone(freq, duration, type);
+}
+
+export function synthesizeBeep(freq: number = 440, duration: number = 0.08, type: OscType = "sine") {
+  soundService.synthesizeBeep(freq, duration, type);
+}
