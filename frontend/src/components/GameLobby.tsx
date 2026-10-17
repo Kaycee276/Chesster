@@ -431,16 +431,15 @@ export default function GameLobby() {
       setStep("depositing");
       try {
         await depositXLM("create_match", preGeneratedCode, wagerAmount, address);
+        // Toast is handled by depositXLM itself
       } catch (err: unknown) {
-        setStep("idle");
-        const msg = err instanceof Error ? err.message : "XLM deposit failed";
-        addToast(
-          msg.includes("rejected") || msg.includes("denied") ? "Deposit cancelled" : msg,
-          "error"
-        );
+        // depositXLM already dispatched a toast, just reset state and return
         return;
+      } finally {
+        setStep("idle");
       }
 
+      // If we reach here, deposit was successful, proceed to create game
       setStep("creating");
       try {
         const data = await api.createGame(
@@ -453,12 +452,14 @@ export default function GameLobby() {
         );
         if (!data.success) throw new Error(data.error || "Failed to create game");
       } catch (err: unknown) {
-        setStep("idle");
         const msg = err instanceof Error ? err.message : "Failed to create game";
         addToast(msg, "error");
         return;
+      } finally {
+        setStep("idle");
       }
 
+      // If game creation successful, join and show share link
       try {
         await joinGame(preGeneratedCode, "white", address);
         setPendingShareCode(preGeneratedCode);
@@ -466,7 +467,6 @@ export default function GameLobby() {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong";
         addToast(msg, "error");
-        setStep("idle");
       }
     } else {
       setStep("creating");
@@ -481,13 +481,14 @@ export default function GameLobby() {
         if (code) {
           setPendingShareCode(code);
           setStep("sharing");
-        } else {
-          setStep("idle");
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Something went wrong";
         addToast(msg, "error");
-        setStep("idle");
+      } finally {
+        if (!pendingShareCode) {
+          setStep("idle");
+        }
       }
     }
   };
@@ -550,13 +551,10 @@ export default function GameLobby() {
     setStep("depositing");
     try {
       await depositXLM("join_match", gameCode, pendingWager.wagerAmount, address);
+      // Toast is handled by depositXLM itself
     } catch (err: unknown) {
+      // depositXLM already dispatched a toast, just reset state and return
       setStep("join-confirming");
-      const msg = err instanceof Error ? err.message : "XLM deposit failed";
-      addToast(
-        msg.includes("rejected") || msg.includes("denied") ? "Deposit cancelled" : msg,
-        "error"
-      );
       return;
     }
 

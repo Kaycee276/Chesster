@@ -183,10 +183,10 @@ export default function GamePage() {
       setJoinStep("depositing");
       try {
         await depositXLM("join_match", gameCode, String(wagerAmount), address);
+        // Toast is handled by depositXLM itself
       } catch (err: unknown) {
+        // depositXLM already dispatched a toast
         setJoinStep("idle");
-        const msg = err instanceof Error ? err.message : "Deposit failed";
-        addToast(msg.includes("rejected") ? "Deposit cancelled" : msg, "error");
         return;
       }
     }
@@ -195,9 +195,10 @@ export default function GamePage() {
     try {
       await joinGame(gameCode, "black", address);
     } catch (err: unknown) {
-      setJoinStep("idle");
       const msg = err instanceof Error ? err.message : "Something went wrong";
       addToast(msg, "error");
+    } finally {
+      setJoinStep("idle");
     }
   };
 

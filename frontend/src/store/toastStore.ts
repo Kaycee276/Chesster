@@ -22,10 +22,11 @@ export const useToastStore = create<ToastStore>((set) => ({
   addToast: (message, type = 'error', action) => {
     const id = Date.now();
     set((state) => ({ toasts: [...state.toasts, { id, message, type, action }] }));
+    // Auto-dismiss non-loading toasts after 5 seconds (or 3 seconds for invitations)
     if (type !== 'loading' && type !== 'invitation') {
       setTimeout(() => {
         set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
-      }, 3000);
+      }, type === 'invitation' ? 3000 : 5000);
     }
     return id;
   },
