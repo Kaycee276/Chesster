@@ -419,6 +419,137 @@ function pairSwissRound(players, previousMatches, roundNumber) {
 	return { round: roundNumber, pairings, bye };
 }
 
+/**
+ * Calculates Buchholz tiebreak score for each player:
+ * The sum of the final scores of each of the opponents that player faced.
+ *
+ * @param {Array<object>} players - Array of { wallet_address, score, ... }
+ * @param {Array<object>} matches - Array of completed matches
+ * @param {object} options - Optional { median: boolean } for Median-Buchholz (drops highest and lowest)
+ * @returns {Map<string, number>} Map of wallet_address -> buchholz score
+ */
+function calculateBuchholz(players, matches, options = {}) {
+	const scoreMap = new Map();
+	for (const p of players) {
+		const addr = p.wallet_address || p.walletAddress;
+		scoreMap.set(addr, Number(p.score || 0));
+	}
+
+	const opponentsMap = new Map();
+	for (const p of players) {
+		const addr = p.wallet_address || p.walletAddress;
+		opponentsMap.set(addr, []);
+	}
+
+	for (const m of matches) {
+		if (m.status === "bye") continue;
+		const p1 = m.player_one || m.player1_address;
+		const p2 = m.player_two || m.player2_address;
+		if (p1 && p2 && opponentsMap.has(p1) && opponentsMap.has(p2)) {
+			opponentsMap.get(p1).push(p2);
+			opponentsMap.get(p2).push(p1);
+		}
+	}
+
+	const buchholzMap = new Map();
+	for (const [addr, opps] of opponentsMap.entries()) {
+		let oppScores = opps.map((oppAddr) => scoreMap.get(oppAddr) || 0);
+		if (options.median && oppScores.length > 2) {
+			oppScores.sort((a, b) => a - b);
+			oppScores = oppScores.slice(1, -1);
+		}
+		const sum = oppScores.reduce((acc, s) => acc + s, 0);
+		buchholzMap.set(addr, sum);
+	}
+
+	return buchholzMap;
+}
+
+/**
+ * Calculates Sonneborn-Berger tiebreak score for each player:
+ * Sum of the scores of opponents defeated + half the scores of opponents drawn against.
+ *
+ * @param {Array<object>} players - Array of { wallet_address, score, ... }
+ * @param {Array<object>} matches - Array of completed matches
+ * @returns {Map<string, number>} Map of wallet_address -> sonneborn-berger score
+ */
+function calculateSonnebornBerger(players, matches) {
+	const scoreMap = new Map();
+	for (const p of players) {
+		const addr = p.wallet_address || p.walletAddress;
+		scoreMap.set(addr, Number(p.score || 0));
+	}
+
+	const sbMap = new Map();
+	for (const p of players) {
+		const addr = p.wallet_address || p.walletAddress;
+		sbMap.set(addr, 0);
+	}
+
+	for (const m of matches) {
+		if (m.status === "bye") continue;
+		const p1 = m.player_one || m.player1_address;
+		const p2 = m.player_two || m.player2_address;
+		if (!p1 || !p2 || !sbMap.has(p1) || !sbMap.has(p2)) continue;
+
+		const winner = m.winner;
+		const isDraw = m.is_draw || m.result === "draw" || (!winner && m.status === "completed");
+
+		if (winner === p1) {
+			sbMap.set(p1, sbMap.get(p1) + (scoreMap.get(p2) || 0));
+		} else if (winner === p2) {
+			sbMap.set(p2, sbMap.get(p2) + (scoreMap.get(p1) || 0));
+		} else if (isDraw) {
+			sbMap.set(p1, sbMap.get(p1) + 0.5 * (scoreMap.get(p2) || 0));
+			sbMap.set(p2, sbMap.get(p2) + 0.5 * (scoreMap.get(p1) || 0));
+		}
+	}
+
+	return sbMap;
+}
+
+/**
+ * Calculates all Swiss-system tiebreak scores and returns ranked player standings.
+ *
+ * @param {Array<object>} players - Array of players
+ * @param {Array<object>} matches - Array of all tournament matches
+ * @returns {Array<object>} Ranked players with score, buchholz, and sonnebornBerger
+ */
+function calculateTiebreaks(players, matches) {
+	const buchholzMap = calculateBuchholz(players, matches);
+	const sbMap = calculateSonnebornBerger(players, matches);
+
+	const enriched = players.map((p) => {
+		const addr = p.wallet_address || p.walletAddress;
+		const score = Number(p.score || 0);
+		const buchholz = buchholzMap.get(addr) || 0;
+		const sonnebornBerger = sbMap.get(addr) || 0;
+		return {
+			...p,
+			wallet_address: addr,
+			score,
+			buchholz,
+			sonnebornBerger,
+		};
+	});
+
+	// Sort rank: Score desc, Buchholz desc, Sonneborn-Berger desc, Elo desc
+	enriched.sort((a, b) => {
+		if (b.score !== a.score) return b.score - a.score;
+		if (b.buchholz !== a.buchholz) return b.buchholz - a.buchholz;
+		if (b.sonnebornBerger !== a.sonnebornBerger) return b.sonnebornBerger - a.sonnebornBerger;
+		const eloA = Number(a.elo || a.rating || 1200);
+		const eloB = Number(b.elo || b.rating || 1200);
+		if (eloB !== eloA) return eloB - eloA;
+		return a.wallet_address.localeCompare(b.wallet_address);
+	});
+
+	return enriched.map((p, index) => ({
+		...p,
+		rank: index + 1,
+	}));
+}
+
 function broadcastTournamentEvent(io, tournamentId, eventName, payload) {
 	if (!io) return;
 	io.to(`tournament:${tournamentId}`).emit(eventName, {
@@ -450,6 +581,9 @@ function emitTournamentCompleted(io, tournamentId, payload) {
 
 const tournamentService = new TournamentService();
 tournamentService.__pairSwissRoundForTest = pairSwissRound;
+tournamentService.calculateBuchholz = calculateBuchholz;
+tournamentService.calculateSonnebornBerger = calculateSonnebornBerger;
+tournamentService.calculateTiebreaks = calculateTiebreaks;
 tournamentService.broadcastTournamentEvent = broadcastTournamentEvent;
 tournamentService.emitPlayerJoined = emitPlayerJoined;
 tournamentService.emitBracketGenerated = emitBracketGenerated;
@@ -458,6 +592,9 @@ tournamentService.emitMatchCompleted = emitMatchCompleted;
 tournamentService.emitTournamentCompleted = emitTournamentCompleted;
 
 module.exports = tournamentService;
+module.exports.calculateBuchholz = calculateBuchholz;
+module.exports.calculateSonnebornBerger = calculateSonnebornBerger;
+module.exports.calculateTiebreaks = calculateTiebreaks;
 module.exports.broadcastTournamentEvent = broadcastTournamentEvent;
 module.exports.emitPlayerJoined = emitPlayerJoined;
 module.exports.emitBracketGenerated = emitBracketGenerated;
