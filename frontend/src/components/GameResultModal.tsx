@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, Check, ExternalLink, RefreshCw, Share2, Trophy, Handshake, Frown, X } from "lucide-react";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 import type { GameOutcome } from "../utils/gameResult";
 import { buildResultTitle, buildShareText, buildTwitterShareUrl, getEndReasonLabel } from "../utils/gameResult";
 
@@ -36,6 +37,8 @@ export default function GameResultModal({
 	const { t } = useTranslation();
 	const [copied, setCopied] = useState(false);
 	const [rematchSent, setRematchSent] = useState(false);
+	const dialogRef = useRef<HTMLDivElement>(null);
+	useFocusTrap(dialogRef, true);
 
 	const handleCopyPgn = async () => {
 		try {
@@ -87,11 +90,16 @@ export default function GameResultModal({
 			onClick={onClose}
 		>
 			<div
+				ref={dialogRef}
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="result-title"
 				className="relative w-full max-w-sm bg-(--bg-secondary) border border-(--border) rounded-2xl p-6 flex flex-col gap-5 shadow-2xl text-center"
 				onClick={(e) => e.stopPropagation()}
 			>
 				<button
 					onClick={onClose}
+					aria-label="Close game result"
 					className="absolute top-4 right-4 text-(--text-tertiary) hover:text-(--text) transition-colors"
 				>
 					<X size={16} />
@@ -99,7 +107,7 @@ export default function GameResultModal({
 
 				<div className="flex flex-col items-center gap-2">
 					<OutcomeIcon outcome={outcome} />
-					<h2 className="text-3xl font-extrabold">{getTitle()}</h2>
+					<h2 id="result-title" className="text-3xl font-extrabold">{getTitle()}</h2>
 					<p className="text-sm text-(--text-secondary)">{getReason()}</p>
 				</div>
 

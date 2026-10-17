@@ -8,6 +8,11 @@ export interface ChatMessage {
 	createdAt: string;
 }
 
+export interface SpectatorCountEvent {
+	count: number;
+	list?: Array<{ address: string; username?: string | null }>;
+}
+
 export interface SpectatorReaction {
 	id: string;
 	emoji: string;
@@ -159,6 +164,15 @@ class SocketService {
 	offOpponentReconnected() {
 		this.socket?.off("player_reconnected");
 		this.socket?.off("player-reconnected");
+	}
+
+	onSpectatorCountUpdate(callback: (data: SpectatorCountEvent) => void) {
+		this.socket?.off("spectator_count_update");
+		this.socket?.on("spectator_count_update", callback);
+	}
+
+	offSpectatorCountUpdate() {
+		this.socket?.off("spectator_count_update");
 	}
 }
 

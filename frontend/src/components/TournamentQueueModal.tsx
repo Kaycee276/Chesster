@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { MatchReadyEvent } from "../api/socket";
 import { soundService } from "../services/soundService";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 export const TournamentQueueModal: React.FC<{
 	matchData: MatchReadyEvent;
@@ -9,6 +10,8 @@ export const TournamentQueueModal: React.FC<{
 }> = ({ matchData, onEnterMatch }) => {
 	const { t } = useTranslation();
 	const [secondsLeft, setSecondsLeft] = useState(60);
+	const dialogRef = useRef<HTMLDivElement>(null);
+	useFocusTrap(dialogRef, true);
 
 	useEffect(() => {
 		soundService.playAlert();
@@ -28,9 +31,15 @@ export const TournamentQueueModal: React.FC<{
 	}, [secondsLeft, matchData.gameCode, onEnterMatch]);
 
 	return (
-		<div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
-			<div className="bg-slate-900 border border-amber-500 rounded-xl p-6 text-center max-w-md w-full shadow-[0_0_15px_rgba(245,158,11,0.5)]">
-				<h2 className="text-2xl font-bold text-amber-400">
+		<div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center">
+			<div
+				ref={dialogRef}
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="tournament-title"
+				className="bg-slate-900 border border-amber-500 rounded-xl p-6 text-center max-w-md w-full shadow-[0_0_15px_rgba(245,158,11,0.5)]"
+			>
+				<h2 id="tournament-title" className="text-2xl font-bold text-amber-400">
 					{t("tournament.matchReadyTitle", "⚔️ Match Ready!")}
 				</h2>
 				<p className="mt-2 text-slate-300">

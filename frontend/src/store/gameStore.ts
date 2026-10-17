@@ -93,6 +93,10 @@ interface GameStore {
   // Settings modal visibility
   isSettingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
+  // Spectator count and list
+  spectatorCount: number;
+  spectatorList: Array<{ address: string; username?: string | null }>;
+  setSpectatorData: (count: number, list: Array<{ address: string; username?: string | null }>) => void;
 
   createGame: (
     walletAddress: string,
@@ -162,6 +166,8 @@ export const useGameStore = create<GameStore>()(
       isStreamerMode: false,
       isHapticsEnabled: true,
       isSettingsOpen: false,
+      spectatorCount: 0,
+      spectatorList: [],
 
       toggleBlindfoldMode: () =>
         set((s) => ({ isBlindfoldMode: !s.isBlindfoldMode })),
@@ -171,6 +177,9 @@ export const useGameStore = create<GameStore>()(
         set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
       setSettingsOpen: (open: boolean) =>
         set({ isSettingsOpen: open }),
+
+      setSpectatorData: (count: number, list: Array<{ address: string; username?: string | null }>) =>
+        set({ spectatorCount: Math.max(0, count), spectatorList: list || [] }),
 
       createGame: async (
         walletAddress: string,
@@ -215,6 +224,13 @@ export const useGameStore = create<GameStore>()(
           });
           socketService.onChatMessage((msg) => {
             get().addChatMessage(msg);
+          });
+          socketService.onSpectatorCountUpdate((event) => {
+            // Validate payload: count must be non-negative integer
+            if (typeof event?.count === "number" && event.count >= 0) {
+              const list = Array.isArray(event.list) ? event.list : [];
+              get().setSpectatorData(event.count, list);
+            }
           });
 
           await get().loadChatHistory();
@@ -274,6 +290,13 @@ export const useGameStore = create<GameStore>()(
           });
           socketService.onChatMessage((msg) => {
             get().addChatMessage(msg);
+          });
+          socketService.onSpectatorCountUpdate((event) => {
+            // Validate payload: count must be non-negative integer
+            if (typeof event?.count === "number" && event.count >= 0) {
+              const list = Array.isArray(event.list) ? event.list : [];
+              get().setSpectatorData(event.count, list);
+            }
           });
 
           await get().loadChatHistory();
@@ -501,6 +524,7 @@ export const useGameStore = create<GameStore>()(
           socketService.leaveGame(gameCode);
           socketService.offGameUpdate();
           socketService.offChatMessage();
+          socketService.offSpectatorCountUpdate();
           socketService.disconnect();
         }
         set({
@@ -524,6 +548,8 @@ export const useGameStore = create<GameStore>()(
           chatMessages: [],
           unreadCount: 0,
           chatOpen: false,
+          spectatorCount: 0,
+          spectatorList: [],
         });
       },
 

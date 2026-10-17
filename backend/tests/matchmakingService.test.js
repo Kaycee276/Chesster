@@ -1,9 +1,43 @@
 const matchmakingService = require("../services/matchmakingService");
-const { MatchmakingService, getPlayerTolerance, MATCHMAKING_CONFIG } = matchmakingService;
+const { MatchmakingService, getPlayerTolerance, getEligibleRatingDelta, MATCHMAKING_CONFIG } = matchmakingService;
 
 describe("MatchmakingService", () => {
 	beforeEach(() => {
 		matchmakingService.clearQueue();
+	});
+
+	describe("getEligibleRatingDelta", () => {
+		test.each([
+			[0, 50],
+			[9.999, 50],
+			[10, 100],
+			[10.001, 100],
+			[24.999, 100],
+			[25, 200],
+			[25.001, 200],
+			[44.999, 200],
+			[45, 400],
+			[45.001, 400],
+			[100, 400],
+			[3600, 400],
+		])("at %ss of wait time returns ±%i", (waitSec, expected) => {
+			expect(getEligibleRatingDelta(waitSec)).toBe(expected);
+		});
+
+		test("respects exact boundaries: 10s is in the 100 bracket", () => {
+			expect(getEligibleRatingDelta(10)).toBe(100);
+			expect(getEligibleRatingDelta(9.999)).toBe(50);
+		});
+
+		test("respects exact boundaries: 25s is in the 200 bracket", () => {
+			expect(getEligibleRatingDelta(25)).toBe(200);
+			expect(getEligibleRatingDelta(24.999)).toBe(100);
+		});
+
+		test("respects exact boundaries: 45s is in the 400 bracket", () => {
+			expect(getEligibleRatingDelta(45)).toBe(400);
+			expect(getEligibleRatingDelta(44.999)).toBe(200);
+		});
 	});
 
 	describe("addToQueue", () => {
@@ -209,30 +243,25 @@ describe("MatchmakingService", () => {
 		describe("getPlayerTolerance", () => {
 			test.each([
 				[0, 50],
-				[14.9, 50],
-				[15, 100],
-				[29, 100],
-				[30, 150],
-				[45, 200],
-				[60, 250],
-				[75, 300],
-				[90, 350],
-				[120, 350],
-				[3600, 350],
+				[9.999, 50],
+				[10, 100],
+				[24.999, 100],
+				[25, 200],
+				[44.999, 200],
+				[45, 400],
+				[100, 400],
+				[3600, 400],
 			])("after %ss of waiting the tolerance is ±%i", (waitSec, expected) => {
 				expect(getPlayerTolerance({ queuedAt: T0 }, sec(waitSec))).toBe(expected);
 			});
 
 			test("never drops below the base tolerance for clock skew", () => {
-				expect(getPlayerTolerance({ queuedAt: sec(10) }, T0)).toBe(MATCHMAKING_CONFIG.BASE_TOLERANCE);
+				expect(getPlayerTolerance({ queuedAt: sec(10) }, T0)).toBe(50);
 			});
 
 			test("exposes the expansion configuration", () => {
 				expect(MATCHMAKING_CONFIG).toEqual({
-					BASE_TOLERANCE: 50,
-					TOLERANCE_STEP: 50,
-					EXPANSION_INTERVAL_SEC: 15,
-					MAX_RATING_GAP: 350,
+					MAX_RATING_GAP: 400,
 				});
 			});
 		});
@@ -271,47 +300,64 @@ describe("MatchmakingService", () => {
 				expect(service.processQueue(sec(0))).toHaveLength(1);
 			});
 
-			test("does not pair a 100-point gap until both players waited 15s", () => {
+			test("gap of 80 does not pair before 10s, pairs at 10s", () => {
 				queueAt("a", 1500, 0);
-				queueAt("b", 1600, 0);
+				queueAt("b", 1580, 0);
 
-				expect(service.processQueue(sec(14))).toHaveLength(0);
-				expect(service.processQueue(sec(15))).toHaveLength(1);
+				expect(service.processQueue(sec(9.999))).toHaveLength(0);
+				expect(service.processQueue(sec(10))).toHaveLength(1);
 			});
 
-			test("widens to ±250 after 60 seconds", () => {
+			test("gap of 150 does not pair before 25s, pairs at 25s", () => {
 				queueAt("a", 1500, 0);
-				queueAt("b", 1750, 0);
+				queueAt("b", 1650, 0);
 
-				expect(service.processQueue(sec(59))).toHaveLength(0);
-				const [match] = service.processQueue(sec(60));
-				expect([match.player1.userId, match.player2.userId].sort()).toEqual(["a", "b"]);
+				expect(service.processQueue(sec(24.999))).toHaveLength(0);
+				expect(service.processQueue(sec(25))).toHaveLength(1);
+			});
+
+			test("gap of 350 does not pair before 45s, pairs at 45s", () => {
+				queueAt("a", 1500, 0);
+				queueAt("b", 1850, 0);
+
+				expect(service.processQueue(sec(44.999))).toHaveLength(0);
+				expect(service.processQueue(sec(45))).toHaveLength(1);
+			});
+
+			test("gap of 450 never pairs even after long waits", () => {
+				queueAt("a", 1500, 0);
+				queueAt("b", 1950, 0);
+
+				expect(service.processQueue(sec(100))).toHaveLength(0);
+				expect(service.processQueue(sec(3600))).toHaveLength(0);
+				expect(service.getQueueSize()).toBe(2);
 			});
 
 			test("requires the gap to fit inside BOTH players' tolerances", () => {
-				queueAt("veteran", 1500, 0); // waited 60s -> ±250
-				queueAt("newcomer", 1700, 60); // just joined -> ±50
+				queueAt("veteran", 1500, 0); // waited 45s -> ±400
+				queueAt("newcomer", 1700, 45); // just joined -> ±50
 
-				expect(service.processQueue(sec(60))).toHaveLength(0);
-				// Once the newcomer has waited 45s (±200) the 200-point gap is acceptable.
-				expect(service.processQueue(sec(104))).toHaveLength(0);
-				expect(service.processQueue(sec(105))).toHaveLength(1);
+				expect(service.processQueue(sec(45))).toHaveLength(0);
+				// Once the newcomer has waited 10s (±100), a 200-point gap is still too large
+				expect(service.processQueue(sec(55))).toHaveLength(0);
+				// Once the newcomer has waited 25s (±200), the 200-point gap fits in newcomer's window
+				expect(service.processQueue(sec(70))).toHaveLength(1);
 			});
 
-			test("caps the rating gap at 350 no matter how long players wait", () => {
+			test("caps the rating gap at 400 no matter how long players wait", () => {
 				queueAt("a", 1200, 0);
-				queueAt("b", 1551, 0);
+				queueAt("b", 1601, 0);
 
 				expect(service.processQueue(sec(3600))).toHaveLength(0);
 				expect(service.getQueueSize()).toBe(2);
 			});
 
-			test("pairs a gap of exactly 350 once tolerance is maxed", () => {
+			test("pairs a gap of exactly 400 once tolerance is maxed", () => {
 				queueAt("a", 1200, 0);
-				queueAt("b", 1550, 0);
+				queueAt("b", 1600, 0);
 
-				expect(service.processQueue(sec(89))).toHaveLength(0);
-				expect(service.processQueue(sec(90))).toHaveLength(1);
+				expect(service.processQueue(sec(44.999))).toHaveLength(0);
+				expect(service.processQueue(sec(45))).toHaveLength(1);
 			});
 
 			test("honours a lower configured maxRatingGap", () => {

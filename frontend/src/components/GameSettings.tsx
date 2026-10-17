@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Settings } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 export default function GameSettings({ hideFloating = false }: { hideFloating?: boolean } = {}) {
   const isBlindfoldMode = useGameStore((s) => s.isBlindfoldMode);
@@ -12,6 +13,9 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
   const isSettingsOpen = useGameStore((s) => s.isSettingsOpen);
   const setSettingsOpen = useGameStore((s) => s.setSettingsOpen);
   const [localOpen, setLocalOpen] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useFocusTrap(dialogRef, open);
 
   const open = isSettingsOpen || localOpen;
   const setOpen = (val: boolean) => {
@@ -60,19 +64,23 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
           onClick={() => setOpen(false)}
         >
           <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="settings-title"
             className="w-full max-w-sm bg-(--bg-secondary) border border-(--border) rounded-2xl p-5 sm:p-6 flex flex-col gap-5 shadow-2xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold flex items-center gap-2">
+              <h3 id="settings-title" className="text-base font-bold flex items-center gap-2">
                 <Settings size={16} className="text-(--accent-primary)" />
                 Game Settings
               </h3>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
+                aria-label="Close settings"
                 className="text-(--text-tertiary) hover:text-(--text) transition-colors text-lg leading-none"
-                aria-label="Close"
               >
                 ×
               </button>

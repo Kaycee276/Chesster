@@ -220,6 +220,29 @@ function broadcastGameUpdate(gameCode, game) {
   }
 }
 
+function broadcastSpectatorCount(gameCode) {
+  const spectatorRoom = io.sockets.adapter.rooms.get(`spectator_chat:${gameCode}`);
+  const count = spectatorRoom ? spectatorRoom.size : 0;
+  
+  // Build spectator list with truncated addresses and usernames (if available)
+  const spectatorList = [];
+  if (spectatorRoom) {
+    for (const socketId of spectatorRoom) {
+      const socket = io.sockets.sockets.get(socketId);
+      if (socket?.data?.address) {
+        spectatorList.push({
+          address: socket.data.address,
+          username: socket.data.username || null,
+        });
+      }
+    }
+  }
+
+  // Broadcast to both player room and spectator room so all viewers see the count
+  io.to(gameCode).emit("spectator_count_update", { count, list: spectatorList });
+  io.to(`spectator_chat:${gameCode}`).emit("spectator_count_update", { count, list: spectatorList });
+}
+
 io.on("connection", (socket) => {
   metricsRoutes.setConnectedClients(io.engine.clientsCount);
   // Accepts either a bare gameCode string (spectator join) or
@@ -294,6 +317,10 @@ io.on("connection", (socket) => {
       white: presence.white.status,
       black: presence.black.status,
     });
+    
+    // Broadcast updated spectator count to all viewers
+    broadcastSpectatorCount(gameCode);
+    
     if (typeof ack === "function") ack({ success: true });
   }));
 
@@ -344,6 +371,8 @@ io.on("connection", (socket) => {
     const code = typeof gameCode === "string" ? gameCode : gameCode?.gameCode || gameCode?.gameId;
     if (code) {
       socket.leave(code);
+      // Broadcast updated spectator count after leave
+      broadcastSpectatorCount(code);
     }
   }));
 
@@ -369,7 +398,13 @@ io.on("connection", (socket) => {
     metricsRoutes.setConnectedClients(io.engine.clientsCount);
     metricsRoutes.markGameDisconnected(socket.data?.gameCode);
     const { gameCode, playerColor } = socket.data || {};
-    if (!gameCode || !playerColor) return;
+    if (!gameCode || !playerColor) {
+      // Spectator disconnect: just broadcast updated count
+      if (gameCode) {
+        broadcastSpectatorCount(gameCode);
+      }
+      return;
+    }
 
     const presence = getPresenceEntry(gameCode);
     // Ignore stale disconnects from a socket that already got replaced by a
