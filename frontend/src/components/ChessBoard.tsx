@@ -54,6 +54,7 @@ function tokenLabel(addr: string | null | undefined): string {
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import type { AnnotationArrow, AnnotationColor, SquareHighlight } from "../types/chess";
+import { BoardAnnotations } from "./BoardAnnotations";
 import {
   getPossibleMoves,
   getCapturedPieces,
@@ -382,7 +383,6 @@ function ChessBoardInner() {
     loadMoveHistory,
     isBlindfoldMode,
     isStreamerMode,
-    pieceSet,
   } = useGameStore();
   const { addToast, removeToast } = useToastStore();
   const navigate = useNavigate();
@@ -431,8 +431,8 @@ function ChessBoardInner() {
 
   const boardTheme = useThemeStore((s) => s.boardTheme);
   const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
-  const pieceSet = useThemeStore((s) => s.pieceSet);
-  const setPieceSet = useThemeStore((s) => s.setPieceSet);
+  const pieceSet = useGameStore((s) => s.pieceSet) || "classic";
+  const setPieceSet = useGameStore((s) => s.setPieceSet);
   const colorMode = useThemeStore((s) => s.colorMode);
   const setColorMode = useThemeStore((s) => s.setColorMode);
   const [soundPack, setSoundPack] = useState<SoundPack>(() => {
@@ -869,6 +869,7 @@ function ChessBoardInner() {
       return;
     }
 
+    clearAnnotations();
     setIsMoving(true);
     const toastId = addToast("Moving...", "loading");
     try {
@@ -902,6 +903,7 @@ function ChessBoardInner() {
     if (!pendingConfirmation) return;
     const { from, to, promotion } = pendingConfirmation;
     setPendingConfirmation(null);
+    clearAnnotations();
     
     setIsMoving(true);
     const toastId = addToast("Moving...", "loading");
@@ -2182,74 +2184,13 @@ function ChessBoardInner() {
                     );
                   })
                 )}
-                {/* Right-click annotation overlay: arrows & square highlights (#252) */}
-                {(arrows.length > 0 || highlights.length > 0) && (
-                  <svg
-                    className="absolute inset-0 pointer-events-none"
-                    width={boardPx}
-                    height={boardPx}
-                    style={{ zIndex: 5 }}
-                  >
-                    <defs>
-                      {(Object.keys(ANNOTATION_COLORS) as AnnotationColor[]).map((color) => (
-                        <marker
-                          key={color}
-                          id={`board-arrowhead-${color}`}
-                          markerWidth="4"
-                          markerHeight="4"
-                          refX="2"
-                          refY="2"
-                          orient="auto-start-reverse"
-                          markerUnits="strokeWidth"
-                        >
-                          <path d="M0,0 L4,2 L0,4 Z" fill={ANNOTATION_COLORS[color]} />
-                        </marker>
-                      ))}
-                    </defs>
-                    {highlights.map((h, i) => {
-                      const c = squareCenterPx(h.row, h.col);
-                      const squareSize = boardPx / 8;
-                      return (
-                        <circle
-                          key={`h-${i}`}
-                          cx={c.x}
-                          cy={c.y}
-                          r={squareSize * 0.44}
-                          fill="none"
-                          stroke={ANNOTATION_COLORS[h.color]}
-                          strokeWidth={squareSize * 0.08}
-                          opacity={0.85}
-                        />
-                      );
-                    })}
-                    {arrows.map((a, i) => {
-                      const from = squareCenterPx(a.from[0], a.from[1]);
-                      const to = squareCenterPx(a.to[0], a.to[1]);
-                      const squareSize = boardPx / 8;
-                      // Pull the line end back so the arrowhead doesn't sit under the piece.
-                      const dx = to.x - from.x;
-                      const dy = to.y - from.y;
-                      const len = Math.hypot(dx, dy) || 1;
-                      const shorten = squareSize * 0.4;
-                      const endX = to.x - (dx / len) * shorten;
-                      const endY = to.y - (dy / len) * shorten;
-                      return (
-                        <line
-                          key={`a-${i}`}
-                          x1={from.x}
-                          y1={from.y}
-                          x2={endX}
-                          y2={endY}
-                          stroke={ANNOTATION_COLORS[a.color]}
-                          strokeWidth={squareSize * 0.14}
-                          strokeLinecap="round"
-                          opacity={0.85}
-                          markerEnd={`url(#board-arrowhead-${a.color})`}
-                        />
-                      );
-                    })}
-                  </svg>
-                )}
+                {/* Right-click annotation overlay: arrows & square highlights (#252, #536) */}
+                <BoardAnnotations
+                  boardPx={boardPx}
+                  playerColor={playerColor}
+                  highlights={highlights}
+                  arrows={arrows}
+                />
               </div>
             )}
             {/* Dragged ghost piece follows the pointer, elevated above the board (#253, #439) */}
