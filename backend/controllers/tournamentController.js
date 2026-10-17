@@ -77,6 +77,21 @@ class TournamentController {
 		}
 	}
 
+	/** GET /api/tournaments/:id/export/csv */
+	async exportTournamentCsv(req, res, next) {
+		try {
+			const { id } = req.validated?.params || req.params;
+			const tournament = await tournamentModel.getTournamentById(id);
+			if (!tournament) return res.status(404).json({ success: false, error: "Tournament not found" });
+			const csv = await tournamentService.generateTournamentCsv(id);
+			res.setHeader("Content-Type", "text/csv");
+			res.setHeader("Content-Disposition", `attachment; filename="tournament-${id}-report.csv"`);
+			return res.send(csv);
+		} catch (error) {
+			next(error);
+		}
+	}
+
 	/** GET /api/tournaments/:id/bracket */
 	async getTournamentBracket(req, res, next) {
 		try {
