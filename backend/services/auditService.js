@@ -399,6 +399,30 @@ function verifyAuditPackage(pkg) {
 	return result;
 }
 
+const ANTI_CHEAT_ALERT_EVENT = "anti_cheat.time_entropy_flag";
+
+/**
+ * Append an anti-cheat alert (Issue #461) to the match audit trail so the
+ * move time entropy violation is part of the game's tamper-evident history
+ * and shows up in exported audit packages.
+ */
+async function recordAntiCheatAlert({
+	gameId,
+	color = null,
+	playerAddress = null,
+	flags = [],
+	timeVarianceEntropyScore = null,
+	engineCorrelation = null,
+}, db = supabase) {
+	const { error } = await db.from("match_audit_logs").insert({
+		game_id: gameId,
+		event_type: ANTI_CHEAT_ALERT_EVENT,
+		player_address: playerAddress,
+		event_data: { color, flags, timeVarianceEntropyScore, engineCorrelation },
+	});
+	if (error) throw error;
+}
+
 /**
  * Get detailed hash chain verification report for a game's audit logs.
  * Useful for debugging or detailed auditing of tampering claims.
@@ -510,6 +534,8 @@ module.exports = {
 	exportMatchAudit,
 	verifyAuditPackage,
 	getChainVerificationReport,
+	recordAntiCheatAlert,
+	ANTI_CHEAT_ALERT_EVENT,
 	toCsv,
 	hashIp,
 	canonicalJson,

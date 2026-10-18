@@ -7,7 +7,7 @@ use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Events, Ledger},
-    vec, Address, Env, String,
+    vec, Address, Env, String, TryFromVal,
 };
 
 use proptest::{prelude::*, test_runner::Config as ProptestConfig};
@@ -721,6 +721,309 @@ fn test_tournament_create_and_join() {
     let tournament = client.get_tournament(&tournament_id);
     assert_eq!(tournament.total_pool, 200);
     assert_eq!(tournament.players.len(), 2);
+}
+
+struct TournamentRound<'a> {
+    client: ChessterEscrowClient<'a>,
+    contract_id: Address,
+    coordinator: Address,
+    token: TokenClient<'a>,
+    token_admin_client: TokenAdminClient<'a>,
+    tournament_id: String,
+    players: alloc::vec::Vec<Address>,
+    outsider: Address,
+}
+
+/// Four registered players (buy-in 100) plus one non-participant, each funded with 1000.
+fn setup_tournament_round(env: &Env) -> TournamentRound<'_> {
+    env.mock_all_auths();
+    let coordinator = Address::generate(env);
+    let token_admin = Address::generate(env);
+    let (token, token_admin_client) = create_token_contract(env, &token_admin);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_supported_token(&token.address);
+
+    let tournament_id = String::from_str(env, "ROUND_TOURN");
+    client.create_tournament(&tournament_id, &100, &8, &2, &0, &token.address);
+
+    let players: alloc::vec::Vec<Address> = (0..4).map(|_| Address::generate(env)).collect();
+    let outsider = Address::generate(env);
+    for p in players.iter().chain(core::iter::once(&outsider)) {
+        token_admin_client.mint(p, &1000);
+        approve(env, &token, p, &contract_id, 1000);
+    }
+    for p in players.iter() {
+        client.join_tournament(&tournament_id, p);
+    }
+
+    TournamentRound {
+        client,
+        contract_id,
+        coordinator,
+        token,
+        token_admin_client,
+        tournament_id,
+        players,
+        outsider,
+    }
+}
+
+fn start_match(r: &TournamentRound, code: &str, p1: &Address, p2: Option<&Address>) -> String {
+    let game_code = String::from_str(&r.client.env, code);
+    r.client
+        .create_match(&game_code, p1, &r.token.address, &200);
+    if let Some(p2) = p2 {
+        r.client.join_match(&game_code, p2);
+    }
+    game_code
+}
+
+#[test]
+fn test_batch_cancel_tournament_matches_refunds_round_atomically() {
+    let env = Env::default();
+    let r = setup_tournament_round(&env);
+    let [a, b, c, d] = [&r.players[0], &r.players[1], &r.players[2], &r.players[3]];
+
+    let active = start_match(&r, "T_ACTIVE", a, Some(b));
+    let pending = start_match(&r, "T_PENDING", c, None);
+    let other = start_match(&r, "T_OTHER", d, None);
+    assert_eq!(r.token.balance(a), 700);
+    assert_eq!(r.token.balance(c), 700);
+    let pool_before = r.client.get_tournament(&r.tournament_id).total_pool;
+
+    let codes = vec![&env, active.clone(), pending.clone()];
+    let refunded = r
+        .client
+        .batch_cancel_tournament_matches(&r.tournament_id, &codes);
+    assert_eq!(refunded, 2);
+
+    // Coordinator authorization was required.
+    assert_eq!(env.auths()[0].0, r.coordinator);
+    let events = env.events().all();
+
+    assert_eq!(r.client.get_match(&active).status, MatchStatus::Refunded);
+    assert_eq!(r.client.get_match(&pending).status, MatchStatus::Refunded);
+    assert_eq!(r.client.get_match(&other).status, MatchStatus::Pending);
+    for p in [a, b, c] {
+        assert_eq!(r.token.balance(p), 900);
+    }
+    // Only buy-ins (4 x 100) and the untouched match remain escrowed.
+    assert_eq!(r.token.balance(&r.contract_id), 400 + 200);
+    assert_eq!(
+        r.client.get_tournament(&r.tournament_id).total_pool,
+        pool_before
+    );
+
+    let event = events
+        .iter()
+        .find(|(id, topics, _)| {
+            *id == r.contract_id
+                && topics.len() == 3
+                && Symbol::try_from_val(&env, &topics.get(1).unwrap())
+                    == Ok(symbol_short!("t_cancel"))
+        })
+        .expect("t_cancel event");
+    let payload = TournamentMatchesCancelledEvent::try_from_val(&env, &event.2).unwrap();
+    assert_eq!(
+        payload,
+        TournamentMatchesCancelledEvent {
+            tournament_id: r.tournament_id.clone(),
+            refunded_count: 2,
+            game_codes: codes,
+            token: r.token.address.clone(),
+        }
+    );
+}
+
+#[test]
+fn test_batch_cancel_tournament_matches_rejects_non_tournament_match_without_partial_refund() {
+    let env = Env::default();
+    let r = setup_tournament_round(&env);
+    let (a, b) = (&r.players[0], &r.players[1]);
+
+    let valid = start_match(&r, "T_VALID", a, Some(b));
+    let casual = start_match(&r, "T_CASUAL", &r.players[2], Some(&r.outsider));
+
+    let res = r.client.try_batch_cancel_tournament_matches(
+        &r.tournament_id,
+        &vec![&env, valid.clone(), casual.clone()],
+    );
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            EscrowErrorExt::MatchNotInTournament as u32
+        ))
+    );
+    assert_eq!(r.client.get_match(&valid).status, MatchStatus::Active);
+    assert_eq!(r.client.get_match(&casual).status, MatchStatus::Active);
+    assert_eq!(r.token.balance(a), 700);
+}
+
+#[test]
+fn test_batch_cancel_tournament_matches_rejects_match_in_other_token() {
+    let env = Env::default();
+    let r = setup_tournament_round(&env);
+    let (a, b) = (&r.players[0], &r.players[1]);
+
+    let (other_token, other_admin) = create_token_contract(&env, &Address::generate(&env));
+    for p in [a, b] {
+        other_admin.mint(p, &1000);
+        approve(&env, &other_token, p, &r.contract_id, 1000);
+    }
+    let code = String::from_str(&env, "T_OTHERTOK");
+    r.client.create_match(&code, a, &other_token.address, &200);
+    r.client.join_match(&code, b);
+
+    let res = r
+        .client
+        .try_batch_cancel_tournament_matches(&r.tournament_id, &vec![&env, code.clone()]);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            EscrowErrorExt::MatchNotInTournament as u32
+        ))
+    );
+    assert_eq!(r.client.get_match(&code).status, MatchStatus::Active);
+}
+
+#[test]
+fn test_batch_cancel_tournament_matches_rejects_settled_and_duplicate_matches() {
+    let env = Env::default();
+    let r = setup_tournament_round(&env);
+    let (a, b) = (&r.players[0], &r.players[1]);
+
+    let settled = start_match(&r, "T_SETTLED", a, Some(b));
+    r.client.resolve_match(&settled, &Some(a.clone()));
+    let res = r
+        .client
+        .try_batch_cancel_tournament_matches(&r.tournament_id, &vec![&env, settled]);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::AlreadyResolvedOrRefunded as u32
+        ))
+    );
+
+    let live = start_match(&r, "T_LIVE", &r.players[2], Some(&r.players[3]));
+    let res = r.client.try_batch_cancel_tournament_matches(
+        &r.tournament_id,
+        &vec![&env, live.clone(), live.clone()],
+    );
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::AlreadyResolvedOrRefunded as u32
+        ))
+    );
+    // The duplicate reverted the whole batch, including the first refund.
+    assert_eq!(r.client.get_match(&live).status, MatchStatus::Active);
+    assert_eq!(r.token.balance(&r.players[2]), 700);
+}
+
+#[test]
+fn test_batch_cancel_tournament_matches_respects_dispute_timelock() {
+    let env = Env::default();
+    let r = setup_tournament_round(&env);
+    let (a, b) = (&r.players[0], &r.players[1]);
+
+    let disputed = start_match(&r, "T_DISPUTE", a, Some(b));
+    r.client.raise_dispute(&disputed, a);
+
+    let res = r
+        .client
+        .try_batch_cancel_tournament_matches(&r.tournament_id, &vec![&env, disputed.clone()]);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::DisputeTimeLockActive as u32
+        ))
+    );
+    assert_eq!(r.client.get_match(&disputed).status, MatchStatus::Active);
+}
+
+#[test]
+fn test_batch_cancel_tournament_matches_enforces_batch_bounds_and_tournament() {
+    let env = Env::default();
+    let r = setup_tournament_round(&env);
+
+    let empty = r
+        .client
+        .try_batch_cancel_tournament_matches(&r.tournament_id, &Vec::new(&env));
+    assert_eq!(
+        empty.unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::InvalidBatchSize as u32
+        ))
+    );
+
+    let mut oversized = Vec::new(&env);
+    for _ in 0..=MAX_BATCH_TOURNAMENT_CANCELLATIONS {
+        oversized.push_back(String::from_str(&env, "T_ANY"));
+    }
+    let res = r
+        .client
+        .try_batch_cancel_tournament_matches(&r.tournament_id, &oversized);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::InvalidBatchSize as u32
+        ))
+    );
+
+    let code = start_match(&r, "T_UNKNOWN", &r.players[0], Some(&r.players[1]));
+    let res = r.client.try_batch_cancel_tournament_matches(
+        &String::from_str(&env, "NO_SUCH_TOURN"),
+        &vec![&env, code],
+    );
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::InvalidTournament as u32
+        ))
+    );
+}
+
+#[test]
+fn test_batch_cancel_tournament_matches_accepts_maximum_batch() {
+    let env = Env::default();
+    let r = setup_tournament_round(&env);
+    let mut codes = Vec::new(&env);
+    let mut pairs = alloc::vec::Vec::new();
+    for i in 0..MAX_BATCH_TOURNAMENT_CANCELLATIONS {
+        // Fresh registered pairs keep each player under the 5-active-match cap.
+        let tid = String::from_str(&env, "BIG_TOURN");
+        if i == 0 {
+            r.client
+                .create_tournament(&tid, &1, &64, &2, &0, &r.token.address);
+        }
+        let p1 = Address::generate(&env);
+        let p2 = Address::generate(&env);
+        for p in [&p1, &p2] {
+            r.token_admin_client.mint(p, &1000);
+            approve(&env, &r.token, p, &r.contract_id, 1000);
+            r.client.join_tournament(&tid, p);
+        }
+        let mut code_buf = [0u8; 8];
+        code_buf[..2].copy_from_slice(b"T_");
+        code_buf[2] = b'A' + (i / 10) as u8;
+        code_buf[3] = b'0' + (i % 10) as u8;
+        let code = String::from_bytes(&env, &code_buf[..4]);
+        r.client.create_match(&code, &p1, &r.token.address, &200);
+        r.client.join_match(&code, &p2);
+        codes.push_back(code);
+        pairs.push((p1, p2));
+    }
+
+    let refunded = r
+        .client
+        .batch_cancel_tournament_matches(&String::from_str(&env, "BIG_TOURN"), &codes);
+    assert_eq!(refunded, MAX_BATCH_TOURNAMENT_CANCELLATIONS);
+    for (p1, p2) in pairs.iter() {
+        assert_eq!(r.token.balance(p1), 999);
+        assert_eq!(r.token.balance(p2), 999);
+    }
 }
 
 #[test]

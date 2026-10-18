@@ -101,6 +101,8 @@ export interface AnalysisState {
 	evaluated: number;
 	/** Total unique engine positions to evaluate. */
 	total: number;
+	/** White-perspective scores, including the initial position. */
+	evaluations: (number | null)[];
 	result: AccuracyAnalysis | null;
 }
 
@@ -108,6 +110,7 @@ interface RunState {
 	/** FEN list this run belongs to (identity compare against the current one). */
 	runFens: string[];
 	evaluated: number;
+	evaluations: (number | null)[];
 	result: AccuracyAnalysis | null;
 	/** Set when the engine failed and the run ended without results. */
 	aborted: boolean;
@@ -274,6 +277,21 @@ export function useMoveAccuracyAnalysis(
 			runFens: uniqueFensRef.current,
 			evaluated: uniqueFensRef.current.length,
 			result: accuracyRes,
+			evaluations: evals,
+			result: analyzeAccuracy(evals),
+			aborted: false,
+		});
+	};
+
+	const publishProgress = () => {
+		const evals = slotToUniqueRef.current.map(
+			(idx) => (idx === null ? null : resultsRef.current[idx] ?? null),
+		);
+		setRun({
+			runFens: uniqueFensRef.current,
+			evaluated: resultsRef.current.filter((score) => score !== null).length,
+			evaluations: evals,
+			result: null,
 			aborted: false,
 		});
 	};
@@ -286,6 +304,9 @@ export function useMoveAccuracyAnalysis(
 			prev?.runFens === uniqueFensRef.current && prev.aborted ? prev : {
 				runFens: uniqueFensRef.current,
 				evaluated: resultsRef.current.filter((r) => r !== null).length,
+				evaluations: slotToUniqueRef.current.map(
+					(idx) => (idx === null ? null : resultsRef.current[idx] ?? null),
+				),
 				result: null,
 				aborted: true,
 			},
@@ -334,6 +355,7 @@ export function useMoveAccuracyAnalysis(
 				resultsRef.current[fenIdx] = message.evaluation.scoreCp;
 				if (message.evaluation.final) {
 					if (inflightRef.current === fenIdx) inflightRef.current = null;
+					publishProgress();
 					pump();
 					finishIfComplete();
 				}
@@ -368,6 +390,7 @@ export function useMoveAccuracyAnalysis(
 		progress,
 		evaluated: sameRun ? run.evaluated : 0,
 		total: uniqueFens.length,
+		evaluations: sameRun ? run.evaluations : evalSlots.map(() => null),
 		result: sameRun ? run.result : null,
 	};
 }

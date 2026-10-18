@@ -332,3 +332,33 @@ describe("Game Model", () => {
     });
   });
 });
+
+describe("GameModel.recordCheatAnalysis anti-cheat flags (Issue #461)", () => {
+  const supabase = require("../config/supabase");
+
+  it("persists move time entropy flags tagged with the player", async () => {
+    supabase._mockQuery.update.mockClear();
+    const flag = { type: "low_time_variance_entropy", timeVarianceEntropyScore: 0.12, threshold: 0.35 };
+
+    await gameModel.recordCheatAnalysis("game-1", {
+      white: { color: "white", playerAddress: null, score: 0.2, flagged: false, antiCheatFlags: [] },
+      black: { color: "black", playerAddress: null, score: 0.4, flagged: true, antiCheatFlags: [flag] },
+    });
+
+    expect(supabase._mockQuery.update).toHaveBeenCalledWith(expect.objectContaining({
+      cheat_flagged: true,
+      anti_cheat_flags: [{ ...flag, color: "black", playerAddress: null }],
+    }));
+  });
+
+  it("writes an empty flag list for analyses without entropy telemetry", async () => {
+    supabase._mockQuery.update.mockClear();
+
+    await gameModel.recordCheatAnalysis("game-1", {
+      white: { color: "white", score: 0.1, flagged: false },
+      black: { color: "black", score: 0.1, flagged: false },
+    });
+
+    expect(supabase._mockQuery.update).toHaveBeenCalledWith(expect.objectContaining({ anti_cheat_flags: [] }));
+  });
+});

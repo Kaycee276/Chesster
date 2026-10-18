@@ -91,7 +91,7 @@ class GameModel {
 	_scheduleAntiCheatAnalysis(game) {
 		if (!game?.id) return;
 		const antiCheatService = require("../services/antiCheatService");
-		antiCheatService.analyzeGame(game.id).catch((error) => {
+		antiCheatService.inspectGameSession(game.id).catch((error) => {
 			console.error(`[AntiCheat] analysis failed for ${game.game_code}:`, error.message);
 		});
 	}
@@ -99,10 +99,17 @@ class GameModel {
 	async recordCheatAnalysis(gameId, analysis) {
 		const white = analysis.white;
 		const black = analysis.black;
+		// Move time entropy telemetry flags (Issue #461), tagged by player.
+		const antiCheatFlags = [white, black].flatMap((player) => (player.antiCheatFlags || []).map((flag) => ({
+			...flag,
+			color: player.color,
+			playerAddress: player.playerAddress || null,
+		})));
 		const { error } = await supabase.from("games").update({
 			white_cheat_suspicion: white.score,
 			black_cheat_suspicion: black.score,
 			cheat_flagged: white.flagged || black.flagged,
+			anti_cheat_flags: antiCheatFlags,
 			anti_cheat_analyzed_at: new Date().toISOString(),
 		}).eq("id", gameId);
 		if (error) throw error;

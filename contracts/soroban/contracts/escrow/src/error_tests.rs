@@ -19,6 +19,7 @@ fn escrow_error_codes_are_stable_and_unique() {
     assert_eq!(EscrowErrorExt::ProposalExpired as u32, 50);
     assert_eq!(EscrowErrorExt::ArithmeticOverflow as u32, 51);
     assert_eq!(EscrowErrorExt::WagerBelowTokenMinimum as u32, 52);
+    assert_eq!(EscrowErrorExt::MatchNotInTournament as u32, 53);
     assert_eq!(EscrowErrorExt::SideBetsNotSettled as u32, 54);
     assert_eq!(EscrowErrorExt::SideBetTokenMismatch as u32, 55);
 }

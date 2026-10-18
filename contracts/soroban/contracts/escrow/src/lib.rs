@@ -14,6 +14,8 @@ pub const DISPUTE_TIMELOCK_SECS: u64 = 172_800;
 pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
 /// Maximum number of expired waiting lobbies refundable in one transaction (Issue #503).
 pub const MAX_BATCH_REFUNDS: u32 = 10;
+/// Maximum number of tournament matches cancellable in one transaction (Issue #458).
+pub const MAX_BATCH_TOURNAMENT_CANCELLATIONS: u32 = 20;
 /// Duration (in seconds) after which settled or refunded matches become eligible for garbage collection (30 days).
 pub const STALE_MATCH_THRESHOLD_SECS: u64 = 2_592_000;
 /// Maximum number of game codes allowed in a single stale match garbage collection batch (Issue #380).
@@ -165,6 +167,8 @@ pub enum EscrowErrorExt {
     ArithmeticOverflow = 51,
     /// Wager is below the minimum configured for this specific token (Issue #460).
     WagerBelowTokenMinimum = 52,
+    /// Match players are not registered in the tournament, or it uses another token (Issue #458).
+    MatchNotInTournament = 53,
     /// Side bets cannot be claimed until the match is resolved or refunded (Issue #459).
     SideBetsNotSettled = 54,
     /// Side bet token differs from the match wager token (Issue #459).
@@ -639,6 +643,16 @@ pub struct AssetConfigUpdatedEvent {
 pub struct BatchRefundedEvent {
     pub count: u32,
     pub game_codes: Vec<String>,
+}
+
+/// Published after the coordinator cancels a batch of stalled tournament matches (Issue #458).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TournamentMatchesCancelledEvent {
+    pub tournament_id: String,
+    pub refunded_count: u32,
+    pub game_codes: Vec<String>,
+    pub token: Address,
 }
 
 #[contracttype]
@@ -5306,6 +5320,83 @@ impl ChessterEscrow {
     /// * `resolutions` - Vector of match resolutions.
     pub fn batch_resolve_tournament_matches(env: Env, resolutions: Vec<MatchResolution>) {
         Self::batch_resolve_matches(env, resolutions);
+    }
+
+    /// Coordinator cancels up to `MAX_BATCH_TOURNAMENT_CANCELLATIONS` stalled or unplayed
+    /// matches of a tournament round and refunds every escrowed stake (Issue #458).
+    ///
+    /// The batch is atomic: every match is validated before any refund, and any invalid
+    /// entry (unknown, settled, disputed or non-tournament match, or a duplicate code)
+    /// reverts the whole call. A match belongs to the tournament when it uses the
+    /// tournament token and every joined player is a registered participant. Match
+    /// wagers are held separately from the buy-in prize pool, so `total_pool` is unchanged.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `tournament_id` - Tournament whose matches are cancelled.
+    /// * `game_codes` - Pending or Active matches to cancel (1 to 20).
+    ///
+    /// # Returns
+    /// * `u32` - Number of matches refunded.
+    pub fn batch_cancel_tournament_matches(
+        env: Env,
+        tournament_id: String,
+        game_codes: Vec<String>,
+    ) -> u32 {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
+
+        let count = game_codes.len();
+        if count == 0 || count > MAX_BATCH_TOURNAMENT_CANCELLATIONS {
+            panic_with_error!(&env, EscrowError::InvalidBatchSize);
+        }
+
+        let tournament: TournamentPrizePool = env
+            .storage()
+            .persistent()
+            .get(&tournament_id)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidTournament));
+        Self::bump_entry_ttl(&env, &tournament_id);
+
+        for game_code in game_codes.iter() {
+            let m = Self::load_match(&env, &game_code);
+            if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
+                panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
+            }
+            Self::ensure_dispute_not_locked(&env, &game_code);
+            let players_registered = tournament.players.contains(&m.player1)
+                && m.player2
+                    .as_ref()
+                    .is_none_or(|p2| tournament.players.contains(p2));
+            if m.token != tournament.token || !players_registered {
+                panic_with_error!(&env, EscrowErrorExt::MatchNotInTournament);
+            }
+        }
+
+        // A repeated code fails here: its first refund already moved it out of Pending/Active.
+        for game_code in game_codes.iter() {
+            let mut m = Self::load_match(&env, &game_code);
+            if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
+                panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
+            }
+            Self::execute_refund(&env, &game_code, &mut m);
+        }
+
+        env.events().publish(
+            (
+                symbol_short!("escrow"),
+                symbol_short!("t_cancel"),
+                tournament_id.clone(),
+            ),
+            TournamentMatchesCancelledEvent {
+                tournament_id,
+                refunded_count: count,
+                game_codes,
+                token: tournament.token,
+            },
+        );
+        count
     }
 
     /// Cleans up settled or refunded matches older than 30 days (`STALE_MATCH_THRESHOLD_SECS`) from storage (Issue #41, #380).

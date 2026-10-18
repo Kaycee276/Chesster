@@ -376,6 +376,127 @@ class TournamentService {
 
 		return { totalRounds, rounds };
 	}
+
+	/**
+	 * Formats and escapes a string/number as an RFC 4180 CSV cell.
+	 *
+	 * @param {*} value
+	 * @returns {string}
+	 */
+	formatCsvCell(value) {
+		if (value === null || value === undefined) return "";
+		let text = String(value);
+		if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+		return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+	}
+
+	/**
+	 * Generates an RFC 4180 compliant CSV export for tournament match telemetry and player rankings.
+	 * Headers: Rank,Wallet,Wins,Losses,Draws,Points,PrizeXLM
+	 *
+	 * @param {string} tournamentId
+	 * @returns {Promise<string>}
+	 */
+	async generateTournamentCsv(tournamentId) {
+		const [participants, matches, tournament] = await Promise.all([
+			tournamentModel.getParticipants(tournamentId),
+			tournamentModel.getBracketMatches(tournamentId),
+			typeof tournamentModel.getTournamentById === "function"
+				? tournamentModel.getTournamentById(tournamentId)
+				: tournamentModel.getTournament(tournamentId),
+		]);
+
+		const stats = new Map();
+		for (const p of participants || []) {
+			const wallet = p.wallet_address || p.walletAddress || p.address || "";
+			stats.set(wallet, {
+				wallet,
+				wins: Number(p.wins ?? 0),
+				losses: Number(p.losses ?? 0),
+				draws: Number(p.draws ?? 0),
+				points: Number(p.points ?? p.score ?? 0),
+				prizeXLM: Number(p.prize_xlm ?? p.prizeXlm ?? p.prize_amount ?? 0),
+				tieBreak: Number(p.tie_break ?? p.tiebreak ?? p.buchholz ?? p.seed_number ?? p.seed ?? 0),
+			});
+		}
+
+		// Calculate stats from matches if participants don't have explicit wins/losses tracked
+		const hasExplicitMatchCounts = (participants || []).some(
+			(p) => p.wins !== undefined || p.losses !== undefined || p.draws !== undefined
+		);
+
+		if (!hasExplicitMatchCounts && (matches || []).length > 0) {
+			for (const m of matches) {
+				if (m.status !== "completed" && m.status !== "bye") continue;
+				const p1 = m.player_one || m.player_white || m.player1_address;
+				const p2 = m.player_two || m.player_black || m.player2_address;
+				const winner = m.winner || m.winner_address;
+
+				if (m.status === "bye") {
+					if (winner && stats.has(winner)) {
+						stats.get(winner).wins += 1;
+						stats.get(winner).points += 1;
+					}
+					continue;
+				}
+
+				if (winner) {
+					if (stats.has(winner)) {
+						stats.get(winner).wins += 1;
+						stats.get(winner).points += 1;
+					}
+					const loser = winner === p1 ? p2 : p1;
+					if (loser && stats.has(loser)) {
+						stats.get(loser).losses += 1;
+					}
+				} else if (m.is_draw || m.draw) {
+					if (p1 && stats.has(p1)) {
+						stats.get(p1).draws += 1;
+						stats.get(p1).points += 0.5;
+					}
+					if (p2 && stats.has(p2)) {
+						stats.get(p2).draws += 1;
+						stats.get(p2).points += 0.5;
+					}
+				}
+			}
+		}
+
+		// If tournament has winner_address and prize_pool, assign prize if prizeXLM is 0
+		if (tournament && tournament.winner_address && stats.has(tournament.winner_address)) {
+			const winnerEntry = stats.get(tournament.winner_address);
+			if (winnerEntry.prizeXLM === 0 && Number(tournament.prize_pool || tournament.prizePool || 0) > 0) {
+				winnerEntry.prizeXLM = Number(tournament.prize_pool || tournament.prizePool);
+			}
+		}
+
+		const standings = Array.from(stats.values()).sort((a, b) => {
+			if (b.points !== a.points) return b.points - a.points;
+			if (b.wins !== a.wins) return b.wins - a.wins;
+			if (a.losses !== b.losses) return a.losses - b.losses;
+			if (b.tieBreak !== a.tieBreak) return b.tieBreak - a.tieBreak;
+			return a.wallet.localeCompare(b.wallet);
+		});
+
+		const headers = ["Rank", "Wallet", "Wins", "Losses", "Draws", "Points", "PrizeXLM"];
+		const rows = [headers.join(",")];
+
+		standings.forEach((player, index) => {
+			const rank = index + 1;
+			const row = [
+				this.formatCsvCell(rank),
+				this.formatCsvCell(player.wallet),
+				this.formatCsvCell(player.wins),
+				this.formatCsvCell(player.losses),
+				this.formatCsvCell(player.draws),
+				this.formatCsvCell(player.points),
+				this.formatCsvCell(player.prizeXLM),
+			];
+			rows.push(row.join(","));
+		});
+
+		return rows.join("\n");
+	}
 }
 
 function pairSwissRound(players, previousMatches, roundNumber) {

@@ -52,6 +52,11 @@ function isTransientConflictError(error) {
 	);
 }
 
+function getJitteredDelay(attempt, baseDelay = 50, maxDelay = 1000) {
+	const backoff = Math.min(maxDelay, baseDelay * Math.pow(2, attempt));
+	return Math.floor(Math.random() * backoff);
+}
+
 /**
  * Executes a database transaction callback with automated exponential backoff
  * and randomized full jitter on transient deadlock or write conflict errors.
@@ -64,6 +69,7 @@ function isTransientConflictError(error) {
 async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, baseDelay = 100) {
 	let maxRetries = 5;
 	let baseDelayMs = 100;
+	let maxDelayMs = 1000;
 	let context = "tournament-transaction";
 	let onRetry = null;
 	let sleepFn = null;
@@ -71,6 +77,7 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 	if (typeof optionsOrMaxRetries === "object" && optionsOrMaxRetries !== null) {
 		maxRetries = optionsOrMaxRetries.maxRetries ?? 5;
 		baseDelayMs = optionsOrMaxRetries.baseDelayMs ?? optionsOrMaxRetries.baseDelay ?? 100;
+		maxDelayMs = optionsOrMaxRetries.maxDelayMs ?? optionsOrMaxRetries.maxDelay ?? 1000;
 		context = optionsOrMaxRetries.context ?? "tournament-transaction";
 		onRetry = optionsOrMaxRetries.onRetry ?? null;
 		sleepFn = optionsOrMaxRetries.sleepFn ?? null;
@@ -98,9 +105,8 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 				throw error;
 			}
 
-			// Full jitter backoff formula: sleep(Math.random() * (baseDelayMs * 2 ** attempt))
-			const maxWindow = baseDelayMs * Math.pow(2, attempt);
-			const delay = Math.floor(Math.random() * maxWindow);
+			// Full jitter backoff formula bounded by maxDelay
+			const delay = getJitteredDelay(attempt, baseDelayMs, maxDelayMs);
 
 			logger.warn(
 				`[TransactionRetry] Transient conflict (${error.code || error.message}) during ${context} on attempt ${attempt}/${maxRetries}. Retrying in ${delay}ms...`,
@@ -127,6 +133,7 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 }
 
 module.exports = {
+	getJitteredDelay,
 	executeWithRetry,
 	isTransientConflictError,
 	isOptimisticLockError,

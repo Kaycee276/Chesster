@@ -253,3 +253,46 @@ describe("game and escrow route integration", () => {
     );
   });
 });
+
+describe("GET /api/games/:gameCode/pgn (Issue #463)", () => {
+  const replayService = require("../services/replayService");
+  const chessEngine = require("../services/chessEngine");
+
+  afterEach(() => jest.restoreAllMocks());
+
+  test("exports annotated PGN with clock comments and rating tags", async () => {
+    const start = Date.parse("2026-03-01T12:00:00.000Z");
+    const afterE4 = chessEngine.makeMove(chessEngine.initBoard(), [6, 4], [4, 4]);
+    gameModel.getGame.mockResolvedValue({
+      id: "game-1",
+      game_code: "ABCD12",
+      status: "finished",
+      winner: "black",
+      end_reason: "time",
+      player_white_address: "GWHITE",
+      player_black_address: "GBLACK",
+      time_control_seconds: 60,
+      time_increment_seconds: 1,
+      game_started_at: new Date(start).toISOString(),
+    });
+    gameModel.getMoves.mockResolvedValue([{
+      move_number: 1,
+      player: "white",
+      from_position: [6, 4],
+      to_position: [4, 4],
+      piece: "P",
+      board_state_after: afterE4,
+      created_at: new Date(start + 4000).toISOString(),
+    }]);
+    jest.spyOn(replayService, "fetchPlayerRatings").mockResolvedValue({ white: 1200, black: 1300 });
+
+    const response = await request(buildApp()).get("/api/games/ABCD12/pgn");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/x-chess-pgn");
+    expect(response.text).toContain('[WhiteElo "1200"]');
+    expect(response.text).toContain('[TimeControl "60+1"]');
+    expect(response.text).toContain('[Termination "time forfeit"]');
+    expect(response.text).toContain("1. e4 { [%clk 0:00:57] } 0-1");
+  });
+});

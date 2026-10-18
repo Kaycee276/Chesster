@@ -81,7 +81,7 @@ Submit a candidate chess move to the server move authority.
 ---
 
 ### `send-chat`
-Send an in-game message (subject to slow mode and profanity filter).
+Send an in-game message (subject to the profanity filter). Each socket may send at most **5 messages per rolling 10-second window** per game room; further messages are dropped and answered with [`chat_rate_limit_exceeded`](#chat_rate_limit_exceeded--error).
 ```json
 {
   "gameCode": "CHESS789",
@@ -167,6 +167,21 @@ Periodic clock synchronization broadcast.
 
 ---
 
+### `timer_sync`
+Authoritative clock snapshot broadcast to the game room when a clock starts, after every move, on pause/resume, and when a flag falls. Remaining time is computed server-side from monotonic `process.hrtime.bigint()` anchors, so it is unaffected by event-loop delays; `serverTimestamp` (`Date.now()`) lets clients correct for transit latency.
+```json
+{
+  "gameCode": "CHESS789",
+  "whiteTimeMs": 178000,
+  "blackTimeMs": 180000,
+  "turn": "black",
+  "paused": false,
+  "serverTimestamp": 1792238400000
+}
+```
+
+---
+
 ### `presence-update`
 Player connectivity and reconnecting state.
 ```json
@@ -235,6 +250,22 @@ Broadcasts an approved chat message to room participants.
   "playerColor": "white",
   "message": "Good luck, have fun!",
   "createdAt": "2026-10-15T16:00:00.000Z"
+}
+```
+
+---
+
+### `chat_rate_limit_exceeded` / `error`
+Sent only to the offending socket when a `send-chat` exceeds the 5-messages-per-10-seconds limit. The same structured payload is emitted on both events; the rejected message is not persisted or broadcast.
+```json
+{
+  "error": "chat_rate_limit_exceeded",
+  "code": "chat_rate_limit_exceeded",
+  "message": "Chat rate limit exceeded. Please wait 7s before sending another message.",
+  "gameCode": "CHESS789",
+  "limit": 5,
+  "windowMs": 10000,
+  "retryAfterMs": 6500
 }
 ```
 

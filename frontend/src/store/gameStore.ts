@@ -91,6 +91,8 @@ interface GameStore {
   chatMessages: ChatMessage[];
   unreadCount: number;
   chatOpen: boolean;
+  isOpponentMuted: boolean;
+  toggleOpponentMute: () => void;
   // Blindfold mode for training calculation skills
   blindfoldMode: "none" | "white" | "black" | "all";
   setBlindfoldMode: (mode: "none" | "white" | "black" | "all") => void;
@@ -174,6 +176,7 @@ export const useGameStore = create<GameStore>()(
       chatMessages: [],
       unreadCount: 0,
       chatOpen: false,
+      isOpponentMuted: false,
       // Network state (Issue #401)
       pingMs: 0,
       socketStatus: "disconnected",
@@ -196,6 +199,8 @@ export const useGameStore = create<GameStore>()(
         }),
       toggleStreamerMode: () =>
         set((s) => ({ isStreamerMode: !s.isStreamerMode })),
+      toggleOpponentMute: () =>
+        set((s) => ({ isOpponentMuted: !s.isOpponentMuted })),
       toggleHaptics: () =>
         set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
       toggleMoveConfirmation: () =>
@@ -582,6 +587,7 @@ export const useGameStore = create<GameStore>()(
           chatMessages: [],
           unreadCount: 0,
           chatOpen: false,
+          isOpponentMuted: false,
         });
       },
 
@@ -605,10 +611,14 @@ export const useGameStore = create<GameStore>()(
       },
 
       addChatMessage: (msg: ChatMessage) => {
-        set((s) => ({
-          chatMessages: [...s.chatMessages, msg],
-          unreadCount: s.chatOpen ? 0 : s.unreadCount + 1,
-        }));
+        set((s) => {
+          const mutedOpponent =
+            s.isOpponentMuted && s.playerColor !== null && msg.playerColor !== s.playerColor;
+          return {
+            chatMessages: [...s.chatMessages, msg],
+            unreadCount: s.chatOpen ? 0 : mutedOpponent ? s.unreadCount : s.unreadCount + 1,
+          };
+        });
       },
 
       setChatOpen: (open: boolean) => {

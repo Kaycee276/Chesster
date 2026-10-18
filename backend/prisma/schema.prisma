@@ -67,6 +67,7 @@ model Game {
   white_cheat_suspicion  Decimal?  @db.Decimal(5, 4)
   black_cheat_suspicion  Decimal?  @db.Decimal(5, 4)
   cheat_flagged          Boolean   @default(false)
+  anti_cheat_flags       Json      @default("[]") @db.JsonB
   anti_cheat_analyzed_at DateTime? @db.Timestamptz(6)
   end_reason             String?
   ended_at               DateTime? @db.Timestamptz(6)

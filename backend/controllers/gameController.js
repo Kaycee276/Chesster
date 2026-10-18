@@ -7,7 +7,6 @@ const replayService = require("../services/replayService");
 // Comment line sent periodically so proxies don't drop an idle replay stream.
 const REPLAY_HEARTBEAT_MS = 15000;
 const auditService = require("../services/auditService");
-const chessEngine = require("../services/chessEngine");
 const leaderboardService = require("../services/leaderboardService");
 const pgnService = require("../services/pgnService");
 
@@ -222,19 +221,9 @@ class GameController {
 			const game = await gameModel.getGame(gameCode);
 			if (!game) return res.status(404).json({ success: false, error: "Game not found" });
 			const moves = await gameModel.getMoves(gameCode);
-			const pgn = chessEngine.generateRichPgn(moves.map((move) => ({
-				...move,
-				from: move.from || move.from_position,
-				to: move.to || move.to_position,
-			})), {
-				white: game.player_white_address || "?",
-				black: game.player_black_address || "?",
-				result: game.winner === "draw" ? "1/2-1/2" : game.winner === "white" ? "1-0" : game.winner === "black" ? "0-1" : "*",
-				termination: game.end_reason || "normal",
-				timeControl: game.time_control_seconds ? String(game.time_control_seconds) : "-",
-				initialClockSeconds: game.time_control_seconds || null,
-				createdAt: game.created_at,
-			});
+			// Annotated export with per-move [%clk] / [%eval] comments (Issue #463).
+			const ratings = await replayService.fetchPlayerRatings(game);
+			const pgn = replayService.formatPgn(game, moves, { ratings });
 			res.set({
 				"Content-Type": "application/x-chess-pgn",
 				"Content-Disposition": `attachment; filename=game-${game.game_code || game.id}.pgn`,

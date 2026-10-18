@@ -195,3 +195,46 @@ export function toEngineFen(board: string[][], turn: "white" | "black"): string 
 	const [placement, side, , enPassant, halfmove, fullmove] = boardToFen(board, turn).split(" ");
 	return [placement, side, inferCastlingRights(board), enPassant, halfmove, fullmove].join(" ");
 }
+
+/**
+ * Converts a UCI move (e.g. "e2e4") to algebraic notation for display.
+ * Handles promotions: "e7e8q" becomes "e8=Q".
+ * Returns null if the move string is invalid.
+ */
+export function uciMoveToAlgebraic(uciMove: string): string | null {
+	if (!uciMove || uciMove.length < 4) return null;
+	const from = uciMove.slice(0, 2);
+	const to = uciMove.slice(2, 4);
+	const promotion = uciMove.length > 4 ? uciMove[4].toUpperCase() : "";
+	const promotionStr = promotion ? `=${promotion}` : "";
+	return `${from}-${to}${promotionStr}`;
+}
+
+/**
+ * Formats a principal variation (sequence of moves in UCI notation) as a
+ * comma-separated list of algebraic notation moves. Used for tooltip display.
+ * Returns null if the PV is empty or all moves fail to convert.
+ */
+export function formatPrincipalVariation(pv: string[] | undefined): string | null {
+	if (!pv || pv.length === 0) return null;
+	const algebraic = pv
+		.map((move) => uciMoveToAlgebraic(move))
+		.filter((m): m is string => m !== null);
+	return algebraic.length > 0 ? algebraic.join(" ") : null;
+}
+
+/**
+ * Extracts the best move suggestion for tooltip display from an evaluation.
+ * Prefers the first move of the principal variation if available, otherwise
+ * uses the stored bestMove. Returns null if neither is available.
+ */
+export function getBestMoveForDisplay(evaluation: EngineEvaluation): string | null {
+	if (evaluation.pv && evaluation.pv.length > 0) {
+		const first = uciMoveToAlgebraic(evaluation.pv[0]);
+		return first ? `${first}${evaluation.pv.length > 1 ? " ..." : ""}` : null;
+	}
+	if (evaluation.bestMove) {
+		return uciMoveToAlgebraic(evaluation.bestMove);
+	}
+	return null;
+}
