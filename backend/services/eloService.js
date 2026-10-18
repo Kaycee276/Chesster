@@ -1,7 +1,8 @@
 const supabase = require("../config/supabase");
 const { executeWithRetry, OptimisticLockError } = require("../database/transactionRetry");
 
-const DEFAULT_K_FACTOR = 32;
+const DEFAULT_K_FACTOR = 20;
+const MIN_RATING = 400;
 const GLICKO2_SCALE = 173.7178;
 const GLICKO2_TAU = 0.5;
 const GLICKO2_EPSILON = 0.000001;
@@ -16,9 +17,17 @@ const GLICKO2_EPSILON = 0.000001;
  * Where:
  *   RA, RB = current ratings of players A and B
  *   SA     = actual score (1 = win, 0.5 = draw, 0 = loss)
- *   K      = K-factor (default 32)
+ *   K      = K-factor (40 provisional, 10 master, otherwise 20)
  */
 class EloService {
+	getKFactor(gamesPlayed, currentRating) {
+		const games = Number(gamesPlayed ?? 0);
+		const rating = Number(currentRating ?? 1200);
+		if (!Number.isFinite(games) || games < 20) return 40;
+		if (rating >= 2000) return 10;
+		return DEFAULT_K_FACTOR;
+	}
+
 	calculateG(ratingDeviation) {
 		return 1 / Math.sqrt(1 + (3 * Math.pow(ratingDeviation / GLICKO2_SCALE, 2)) / Math.pow(Math.PI, 2));
 	}
@@ -42,7 +51,7 @@ class EloService {
 		const newPhi = 1 / Math.sqrt(1 / Math.pow(prePeriodDeviation, 2) + 1 / variance);
 		const newMu = mu + Math.pow(newPhi, 2) * g * (actualScore - expected);
 		return {
-			rating: Math.round(1500 + GLICKO2_SCALE * newMu),
+			rating: Math.max(MIN_RATING, Math.round(1500 + GLICKO2_SCALE * newMu)),
 			ratingDeviation: Math.round(GLICKO2_SCALE * newPhi * 100) / 100,
 			volatility: Math.round(newVolatility * 1000000) / 1000000,
 			expectedScore: expected,
@@ -118,7 +127,7 @@ class EloService {
 	 */
 	calculateNewRating(currentRating, expectedScore, actualScore, kFactor = DEFAULT_K_FACTOR) {
 		const newRating = currentRating + kFactor * (actualScore - expectedScore);
-		return Math.round(newRating);
+		return Math.max(MIN_RATING, Math.round(newRating));
 	}
 
 	/**
@@ -139,7 +148,7 @@ class EloService {
 
 		const { data: player1, error: err1 } = await db
 			.from("users")
-			.select("id, elo_rating, version")
+			.select("id, wallet_address, elo_rating, version")
 			.eq("id", player1Id)
 			.single();
 
@@ -148,7 +157,7 @@ class EloService {
 
 		const { data: player2, error: err2 } = await db
 			.from("users")
-			.select("id, elo_rating, version")
+			.select("id, wallet_address, elo_rating, version")
 			.eq("id", player2Id)
 			.single();
 
@@ -157,6 +166,12 @@ class EloService {
 
 		const rating1 = player1.elo_rating ?? 1200;
 		const rating2 = player2.elo_rating ?? 1200;
+		const { data: playerStats, error: statsError } = await db
+			.from("player_stats")
+			.select("wallet_address, games_played")
+			.in("wallet_address", [player1.wallet_address, player2.wallet_address]);
+		if (statsError) throw new Error(`Failed to fetch player game counts: ${statsError.message}`);
+		const gamesPlayedByWallet = new Map((playerStats || []).map((stats) => [stats.wallet_address, stats.games_played || 0]));
 
 		const expected1 = this.calculateExpectedScore(rating1, rating2);
 		const expected2 = this.calculateExpectedScore(rating2, rating1);
@@ -175,8 +190,18 @@ class EloService {
 			throw new Error("Winner ID must match one of the players");
 		}
 
-		const newRating1 = this.calculateNewRating(rating1, expected1, actual1);
-		const newRating2 = this.calculateNewRating(rating2, expected2, actual2);
+		const newRating1 = this.calculateNewRating(
+			rating1,
+			expected1,
+			actual1,
+			this.getKFactor(gamesPlayedByWallet.get(player1.wallet_address) || 0, rating1),
+		);
+		const newRating2 = this.calculateNewRating(
+			rating2,
+			expected2,
+			actual2,
+			this.getKFactor(gamesPlayedByWallet.get(player2.wallet_address) || 0, rating2),
+		);
 
 		// Optimistic-locked writes (#472): conditional on version + 3x retry.
 		const writeRating = (id, current, newRating) =>

@@ -8962,6 +8962,30 @@ mod extended_tests {
         assert_eq!(p2, player2);
         assert_eq!(pool, 200);
 
+        let player_joined_event = events.iter().find(|(id, topics, _)| {
+            if id != &contract_id || topics.len() != 2 {
+                return false;
+            }
+            let t0: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+            let t1: Result<Symbol, _> = topics.get(1).unwrap().try_into_val(&env);
+            t0 == Ok(Symbol::new(&env, "v1")) && t1 == Ok(Symbol::new(&env, "player_joined"))
+        });
+        assert!(
+            player_joined_event.is_some(),
+            "player joined deposit event missing"
+        );
+        let (_, _, data) = player_joined_event.unwrap();
+        let (event_game_code, event_player, wager_amount, token_address): (
+            String,
+            Address,
+            i128,
+            Address,
+        ) = data.try_into_val(&env).unwrap();
+        assert_eq!(event_game_code, game_code);
+        assert_eq!(event_player, player2);
+        assert_eq!(wager_amount, 100);
+        assert_eq!(token_address, token.address);
+
         // 3. Resolve match
         client.resolve_match(&game_code, &Some(player1.clone()));
         let events = env.events().all();

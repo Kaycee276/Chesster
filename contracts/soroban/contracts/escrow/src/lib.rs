@@ -3371,6 +3371,15 @@ impl ChessterEscrow {
             (player2.clone(), m.total_staked).into_val(&env),
         );
         env.events().publish(
+            (Symbol::new(&env, "v1"), Symbol::new(&env, "player_joined")),
+            (
+                game_code.clone(),
+                player2.clone(),
+                m.wager_amount,
+                m.token.clone(),
+            ),
+        );
+        env.events().publish(
             (
                 Symbol::new(&env, "v1"),
                 symbol_short!("funded"),

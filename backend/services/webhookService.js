@@ -196,6 +196,34 @@ function _getSecret() {
   return process.env.WEBHOOK_SECRET || "";
 }
 
+const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
+
+function verifyWebhookSignature(
+  header,
+  rawBody,
+  secret,
+  nowSeconds = Math.floor(Date.now() / 1000),
+) {
+  if (typeof header !== "string" || typeof secret !== "string" || !secret) return false;
+  if (typeof rawBody !== "string" && !Buffer.isBuffer(rawBody)) return false;
+
+  const match = /^t=(\d+),v1=([a-f0-9]{64})$/i.exec(header);
+  if (!match) return false;
+
+  const timestamp = Number(match[1]);
+  if (!Number.isSafeInteger(timestamp) || !Number.isSafeInteger(nowSeconds)) return false;
+  const ageSeconds = nowSeconds - timestamp;
+  if (ageSeconds < 0 || ageSeconds > WEBHOOK_SIGNATURE_TOLERANCE_SECONDS) return false;
+
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${match[1]}.`, "utf8")
+    .update(rawBody)
+    .digest();
+  const provided = Buffer.from(match[2], "hex");
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
 function _getTimeout() {
   return Number(process.env.WEBHOOK_TIMEOUT_MS) || 5000;
 }
@@ -766,3 +794,4 @@ module.exports.DLQ_STATUS = DLQ_STATUS;
 module.exports.computeBackoffDelay = computeBackoffDelay;
 module.exports.isPrivateOrReservedIp = isPrivateOrReservedIp;
 module.exports.defaultDnsLookup = defaultDnsLookup;
+module.exports.verifyWebhookSignature = verifyWebhookSignature;

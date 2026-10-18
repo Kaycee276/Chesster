@@ -13,6 +13,7 @@ const {
   DLQ_STATUS,
   computeBackoffDelay,
   isPrivateOrReservedIp,
+  verifyWebhookSignature,
 } = require("../services/webhookService");
 
 function createDeadLetterStore() {
@@ -38,6 +39,36 @@ describe("WebhookService", () => {
   afterEach(() => {
     jest.restoreAllMocks();
     jest.clearAllMocks();
+  });
+
+  describe("verifyWebhookSignature", () => {
+    const secret = "subscriber-secret";
+    const timestamp = 1_700_000_000;
+    const rawBody = '{"event":"match.resolved","data":{"gameCode":"G1"}}';
+    const signature = crypto
+      .createHmac("sha256", secret)
+      .update(`${timestamp}.${rawBody}`)
+      .digest("hex");
+    const header = `t=${timestamp},v1=${signature}`;
+
+    it("accepts an authentic signature over the raw body", () => {
+      expect(verifyWebhookSignature(header, rawBody, secret, timestamp)).toBe(true);
+    });
+
+    it("rejects forged payloads and signatures", () => {
+      expect(verifyWebhookSignature(header, `${rawBody} `, secret, timestamp)).toBe(false);
+      expect(verifyWebhookSignature(`t=${timestamp},v1=${"0".repeat(64)}`, rawBody, secret, timestamp)).toBe(false);
+    });
+
+    it("rejects signatures older than five minutes", () => {
+      expect(verifyWebhookSignature(header, rawBody, secret, timestamp + 300)).toBe(true);
+      expect(verifyWebhookSignature(header, rawBody, secret, timestamp + 301)).toBe(false);
+    });
+
+    it("rejects malformed headers and future timestamps", () => {
+      expect(verifyWebhookSignature("sha256=invalid", rawBody, secret, timestamp)).toBe(false);
+      expect(verifyWebhookSignature(header, rawBody, secret, timestamp - 1)).toBe(false);
+    });
   });
 
   // -------------------------------------------------------------------

@@ -1,7 +1,19 @@
 const axios = require("axios");
 const supabase = require("../config/supabase");
 
-const COMMISSION_PERCENT = 20n;
+const COMMISSION_TIERS = [
+	{ minimumVolume: 2500, tier: "gold", commissionBps: 2000 },
+	{ minimumVolume: 500, tier: "silver", commissionBps: 1500 },
+	{ minimumVolume: 0, tier: "bronze", commissionBps: 1000 },
+];
+
+function getCommissionTier(totalReferredVolume) {
+	const volume = Number(totalReferredVolume);
+	if (!Number.isFinite(volume) || volume < 0) {
+		throw new Error("Referred wager volume must be a non-negative number");
+	}
+	return COMMISSION_TIERS.find((tier) => volume >= tier.minimumVolume);
+}
 
 function normalizeAmount(value) {
 	if (typeof value === "bigint") return value;
@@ -16,15 +28,29 @@ class ReferralService {
 		this.payoutTransfer = payoutTransfer || this.requestPayoutTransfer.bind(this);
 	}
 
-	calculateCommission(rakeAmount) {
-		return (normalizeAmount(rakeAmount) * COMMISSION_PERCENT) / 100n;
+	calculateCommission(rakeAmount, totalReferredVolume = 0) {
+		const { commissionBps } = getCommissionTier(totalReferredVolume);
+		return (normalizeAmount(rakeAmount) * BigInt(commissionBps)) / 10000n;
+	}
+
+	async getReferrerTier(walletAddress) {
+		if (!walletAddress) throw new Error("Referrer wallet is required");
+		const { data, error } = await this.db.rpc("get_referrer_tier", {
+			p_referrer_wallet: walletAddress,
+		});
+		if (error) throw error;
+
+		const row = Array.isArray(data) ? data[0] : data;
+		if (!row) return { tier: "bronze", totalReferredVolume: "0", commissionBps: 1000 };
+		return {
+			tier: row.tier,
+			totalReferredVolume: String(row.total_referred_volume || "0"),
+			commissionBps: Number(row.commission_bps),
+		};
 	}
 
 	async creditReferralCommission(gameId, rakeAmount, loserWallet) {
 		if (!gameId || !loserWallet) throw new Error("Game ID and loser wallet are required");
-		const commission = this.calculateCommission(rakeAmount);
-		if (commission === 0n) return { credited: false, amount: "0" };
-
 		const { data, error } = await this.db.rpc("credit_referral_commission", {
 			p_game_id: gameId,
 			p_rake_amount: normalizeAmount(rakeAmount).toString(),
@@ -119,4 +145,5 @@ class ReferralService {
 
 module.exports = new ReferralService();
 module.exports.ReferralService = ReferralService;
-module.exports.COMMISSION_PERCENT = COMMISSION_PERCENT;
+module.exports.getCommissionTier = getCommissionTier;
+module.exports.COMMISSION_TIERS = COMMISSION_TIERS;
