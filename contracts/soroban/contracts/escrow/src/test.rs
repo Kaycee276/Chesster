@@ -9376,4 +9376,90 @@ mod extended_tests {
             assert_eq!(client.get_escrowed_balance(&token.address), 0);
         }
     }
+
+    /// Issue #543 — Author property-based fuzz test for match cancellation and stake refund invariants
+    #[test]
+    fn test_fuzz_cancellation_conservation() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let coordinator = Address::generate(&env);
+        let player1 = Address::generate(&env);
+        let player2 = Address::generate(&env);
+        let token_admin = Address::generate(&env);
+
+        let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+        let contract_id = env.register(ChessterEscrow, ());
+        let client = ChessterEscrowClient::new(&env, &contract_id);
+
+        client.init(&coordinator, &500);
+        client.add_whitelisted_token(&token.address);
+
+        // Test representative wager amounts across the 100 to 100,000,000 stroops range
+        let test_wagers: &[i128] = &[
+            100,
+            500,
+            1_000,
+            10_000,
+            100_000,
+            1_000_000,
+            10_000_000,
+            100_000_000,
+        ];
+
+        for (idx, &wager) in test_wagers.iter().enumerate() {
+            token_admin_client.mint(&player1, &wager);
+            token_admin_client.mint(&player2, &wager);
+            approve(&env, &token, &player1, &contract_id, wager);
+            approve(&env, &token, &player2, &contract_id, wager);
+
+            let bal1_before = token.balance(&player1);
+            let bal2_before = token.balance(&player2);
+            let contract_bal_initial = token.balance(&contract_id);
+
+            let mut code_bytes = [0u8; 12];
+            code_bytes[0] = b'C';
+            code_bytes[1] = b'A';
+            code_bytes[2] = b'N';
+            code_bytes[3] = b'C';
+            code_bytes[4] = b'0' + (idx as u8);
+            let game_code = String::from_str(&env, core::str::from_utf8(&code_bytes[..5]).unwrap());
+
+            // Task 2: Simulate player deposit
+            client.create_match(&game_code, &player1, &token.address, &wager);
+            client.join_match(&game_code, &player2);
+
+            assert_eq!(token.balance(&contract_id), contract_bal_initial + (wager * 2));
+
+            // Alternate between mutual cancellation and timeout refund
+            if idx % 2 == 0 {
+                // Proposal & mutual cancellation execution
+                client.propose_mutual_cancellation(&game_code, &player1);
+                client.confirm_mutual_cancellation(&game_code, &player2);
+            } else {
+                // Timeout refund flow (elapsed time > timeout)
+                let current_time = env.ledger().timestamp();
+                env.ledger().with_mut(|li| {
+                    li.timestamp = current_time + 3601;
+                });
+                client.refund_after_timeout(&game_code);
+            }
+
+            // Task 3: Assert initial contract balance + deposit - refund == initial contract balance
+            assert_eq!(token.balance(&contract_id), contract_bal_initial);
+            assert_eq!(token.balance(&player1), bal1_before);
+            assert_eq!(token.balance(&player2), bal2_before);
+            assert_eq!(client.get_escrowed_balance(&token.address), 0);
+
+            let m = client.get_match(&game_code);
+            assert_eq!(m.status, MatchStatus::Refunded);
+
+            // Task 4: Assert second refund attempt on the same game code panics with MatchNotPending / AlreadyResolvedOrRefunded
+            let double_refund_result = client.try_refund_after_timeout(&game_code);
+            assert!(double_refund_result.is_err());
+
+            let double_confirm_result = client.try_confirm_mutual_cancellation(&game_code, &player2);
+            assert!(double_confirm_result.is_err());
+        }
+    }
 }
