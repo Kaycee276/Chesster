@@ -44,6 +44,125 @@ function calculateTimingEntropy(moveDurationsMs) {
 	return average > 0 ? standardDeviation(moveDurationsMs) / average : 0;
 }
 
+function calculateVariance(values) {
+	if (!values || values.length === 0) return 0;
+	const avg = mean(values);
+	return mean(values.map((v) => (v - avg) ** 2));
+}
+
+/**
+ * Pearson correlation coefficient R between two equal-length arrays.
+ * Returns 0 if either array has zero variance or if lengths < 2.
+ */
+function calculatePearsonCorrelation(x, y) {
+	if (!x || !y || x.length !== y.length || x.length < 2) return 0;
+	const n = x.length;
+	const avgX = mean(x);
+	const avgY = mean(y);
+	let num = 0;
+	let denX = 0;
+	let denY = 0;
+	for (let i = 0; i < n; i++) {
+		const dx = x[i] - avgX;
+		const dy = y[i] - avgY;
+		num += dx * dy;
+		denX += dx * dx;
+		denY += dy * dy;
+	}
+	const den = Math.sqrt(denX * denY);
+	if (den === 0) return 0;
+	return Number((num / den).toFixed(4));
+}
+
+/**
+ * Compute move time entropy variance to flag programmatic bot play (Issue #553).
+ *
+ * @param {Array<number>} moveTimes - Deliberation durations per move (seconds or ms)
+ * @param {Array<number|object>} [evaluations=[]] - Evaluation scores or objects with centipawnLoss / delta
+ * @param {object} [options]
+ * @param {number} [options.varianceThreshold=0.05] - Threshold for suspicious low variance
+ * @param {number} [options.minMoves=15] - Minimum moves to flag suspect timing
+ * @returns {{
+ *   isSuspectTiming: boolean,
+ *   timingVariance: number,
+ *   entropyScore: number,
+ *   complexityCorrelation: number,
+ *   flagReason: string|null
+ * }}
+ */
+function analyzeMoveTimeDistribution(moveTimes = [], evaluations = [], options = {}) {
+	const validMoveTimes = (moveTimes || [])
+		.map(toFiniteNumber)
+		.filter((t) => t !== null && t >= 0);
+
+	const minMoves = options.minMoves ?? 15;
+	const varianceThreshold = options.varianceThreshold ?? 0.05;
+
+	// If timestamps/durations are in ms (> 100 on average), scale to seconds for consistent variance check
+	const avgTime = mean(validMoveTimes);
+	const isMs = avgTime > 100;
+	const timesInSec = isMs ? validMoveTimes.map((t) => t / 1000) : validMoveTimes;
+
+	const timingVariance = Number(calculateVariance(timesInSec).toFixed(4));
+
+	// Shannon entropy score over binned move durations (normalized 0..1)
+	const timesInMs = isMs ? validMoveTimes : validMoveTimes.map((t) => t * 1000);
+	const entropyScore = moveTimeEntropyScore(timesInMs) ?? 0;
+
+	// Calculate Move-Time Complexity Correlation (R_tc):
+	// Pearson correlation between position evaluation delta |Δeval_i| and move time t_i.
+	let evalDeltas = [];
+	if (Array.isArray(evaluations) && evaluations.length > 0) {
+		const numericEvals = evaluations.map((ev) => {
+			if (typeof ev === "number") return ev;
+			if (ev && typeof ev.eval === "number") return ev.eval;
+			if (ev && typeof ev.centipawnLoss === "number") return ev.centipawnLoss;
+			if (ev && typeof ev.scoreCp === "number") return ev.scoreCp;
+			return null;
+		});
+
+		if (numericEvals.length === validMoveTimes.length) {
+			// Pre-calculated per-move eval or delta
+			evalDeltas = numericEvals.map((v) => Math.abs(v ?? 0));
+		} else {
+			// Compute sequential deltas: |eval[i] - eval[i-1]|
+			for (let i = 0; i < numericEvals.length; i++) {
+				if (i === 0) {
+					evalDeltas.push(Math.abs(numericEvals[0] ?? 0));
+				} else {
+					evalDeltas.push(Math.abs((numericEvals[i] ?? 0) - (numericEvals[i - 1] ?? 0)));
+				}
+			}
+		}
+	}
+
+	// Truncate or pad to match moveTimes length
+	const count = Math.min(timesInSec.length, evalDeltas.length);
+	const complexityCorrelation = count >= 2
+		? calculatePearsonCorrelation(evalDeltas.slice(0, count), timesInSec.slice(0, count))
+		: 0;
+
+	const isSuspectTiming = validMoveTimes.length >= minMoves && (timingVariance < varianceThreshold || entropyScore < LOW_ENTROPY_THRESHOLD);
+	let flagReason = null;
+	if (isSuspectTiming) {
+		if (timingVariance < varianceThreshold && entropyScore < LOW_ENTROPY_THRESHOLD) {
+			flagReason = "Low move time variance and anomalous entropy indicate automated bot timing";
+		} else if (timingVariance < varianceThreshold) {
+			flagReason = "Low move time variance indicates automated bot timing";
+		} else {
+			flagReason = "Anomalously low move time entropy profile indicates automated bot timing";
+		}
+	}
+
+	return {
+		isSuspectTiming,
+		timingVariance,
+		entropyScore,
+		complexityCorrelation,
+		flagReason,
+	};
+}
+
 function toFiniteNumber(value) {
 	if (value === null || value === undefined || value === "") return null;
 	const number = Number(value);
@@ -502,6 +621,9 @@ module.exports.moveTimeEntropyScore = moveTimeEntropyScore;
 module.exports.binMoveDuration = binMoveDuration;
 module.exports.countLegalMoves = countLegalMoves;
 module.exports.analyzeGameMoveTimes = analyzeGameMoveTimes;
+module.exports.analyzeMoveTimeDistribution = analyzeMoveTimeDistribution;
+module.exports.calculateVariance = calculateVariance;
+module.exports.calculatePearsonCorrelation = calculatePearsonCorrelation;
 module.exports.ENTROPY_BIN_EDGES_MS = ENTROPY_BIN_EDGES_MS;
 module.exports.LOW_ENTROPY_THRESHOLD = LOW_ENTROPY_THRESHOLD;
 module.exports.HIGH_ENTROPY_THRESHOLD = HIGH_ENTROPY_THRESHOLD;

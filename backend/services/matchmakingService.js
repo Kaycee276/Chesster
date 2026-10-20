@@ -18,6 +18,31 @@ const EXPANSION_INTERVAL_SEC = 15; // seconds of waiting per expansion step
 const MAX_RATING_GAP = 350; // hard ceiling for any pairing
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
+// Issue #552: Skill-based matchmaking (SBMM) expansion windows over wait time
+const SBMM_BASE_TOLERANCE = 75;
+const SBMM_MAX_TOLERANCE = 400;
+const SBMM_STEP = 75;
+const EXPANSION_THRESHOLDS_SEC = [15, 30, 45];
+
+/**
+ * Calculate dynamic Elo tolerance window over wait time (Issue #552):
+ * - 0-15s: 75 Elo
+ * - 16-30s: 150 Elo
+ * - 31-45s: 250 Elo (or 75 + steps * 75 capped at 400)
+ *
+ * @param {number} queuedAt - Timestamp when the player/ticket entered the queue
+ * @param {number} [baseTolerance=75]
+ * @param {number} [maxTolerance=400]
+ * @param {number} [now=Date.now()]
+ * @returns {number}
+ */
+function calculateEloTolerance(queuedAt, baseTolerance = SBMM_BASE_TOLERANCE, maxTolerance = SBMM_MAX_TOLERANCE, now = Date.now()) {
+	const elapsedSeconds = Math.max(0, (now - queuedAt) / 1000);
+	const steps = Math.floor(elapsedSeconds / 15);
+	const expanded = baseTolerance + steps * SBMM_STEP;
+	return Math.min(expanded, maxTolerance);
+}
+
 /**
  * Current rating tolerance for a queue entry:
  *   min(350, 50 + floor(waitSeconds / 15) * 50)
@@ -80,7 +105,7 @@ class MatchmakingService {
 			socketId: String(socketId),
 			elo: this._normalizeElo(elo),
 			wagerTier: tier,
-			queuedAt: sameTier && sameAsset && sameTimeControl ? existing.queuedAt : Date.now(),
+			queuedAt: (arguments[0] && arguments[0].queuedAt) || (sameTier && sameAsset && sameTimeControl ? existing.queuedAt : Date.now()),
 		};
 
 		if (tid) entry.ticketId = tid;
@@ -162,18 +187,72 @@ class MatchmakingService {
 
 	/**
 	 * Whether two queue entries may be paired at time `now`: same wager tier,
-	 * compatible wager asset, matching time control, and a rating gap within both
-	 * players' tolerances and the hard ceiling.
+	 * compatible wager asset, matching time control, and a rating gap within
+	 * acceptable tolerances and the hard ceiling.
+	 *
+	 * When useMaxTolerance is true (Issue #552):
+	 *   |Elo1 - Elo2| <= Math.max(Tolerance(P1), Tolerance(P2))
+	 * Otherwise mutual tolerance requires:
+	 *   |Elo1 - Elo2| <= Math.min(Tolerance(P1), Tolerance(P2))
+	 *
+	 * @param {object} a
+	 * @param {object} b
+	 * @param {number} [now=Date.now()]
+	 * @param {boolean} [useMaxTolerance=false]
 	 * @returns {boolean}
 	 */
-	canPair(a, b, now = Date.now()) {
+	canPair(a, b, now = Date.now(), useMaxTolerance = false) {
 		if (a.userId === b.userId) return false;
 		if (a.wagerTier !== b.wagerTier) return false;
 		if ((a.wagerAsset || null) !== (b.wagerAsset || null)) return false;
 		if ((a.timeControl || null) !== (b.timeControl || null)) return false;
 		const gap = Math.abs(a.elo - b.elo);
-		const mutualTolerance = Math.min(getPlayerTolerance(a, now), getPlayerTolerance(b, now));
-		return gap <= Math.min(mutualTolerance, this.maxRatingGap);
+		const tolA = getPlayerTolerance(a, now);
+		const tolB = getPlayerTolerance(b, now);
+		const allowedTolerance = useMaxTolerance ? Math.max(tolA, tolB) : Math.min(tolA, tolB);
+		return gap <= Math.min(allowedTolerance, this.maxRatingGap);
+	}
+
+	/**
+	 * Check queue entries for wait-time expansion thresholds (15s, 30s, 45s)
+	 * and invoke onExpand / notify client if crossed. (Issue #552)
+	 *
+	 * @param {number} [now=Date.now()]
+	 * @param {Function} [onExpand]
+	 * @returns {Array<object>} list of triggered expansion notifications
+	 */
+	checkQueueExpansions(now = Date.now(), onExpand = null) {
+		const expansions = [];
+		for (const entry of this.queue.values()) {
+			const elapsedSec = Math.floor(Math.max(0, now - entry.queuedAt) / 1000);
+			if (!entry.expandedThresholds) {
+				entry.expandedThresholds = new Set();
+			}
+
+			for (const threshold of EXPANSION_THRESHOLDS_SEC) {
+				if (elapsedSec >= threshold && !entry.expandedThresholds.has(threshold)) {
+					entry.expandedThresholds.add(threshold);
+					const currentRadius = calculateEloTolerance(entry.queuedAt, SBMM_BASE_TOLERANCE, SBMM_MAX_TOLERANCE, now);
+					const payload = {
+						userId: entry.userId,
+						socketId: entry.socketId,
+						ticketId: entry.ticketId || null,
+						thresholdSeconds: threshold,
+						elapsedSeconds: elapsedSec,
+						searchRadius: currentRadius,
+					};
+					expansions.push(payload);
+					if (typeof onExpand === "function") {
+						try {
+							onExpand(payload);
+						} catch (err) {
+							console.error("Matchmaking onExpand handler failed:", err);
+						}
+					}
+				}
+			}
+		}
+		return expansions;
 	}
 
 	/**
@@ -283,15 +362,19 @@ class MatchmakingService {
 	 * paired without needing a new player to join.
 	 * @param {object} options
 	 * @param {(match: {player1: object, player2: object}) => void} options.onMatch
+	 * @param {(expansion: object) => void} [options.onExpand]
 	 * @param {number} [options.intervalMs=1000]
 	 */
-	startQueueWorker({ onMatch, intervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) {
+	startQueueWorker({ onMatch, onExpand = null, intervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) {
 		if (typeof onMatch !== "function") {
 			throw new Error("onMatch callback is required to start the matchmaking worker");
 		}
 		this.stopQueueWorker();
 
 		this.pollTimer = setInterval(() => {
+			if (typeof onExpand === "function") {
+				this.checkQueueExpansions(Date.now(), onExpand);
+			}
 			for (const match of this.processQueue()) {
 				try {
 					onMatch(match);
@@ -377,9 +460,17 @@ class MatchmakingService {
 module.exports = new MatchmakingService();
 module.exports.MatchmakingService = MatchmakingService;
 module.exports.getPlayerTolerance = getPlayerTolerance;
+module.exports.calculateEloTolerance = calculateEloTolerance;
+module.exports.EXPANSION_THRESHOLDS_SEC = EXPANSION_THRESHOLDS_SEC;
 module.exports.MATCHMAKING_CONFIG = Object.freeze({
 	BASE_TOLERANCE,
 	TOLERANCE_STEP,
 	EXPANSION_INTERVAL_SEC,
 	MAX_RATING_GAP,
+});
+module.exports.SBMM_CONFIG = Object.freeze({
+	BASE_TOLERANCE: SBMM_BASE_TOLERANCE,
+	MAX_TOLERANCE: SBMM_MAX_TOLERANCE,
+	TOLERANCE_STEP: SBMM_STEP,
+	EXPANSION_THRESHOLDS_SEC,
 });

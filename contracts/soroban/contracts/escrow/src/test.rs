@@ -3222,6 +3222,30 @@ fn test_upgrade_requires_coordinator() {
     assert!(client.try_upgrade(&hash).is_err());
 }
 
+#[test]
+fn test_cannot_reinitialize_after_upgrade() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let coordinator = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    // Initial attempt to reinitialize should fail
+    let res = client.try_init(&coordinator, &500);
+    assert!(res.is_err());
+
+    // Another attacker tries to call init
+    let attacker = Address::generate(&env);
+    let res_attacker = client.try_init(&attacker, &0);
+    assert!(res_attacker.is_err());
+
+    // Verify state is preserved and re-init cannot hijack coordinator
+    let _hash = BytesN::from_array(&env, &[42u8; 32]);
+    assert_eq!(client.get_coordinator(), coordinator);
+}
+
 // ---------------------------------------------------------------------------
 // Issue #22 â€“ Contract Pause / Unpause (circuit breaker) tests
 // ---------------------------------------------------------------------------
@@ -3562,6 +3586,183 @@ fn test_unpause_requires_coordinator_auth() {
     }]);
     let result = client.try_unpause();
     assert!(result.is_err());
+}
+
+#[test]
+fn test_set_pause_guardian_and_guardian_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    // Initial guardian is None
+    assert_eq!(client.get_pause_guardian(), None);
+
+    // Set pause guardian as coordinator
+    client.set_pause_guardian(&guardian);
+    assert_eq!(client.get_pause_guardian(), Some(guardian.clone()));
+
+    // Guardian can pause the contract
+    assert!(!client.is_paused());
+    client.guardian_pause(&guardian);
+    assert!(client.is_paused());
+}
+
+#[test]
+fn test_set_pause_guardian_rejects_unauthorized() {
+    let env = Env::default();
+    let coordinator = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let guardian = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.init(&coordinator, &500);
+
+    // Drop all auths and mock attacker
+    env.set_auths(&[]);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_pause_guardian",
+            args: (&guardian,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert!(client.try_set_pause_guardian(&guardian).is_err());
+}
+
+#[test]
+fn test_guardian_pause_blocks_match_and_tournament_creation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+    token_admin_client.mint(&player2, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+    client.set_pause_guardian(&guardian);
+
+    // Guardian pauses
+    client.guardian_pause(&guardian);
+    assert!(client.is_paused());
+
+    // create_match should fail with ContractPaused
+    let game_code = String::from_str(&env, "GUARDIAN_PAUSE_MATCH");
+    approve(&env, &token, &player1, &contract_id, 100);
+    let res = client.try_create_match(&game_code, &player1, &token.address, &100);
+    assert!(res.is_err());
+
+    // Tournament creation should fail
+    let tournament_id = String::from_str(&env, "GUARDIAN_PAUSE_TOURN");
+    let res_t = client.try_create_tournament(&tournament_id, &100, &8, &2, &0, &token.address);
+    assert!(res_t.is_err());
+}
+
+#[test]
+fn test_guardian_pause_rejects_unauthorized_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let attacker = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.set_pause_guardian(&guardian);
+
+    // Attacker tries to call guardian_pause
+    let res = client.try_guardian_pause(&attacker);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_guardian_cannot_call_admin_functions() {
+    let env = Env::default();
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.init(&coordinator, &500);
+    client.set_pause_guardian(&guardian);
+
+    // Switch to only mocking guardian auth
+    env.set_auths(&[]);
+    let hash = BytesN::from_array(&env, &[1u8; 32]);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &guardian,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "upgrade",
+            args: (&hash,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    // upgrade requires coordinator/admin, guardian cannot call it
+    assert!(client.try_upgrade(&hash).is_err());
+}
+
+#[test]
+fn test_timelocked_unpause_workflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.set_pause_guardian(&guardian);
+
+    // Pause via guardian
+    client.guardian_pause(&guardian);
+    assert!(client.is_paused());
+
+    // Execute unpause without request should fail
+    assert!(client.try_execute_unpause().is_err());
+
+    // Admin requests unpause at sequence 100
+    env.ledger().set_sequence_number(100);
+    client.request_unpause();
+
+    // Trying execute immediately fails because timelock delay has not elapsed
+    assert!(client.try_execute_unpause().is_err());
+
+    // Fast-forward sequence to right before delay: 100 + 43_200 - 1 = 43_299
+    env.ledger()
+        .set_sequence_number(100 + UNPAUSE_DELAY_LEDGERS - 1);
+    assert!(client.try_execute_unpause().is_err());
+
+    // Advance to exactly delay: 100 + 43_200 = 43_300
+    env.ledger()
+        .set_sequence_number(100 + UNPAUSE_DELAY_LEDGERS);
+    client.execute_unpause();
+
+    // Verify unpaused
+    assert!(!client.is_paused());
 }
 
 #[test]

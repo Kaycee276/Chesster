@@ -206,6 +206,84 @@ async function reconcileGameState(deps, gameCode, lastKnownMoveIndex, viewerColo
 	};
 }
 
+/**
+ * WebSocket event emission helper for queue expansion updates (Issue #552).
+ * Emits `QUEUE_EXPANDED` to the client when a matchmaking ticket's wait time
+ * reaches an expansion threshold (15s, 30s, 45s).
+ *
+ * @param {object} io - Socket.io server instance or socket
+ * @param {object} payload - { socketId, userId, ticketId, elapsedSeconds, searchRadius, thresholdSeconds }
+ * @returns {boolean} true if emitted, false otherwise
+ */
+function emitQueueExpanded(io, payload) {
+	if (!io || !payload) return false;
+	const eventPayload = {
+		userId: payload.userId,
+		ticketId: payload.ticketId || null,
+		elapsedSeconds: payload.elapsedSeconds,
+		searchRadius: payload.searchRadius,
+		thresholdSeconds: payload.thresholdSeconds,
+		message: "Widening search parameters...",
+	};
+
+	if (payload.socketId && typeof io.to === "function") {
+		io.to(payload.socketId).emit("QUEUE_EXPANDED", eventPayload);
+		return true;
+	} else if (typeof io.emit === "function") {
+		io.emit("QUEUE_EXPANDED", eventPayload);
+		return true;
+	}
+	return false;
+}
+
+/**
+ * In-memory move submission timestamp tracking (Issue #553).
+ * Captures the authoritative server timestamp (ms) per move submission.
+ */
+const moveSubmissionTimestamps = new Map();
+
+/**
+ * Record millisecond timestamp for a move submission.
+ * @param {string} gameCode
+ * @param {string} color
+ * @param {number} [timestampMs=Date.now()]
+ * @returns {number} recorded timestamp in ms
+ */
+function recordMoveSubmissionTimestamp(gameCode, color, timestampMs = Date.now()) {
+	if (!gameCode || !color) return timestampMs;
+	const key = `${gameCode}:${color}`;
+	if (!moveSubmissionTimestamps.has(key)) {
+		moveSubmissionTimestamps.set(key, []);
+	}
+	const timestamps = moveSubmissionTimestamps.get(key);
+	timestamps.push(timestampMs);
+	return timestampMs;
+}
+
+/**
+ * Retrieve recorded move submission timestamps.
+ * @param {string} gameCode
+ * @param {string} color
+ * @returns {Array<number>}
+ */
+function getMoveSubmissionTimestamps(gameCode, color) {
+	const key = `${gameCode}:${color}`;
+	return moveSubmissionTimestamps.get(key) || [];
+}
+
+/**
+ * Clear recorded timestamps for a game.
+ * @param {string} gameCode
+ */
+function clearMoveSubmissionTimestamps(gameCode) {
+	if (!gameCode) return;
+	for (const key of moveSubmissionTimestamps.keys()) {
+		if (key.startsWith(`${gameCode}:`)) {
+			moveSubmissionTimestamps.delete(key);
+		}
+	}
+}
+
 module.exports = {
 	verifySocketToken,
 	resolvePlayerColor,
@@ -213,4 +291,8 @@ module.exports = {
 	handleDisconnect,
 	handleReconnect,
 	reconcileGameState,
+	emitQueueExpanded,
+	recordMoveSubmissionTimestamp,
+	getMoveSubmissionTimestamps,
+	clearMoveSubmissionTimestamps,
 };

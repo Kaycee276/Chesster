@@ -33,6 +33,8 @@ pub const EMERGENCY_DRAIN_TIMELOCK_SECS: u64 = 604_800;
 /// Duration (in seconds) an Active match may go without coordinator resolution before either
 /// player may claim an emergency self-refund (72 hours) (Issue #433).
 pub const EMERGENCY_TIMEOUT_SECONDS: u64 = 259_200;
+/// Timelock delay in ledgers for unpause proposal execution (6 hours ~ 43,200 ledgers) (Issue #550).
+pub const UNPAUSE_DELAY_LEDGERS: u32 = 43_200;
 pub const DEFAULT_MIN_WAGER: i128 = 1;
 /// Default maximum allowable wager amount (maximum positive i128).
 pub const DEFAULT_MAX_WAGER: i128 = i128::MAX;
@@ -173,10 +175,18 @@ pub enum EscrowErrorExt {
     SideBetsNotSettled = 54,
     /// Side bet token differs from the match wager token (Issue #459).
     SideBetTokenMismatch = 55,
+    /// Contract is already initialized (Issue #551).
+    AlreadyInitialized = 56,
+    /// Timelock delay has not expired yet (Issue #550).
+    TimelockNotExpired = 57,
+    /// Caller is not the designated pause guardian or admin (Issue #550).
+    NotPauseGuardian = 58,
+    /// Unpause request not found or not initiated (Issue #550).
+    UnpauseNotRequested = 59,
     /// Self-play matches between identical player addresses are rejected.
-    SelfMatchNotAllowed = 56,
+    SelfMatchNotAllowed = 60,
     /// Provided address parameter is invalid or null.
-    InvalidAddress = 57,
+    InvalidAddress = 61,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -1071,6 +1081,16 @@ pub enum DataKey {
     SideBetStake(String, Address, PlayerColor),
     /// Protocol fee (bps) taken from losing spectator side pools (Issue #459).
     SideBetFeeBps,
+    /// Explicit initialization flag to prevent re-initialization (Issue #551).
+    Initialized,
+    /// Pause guardian address authorized to execute emergency pause (Issue #550).
+    PauseGuardian,
+    /// Ledger sequence until which contract is paused, if configured (Issue #550).
+    PausedUntilLedger,
+    /// Ledger sequence when admin requested unpause (Issue #550).
+    UnpauseRequestedLedger,
+    /// Contract pause state boolean key (Issue #550).
+    IsPaused,
     /// Protocol fee discount tier of an organizer (Issue #578).
     OrganizerTier(Address),
 }
@@ -1098,7 +1118,13 @@ impl ChessterEscrow {
     /// * `coordinator` - Coordinator wallet address.
     /// * `admin_bps` - Admin fee in basis points (500 = 5%).
     pub fn init(env: Env, coordinator: Address, admin_bps: u32) {
+        if env.storage().instance().has(&DataKey::Initialized)
+            || env.storage().instance().has(&symbol_short!("coord"))
+        {
+            panic_with_error!(&env, EscrowErrorExt::AlreadyInitialized);
+        }
         coordinator.require_auth();
+        env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage()
             .instance()
             .set(&symbol_short!("coord"), &coordinator);
@@ -1153,6 +1179,7 @@ impl ChessterEscrow {
         env.storage()
             .instance()
             .set(&Symbol::new(&env, "paused"), &true);
+        env.storage().instance().set(&DataKey::IsPaused, &true);
         Self::bump_instance_ttl(&env);
         env.events().publish(
             (Symbol::new(&env, "v1"), symbol_short!("paused")),
@@ -1170,7 +1197,92 @@ impl ChessterEscrow {
         env.storage()
             .instance()
             .set(&Symbol::new(&env, "paused"), &false);
+        env.storage().instance().set(&DataKey::IsPaused, &false);
         Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (Symbol::new(&env, "v1"), symbol_short!("unpause")),
+            ContractUnpausedEvent { coordinator },
+        );
+    }
+
+    /// Sets the designated pause guardian address (Admin / coordinator only) (Issue #550).
+    pub fn set_pause_guardian(env: Env, guardian: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::PauseGuardian, &guardian);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Retrieves the configured pause guardian address, if set (Issue #550).
+    pub fn get_pause_guardian(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PauseGuardian)
+    }
+
+    /// Allows either the coordinator (admin) or designated pause guardian to immediately pause the contract (Issue #550).
+    pub fn guardian_pause(env: Env, caller: Address) {
+        caller.require_auth();
+        let coordinator = Self::get_coordinator(env.clone());
+        let guardian = Self::get_pause_guardian(env.clone());
+
+        let is_admin = caller == coordinator;
+        let is_guardian = match guardian {
+            Some(ref g) => *g == caller,
+            None => false,
+        };
+
+        if !is_admin && !is_guardian {
+            panic_with_error!(&env, EscrowErrorExt::NotPauseGuardian);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &true);
+        env.storage().instance().set(&DataKey::IsPaused, &true);
+        Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (Symbol::new(&env, "v1"), symbol_short!("paused")),
+            ContractPausedEvent {
+                coordinator: guardian.unwrap_or(coordinator),
+            },
+        );
+    }
+
+    /// Requests an unpause, initiating the timelock countdown (Admin / coordinator only) (Issue #550).
+    pub fn request_unpause(env: Env) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        let current_ledger = env.ledger().sequence();
+        env.storage()
+            .instance()
+            .set(&DataKey::UnpauseRequestedLedger, &current_ledger);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Executes the pending unpause once the timelock delay has elapsed (Issue #550).
+    pub fn execute_unpause(env: Env) {
+        let requested_ledger: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::UnpauseRequestedLedger)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::UnpauseNotRequested));
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < requested_ledger.saturating_add(UNPAUSE_DELAY_LEDGERS) {
+            panic_with_error!(&env, EscrowErrorExt::TimelockNotExpired);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &false);
+        env.storage().instance().set(&DataKey::IsPaused, &false);
+        env.storage()
+            .instance()
+            .remove(&DataKey::UnpauseRequestedLedger);
+        Self::bump_instance_ttl(&env);
+
+        let coordinator = Self::get_coordinator(env.clone());
         env.events().publish(
             (Symbol::new(&env, "v1"), symbol_short!("unpause")),
             ContractUnpausedEvent { coordinator },
@@ -1185,6 +1297,9 @@ impl ChessterEscrow {
     /// # Returns
     /// * `bool` - `true` if the contract is paused, `false` otherwise.
     pub fn is_paused(env: Env) -> bool {
+        if let Some(is_paused) = env.storage().instance().get(&DataKey::IsPaused) {
+            return is_paused;
+        }
         env.storage()
             .instance()
             .get(&Symbol::new(&env, "paused"))
@@ -2542,7 +2657,10 @@ impl ChessterEscrow {
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let coordinator = Self::get_coordinator(env.clone());
         coordinator.require_auth();
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.events()
+            .publish((symbol_short!("upgraded"), coordinator), new_wasm_hash);
     }
 
     // -----------------------------------------------------------------------

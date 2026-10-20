@@ -1,5 +1,6 @@
 const matchmakingService = require("../services/matchmakingService");
-const { MatchmakingService, getPlayerTolerance, MATCHMAKING_CONFIG } = matchmakingService;
+const { MatchmakingService, getPlayerTolerance, calculateEloTolerance, MATCHMAKING_CONFIG, SBMM_CONFIG } = matchmakingService;
+const { emitQueueExpanded } = require("../socket/moveAuthority");
 
 describe("MatchmakingService", () => {
 	beforeEach(() => {
@@ -631,6 +632,139 @@ describe("MatchmakingService", () => {
 			const matchesAfterWait = queueInstance.processQueue(Date.now() + 300_000);
 			expect(matchesAfterWait).toHaveLength(0);
 			expect(queueInstance.getQueueSize()).toBe(2);
+		});
+	});
+
+	describe("Issue #552: Skill-based matchmaking (SBMM) expansion window over wait time", () => {
+		const T0 = 1_700_000_000_000;
+		const sec = (s) => T0 + s * 1000;
+
+		describe("calculateEloTolerance", () => {
+			test("calculates predictable bracket expansion over wait time", () => {
+				// 0-14s: 75 Elo
+				expect(calculateEloTolerance(T0, 75, 400, sec(0))).toBe(75);
+				expect(calculateEloTolerance(T0, 75, 400, sec(14))).toBe(75);
+
+				// 15-29s: 150 Elo
+				expect(calculateEloTolerance(T0, 75, 400, sec(15))).toBe(150);
+				expect(calculateEloTolerance(T0, 75, 400, sec(29))).toBe(150);
+
+				// 30-44s: 225 / 250 Elo
+				expect(calculateEloTolerance(T0, 75, 400, sec(30))).toBe(225);
+				expect(calculateEloTolerance(T0, 75, 400, sec(44))).toBe(225);
+
+				// 45s+: 300 Elo, clamped at 400
+				expect(calculateEloTolerance(T0, 75, 400, sec(45))).toBe(300);
+				expect(calculateEloTolerance(T0, 75, 400, sec(60))).toBe(375);
+				expect(calculateEloTolerance(T0, 75, 400, sec(75))).toBe(400); // capped at 400
+				expect(calculateEloTolerance(T0, 75, 400, sec(3600))).toBe(400);
+			});
+
+			test("uses default arguments when not specified", () => {
+				expect(calculateEloTolerance(T0, undefined, undefined, sec(0))).toBe(75);
+				expect(calculateEloTolerance(T0, undefined, undefined, sec(15))).toBe(150);
+				expect(calculateEloTolerance(T0, undefined, undefined, sec(100))).toBe(400);
+			});
+
+			test("exposes SBMM_CONFIG", () => {
+				expect(SBMM_CONFIG).toEqual({
+					BASE_TOLERANCE: 75,
+					MAX_TOLERANCE: 400,
+					TOLERANCE_STEP: 75,
+					EXPANSION_THRESHOLDS_SEC: [15, 30, 45],
+				});
+			});
+		});
+
+		describe("canPair with max tolerance policy (Issue #552)", () => {
+			test("allows pairing when |Elo1 - Elo2| <= Math.max(Tolerance(P1), Tolerance(P2))", () => {
+				const service = new MatchmakingService();
+				const p1 = { userId: "p1", elo: 1500, wagerTier: "free", queuedAt: T0 }; // waited 60s -> tol 250
+				const p2 = { userId: "p2", elo: 1700, wagerTier: "free", queuedAt: sec(60) }; // waited 0s -> tol 50
+
+				// Gap is 200. Under mutual (min) tolerance: gap 200 > min(250, 50) = 50 -> false
+				expect(service.canPair(p1, p2, sec(60), false)).toBe(false);
+
+				// Under max tolerance policy: gap 200 <= max(250, 50) = 250 -> true
+				expect(service.canPair(p1, p2, sec(60), true)).toBe(true);
+			});
+		});
+
+		describe("checkQueueExpansions & QUEUE_EXPANDED socket notification", () => {
+			test("triggers expansion notifications at 15s, 30s, and 45s boundaries without duplicates", () => {
+				const service = new MatchmakingService();
+				service.addToQueue({
+					userId: "user_expansion",
+					socketId: "socket_expansion",
+					elo: 1600,
+					ticketId: "ticket_exp_1",
+					queuedAt: T0,
+				});
+
+				// At t = 10s: no threshold crossed
+				const exp10 = service.checkQueueExpansions(sec(10));
+				expect(exp10).toHaveLength(0);
+
+				// At t = 15s: 15s threshold crossed
+				const onExpandMock = jest.fn();
+				const exp15 = service.checkQueueExpansions(sec(15), onExpandMock);
+				expect(exp15).toHaveLength(1);
+				expect(exp15[0]).toMatchObject({
+					userId: "user_expansion",
+					socketId: "socket_expansion",
+					ticketId: "ticket_exp_1",
+					thresholdSeconds: 15,
+					elapsedSeconds: 15,
+					searchRadius: 150,
+				});
+				expect(onExpandMock).toHaveBeenCalledTimes(1);
+
+				// Subsequent check at 20s does not re-emit the 15s threshold
+				const exp20 = service.checkQueueExpansions(sec(20));
+				expect(exp20).toHaveLength(0);
+
+				// At t = 30s: 30s threshold crossed
+				const exp30 = service.checkQueueExpansions(sec(30));
+				expect(exp30).toHaveLength(1);
+				expect(exp30[0].thresholdSeconds).toBe(30);
+
+				// At t = 45s: 45s threshold crossed
+				const exp45 = service.checkQueueExpansions(sec(45));
+				expect(exp45).toHaveLength(1);
+				expect(exp45[0].thresholdSeconds).toBe(45);
+
+				// At t = 60s: no further threshold above 45s
+				const exp60 = service.checkQueueExpansions(sec(60));
+				expect(exp60).toHaveLength(0);
+			});
+
+			test("emitQueueExpanded emits QUEUE_EXPANDED event to client socket", () => {
+				const mockSocket = { emit: jest.fn() };
+				const mockIo = {
+					to: jest.fn().mockReturnValue(mockSocket),
+				};
+
+				const payload = {
+					userId: "user_1",
+					socketId: "socket_abc",
+					ticketId: "ticket_123",
+					elapsedSeconds: 15,
+					searchRadius: 150,
+					thresholdSeconds: 15,
+				};
+
+				const emitted = emitQueueExpanded(mockIo, payload);
+				expect(emitted).toBe(true);
+				expect(mockIo.to).toHaveBeenCalledWith("socket_abc");
+				expect(mockSocket.emit).toHaveBeenCalledWith("QUEUE_EXPANDED", {
+					userId: "user_1",
+					ticketId: "ticket_123",
+					elapsedSeconds: 15,
+					searchRadius: 150,
+					thresholdSeconds: 15,
+					message: "Widening search parameters...",
+				});
+			});
 		});
 	});
 });
