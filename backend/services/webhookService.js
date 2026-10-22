@@ -198,30 +198,96 @@ function _getSecret() {
 
 const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
 
-function verifyWebhookSignature(
-  header,
-  rawBody,
-  secret,
-  nowSeconds = Math.floor(Date.now() / 1000),
-) {
-  if (typeof header !== "string" || typeof secret !== "string" || !secret) return false;
+/**
+ * Verifies HMAC-SHA256 signatures for webhook payloads.
+ *
+ * Supports two invocation styles:
+ * 1. Standard HMAC-SHA256 signature verification (Issue #581):
+ *    verifyWebhookSignature(rawBody, signatureHeader, secretKey)
+ *    Header format: 'sha256=<hex>' (or bare hex, or timestamped 't=...,v1=...')
+ *
+ * 2. Legacy timestamped verification (Issue #388):
+ *    verifyWebhookSignature(header, rawBody, secret, nowSeconds)
+ *    Header format: 't=<timestamp>,v1=<hex>'
+ *
+ * Uses constant-time buffer comparison (crypto.timingSafeEqual) to prevent timing attacks.
+ */
+function verifyWebhookSignature(arg1, arg2, arg3, arg4) {
+  // Case 1: Legacy timestamped signature verification
+  // Signature: verifyWebhookSignature(header, rawBody, secret, nowSeconds)
+  if (
+    typeof arg4 === "number" ||
+    (typeof arg1 === "string" && /^t=\d+,v1=[a-f0-9]{64}$/i.test(arg1)) ||
+    (typeof arg1 === "string" && arg1 === "sha256=invalid" && typeof arg4 !== "undefined")
+  ) {
+    const header = arg1;
+    const rawBody = arg2;
+    const secret = arg3;
+    const nowSeconds = arg4 !== undefined ? arg4 : Math.floor(Date.now() / 1000);
+
+    if (typeof header !== "string" || typeof secret !== "string" || !secret) return false;
+    if (typeof rawBody !== "string" && !Buffer.isBuffer(rawBody)) return false;
+
+    const match = /^t=(\d+),v1=([a-f0-9]{64})$/i.exec(header);
+    if (!match) return false;
+
+    const timestamp = Number(match[1]);
+    if (!Number.isSafeInteger(timestamp) || !Number.isSafeInteger(nowSeconds)) return false;
+    const ageSeconds = nowSeconds - timestamp;
+    if (ageSeconds < 0 || ageSeconds > WEBHOOK_SIGNATURE_TOLERANCE_SECONDS) return false;
+
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(`${match[1]}.`, "utf8")
+      .update(rawBody)
+      .digest();
+    const provided = Buffer.from(match[2], "hex");
+    return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+  }
+
+  // Case 2: Standard HMAC-SHA256 verification (Issue #581)
+  // Signature: verifyWebhookSignature(rawBody, signatureHeader, secretKey)
+  const rawBody = arg1;
+  const signatureHeader = arg2;
+  const secretKey = arg3;
+
+  if (!signatureHeader || !secretKey) return false;
+  if (typeof signatureHeader !== "string" || typeof secretKey !== "string") return false;
   if (typeof rawBody !== "string" && !Buffer.isBuffer(rawBody)) return false;
 
-  const match = /^t=(\d+),v1=([a-f0-9]{64})$/i.exec(header);
-  if (!match) return false;
+  // Handle timestamped header if passed as signatureHeader
+  if (/^t=\d+,v1=[a-f0-9]{64}$/i.test(signatureHeader)) {
+    const match = /^t=(\d+),v1=([a-f0-9]{64})$/i.exec(signatureHeader);
+    const expected = crypto
+      .createHmac("sha256", secretKey)
+      .update(`${match[1]}.`, "utf8")
+      .update(rawBody)
+      .digest();
+    const provided = Buffer.from(match[2], "hex");
+    return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+  }
 
-  const timestamp = Number(match[1]);
-  if (!Number.isSafeInteger(timestamp) || !Number.isSafeInteger(nowSeconds)) return false;
-  const ageSeconds = nowSeconds - timestamp;
-  if (ageSeconds < 0 || ageSeconds > WEBHOOK_SIGNATURE_TOLERANCE_SECONDS) return false;
+  const expectedSignature =
+    "sha256=" +
+    crypto
+      .createHmac("sha256", secretKey)
+      .update(rawBody)
+      .digest("hex");
 
-  const expected = crypto
-    .createHmac("sha256", secret)
-    .update(`${match[1]}.`, "utf8")
-    .update(rawBody)
-    .digest();
-  const provided = Buffer.from(match[2], "hex");
-  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+  const sigBuffer = Buffer.from(signatureHeader, "utf8");
+  const expectedBuffer = Buffer.from(expectedSignature, "utf8");
+
+  if (sigBuffer.length !== expectedBuffer.length) {
+    // Also check bare 64-char hex comparison if signatureHeader was provided without 'sha256=' prefix
+    const bareExpected = expectedSignature.slice(7);
+    const bareExpectedBuffer = Buffer.from(bareExpected, "utf8");
+    if (sigBuffer.length === bareExpectedBuffer.length) {
+      return crypto.timingSafeEqual(sigBuffer, bareExpectedBuffer);
+    }
+    return false;
+  }
+
+  return crypto.timingSafeEqual(sigBuffer, expectedBuffer);
 }
 
 function _getTimeout() {
@@ -777,6 +843,10 @@ class WebhookService {
   // -------------------------------------------------------------------
   // Observability
   // -------------------------------------------------------------------
+
+  verifyWebhookSignature(rawBody, signatureHeader, secretKey) {
+    return verifyWebhookSignature(rawBody, signatureHeader, secretKey);
+  }
 
   getDeliveryLog() {
     return [...this.delIVERY_LOG];

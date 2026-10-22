@@ -124,7 +124,13 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  }),
+);
 app.use(fetchMetadataPolicy);
 app.use(csrfProtection);
 
