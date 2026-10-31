@@ -3399,9 +3399,6 @@ impl ChessterEscrow {
         if env.storage().persistent().has(&game_code) {
             panic_with_error!(&env, EscrowError::MatchAlreadyExists);
         }
-        if !Self::is_token_whitelisted(env.clone(), token.clone()) {
-            panic_with_error!(&env, EscrowError::TokenNotWhitelisted);
-        }
         Self::validate_wager_amount(&env, &token, amount);
 
         let player1_key = (Symbol::new(&env, "act_m"), player1.clone());

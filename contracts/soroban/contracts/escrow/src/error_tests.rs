@@ -27,8 +27,12 @@ fn escrow_error_codes_are_stable_and_unique() {
     assert_eq!(EscrowErrorExt::MatchNotInTournament as u32, 53);
     assert_eq!(EscrowErrorExt::SideBetsNotSettled as u32, 54);
     assert_eq!(EscrowErrorExt::SideBetTokenMismatch as u32, 55);
-    assert_eq!(EscrowErrorExt::SelfMatchNotAllowed as u32, 56);
-    assert_eq!(EscrowErrorExt::InvalidAddress as u32, 57);
+    assert_eq!(EscrowErrorExt::AlreadyInitialized as u32, 56);
+    assert_eq!(EscrowErrorExt::TimelockNotExpired as u32, 57);
+    assert_eq!(EscrowErrorExt::NotPauseGuardian as u32, 58);
+    assert_eq!(EscrowErrorExt::UnpauseNotRequested as u32, 59);
+    assert_eq!(EscrowErrorExt::SelfMatchNotAllowed as u32, 60);
+    assert_eq!(EscrowErrorExt::InvalidAddress as u32, 61);
 }
 
 #[test]
