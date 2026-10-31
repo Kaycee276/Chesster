@@ -46,7 +46,6 @@
         "proxy-addr": "^2.0.8",
         "redis": "^6.2.1",
         "socket.io": "^4.8.3",
-        "stellar-sdk": "^13.3.0",
         "swagger-ui-express": "^5.0.1",
         "zod": "^3.23.8"
     },

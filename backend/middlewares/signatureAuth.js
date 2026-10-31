@@ -1,8 +1,8 @@
 let Keypair;
 try {
-  Keypair = require("stellar-sdk").Keypair;
-} catch (e) {
   Keypair = require("@stellar/stellar-sdk").Keypair;
+} catch (e) {
+  Keypair = require("stellar-sdk").Keypair;
 }
 
 const { getRedisClient } = require("../config/redis");

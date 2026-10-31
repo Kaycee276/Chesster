@@ -1,6 +1,6 @@
 const request = require("supertest");
 const express = require("express");
-const { Keypair } = require("stellar-sdk");
+const { Keypair } = require("@stellar/stellar-sdk");
 const {
   verifyRequestSignature,
   verifyCoordinatorSignature,
