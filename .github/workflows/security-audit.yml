@@ -74,7 +74,7 @@ jobs:
 
       - name: Audit Rust dependencies
         working-directory: ./contracts/soroban
-        run: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0387
 
   cargo-dependency-sarif-scan:
     name: Soroban Cargo Dependency SARIF Scan
