@@ -66,6 +66,8 @@ vi.mock("../../src/services/soundService", () => ({
     gameEnd: vi.fn(),
     lowTimeTick: vi.fn(),
     playAlert: vi.fn(),
+    getSoundPack: vi.fn().mockReturnValue("standard"),
+    setSoundPack: vi.fn(),
   },
 }));
 

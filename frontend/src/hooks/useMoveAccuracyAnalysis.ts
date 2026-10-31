@@ -278,7 +278,6 @@ export function useMoveAccuracyAnalysis(
 			evaluated: uniqueFensRef.current.length,
 			result: accuracyRes,
 			evaluations: evals,
-			result: analyzeAccuracy(evals),
 			aborted: false,
 		});
 	};

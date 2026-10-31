@@ -205,12 +205,14 @@ export function toEngineFen(board: string[][], turn: "white" | "black"): string 
  * Returns null if the move string is invalid.
  */
 export function uciMoveToAlgebraic(uciMove: string): string | null {
-	if (!uciMove || uciMove.length < 4) return null;
-	const from = uciMove.slice(0, 2);
-	const to = uciMove.slice(2, 4);
-	const promotion = uciMove.length > 4 ? uciMove[4].toUpperCase() : "";
-	const promotionStr = promotion ? `=${promotion}` : "";
-	return `${from}-${to}${promotionStr}`;
+	if (!uciMove) return null;
+	const match = uciMove.match(/^([a-h][1-8])([a-h][1-8])([qrbnQRBN])?$/);
+	if (!match) return null;
+	const [, from, to, promotion] = match;
+	if (promotion) {
+		return `${to}=${promotion.toUpperCase()}`;
+	}
+	return `${from}-${to}`;
 }
 
 /**
@@ -223,7 +225,11 @@ export function formatPrincipalVariation(pv: string[] | undefined): string | nul
 	const algebraic = pv
 		.map((move) => uciMoveToAlgebraic(move))
 		.filter((m): m is string => m !== null);
-	return algebraic.length > 0 ? algebraic.join(" ") : null;
+	if (algebraic.length === 0) return null;
+	if (algebraic.length > 2) {
+		return `${algebraic[0]} ...`;
+	}
+	return algebraic.join(" ");
 }
 
 /**

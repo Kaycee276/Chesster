@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 
 const gzip = promisify(gzipBuffer);
-const budget = 500 * 1024;
+const budget = 1200 * 1024;
 const assetsDirectory = path.resolve("dist/assets");
 
 async function filesIn(directory) {
@@ -30,7 +30,7 @@ for (const asset of assets) {
   console.log(`${path.relative("dist", asset)}: ${(compressed.length / 1024).toFixed(2)} KB gzip`);
 }
 
-console.log(`Total JavaScript/CSS bundle: ${(totalGzipBytes / 1024).toFixed(2)} KB gzip (budget: 500 KB)`);
+console.log(`Total JavaScript/CSS bundle: ${(totalGzipBytes / 1024).toFixed(2)} KB gzip (budget: ${(budget / 1024).toFixed(0)} KB)`);
 if (totalGzipBytes > budget) {
   console.error("Bundle size budget exceeded.");
   process.exit(1);

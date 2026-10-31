@@ -7,6 +7,7 @@ import type { ChatMessage } from "../api/socket";
 import { useToastStore } from "./toastStore";
 import { soundService } from "../services/soundService";
 import type { GameState, MoveRecord } from "../types/game";
+import type { PieceSetKey } from "./themeStore";
 
 // ── Module-level local countdown timer ────────────────────────────────────────
 let _timerInterval: ReturnType<typeof setInterval> | null = null;
@@ -108,8 +109,8 @@ interface GameStore {
   isMoveConfirmationEnabled: boolean;
   toggleMoveConfirmation: () => void;
   // Piece set preference for rendering (Issue #495)
-  pieceSet: "classic" | "neo" | "wood";
-  setPieceSet: (set: "classic" | "neo" | "wood") => void;
+  pieceSet: PieceSetKey | "classic";
+  setPieceSet: (set: PieceSetKey | "classic") => void;
   masterVolume: number;
   setMasterVolume: (volume: number) => void;
   // Settings modal visibility
@@ -180,6 +181,7 @@ export const useGameStore = create<GameStore>()(
       // Network state (Issue #401)
       pingMs: 0,
       socketStatus: "disconnected",
+      reconnectAttempts: 0,
       blindfoldMode: "none" as "none" | "white" | "black" | "all",
       isBlindfoldMode: false,
       isStreamerMode: false,
@@ -205,7 +207,7 @@ export const useGameStore = create<GameStore>()(
         set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
       toggleMoveConfirmation: () =>
         set((s) => ({ isMoveConfirmationEnabled: !s.isMoveConfirmationEnabled })),
-      setPieceSet: (set_value: "classic" | "neo" | "wood") =>
+      setPieceSet: (set_value: PieceSetKey | "classic") =>
         set({ pieceSet: set_value }),
       setMasterVolume: (volume: number) => {
         const normalized = Math.min(1, Math.max(0, volume));

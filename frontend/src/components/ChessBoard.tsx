@@ -34,7 +34,7 @@ import {
   Moon,
   Laptop,
 } from "lucide-react";
-import { BOARD_THEMES, PIECE_SETS, useThemeStore } from "../store/themeStore";
+import { BOARD_THEMES, PIECE_SETS, useThemeStore, type PieceSetKey } from "../store/themeStore";
 
 const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> = [
   { key: "wood", name: "Wood", description: "Classic wooden piece sounds" },
@@ -74,8 +74,22 @@ import MoveInputBar from "./MoveInputBar";
 
 
 // Piece set configurations for different visual styles
-const PIECE_SET_SYMBOLS: Record<"classic" | "neo" | "wood", Record<string, string>> = {
+const PIECE_SET_SYMBOLS: Record<PieceSetKey | "classic", Record<string, string>> = {
   classic: {
+    K: "♔",
+    Q: "♕",
+    R: "♖",
+    B: "♗",
+    N: "♘",
+    P: "♙",
+    k: "♚",
+    q: "♛",
+    r: "♜",
+    b: "♝",
+    n: "♞",
+    p: "♟",
+  },
+  standard: {
     K: "♔",
     Q: "♕",
     R: "♖",
@@ -104,6 +118,20 @@ const PIECE_SET_SYMBOLS: Record<"classic" | "neo" | "wood", Record<string, strin
     p: "♟",
   },
   wood: {
+    K: "♔",
+    Q: "♕",
+    R: "♖",
+    B: "♗",
+    N: "♘",
+    P: "♙",
+    k: "♚",
+    q: "♛",
+    r: "♜",
+    b: "♝",
+    n: "♞",
+    p: "♟",
+  },
+  pixel: {
     K: "♔",
     Q: "♕",
     R: "♖",
@@ -303,7 +331,7 @@ function PlayerAvatar({ color }: { color: "white" | "black" }) {
   );
 }
 
-function CapturedIcons({ captured, pieceSet }: { captured: string[]; pieceSet: "classic" | "neo" | "wood" }) {
+function CapturedIcons({ captured, pieceSet }: { captured: string[]; pieceSet: PieceSetKey | "classic" }) {
   if (captured.length === 0) return null;
   const symbols = PIECE_SET_SYMBOLS[pieceSet];
   return (
@@ -411,8 +439,6 @@ function ChessBoardInner() {
     if (blindfoldMode === "all") return true;
     if (blindfoldMode === "white" && piece === piece.toUpperCase()) return true;
     if (blindfoldMode === "black" && piece === piece.toLowerCase()) return true;
-    if (blindfoldMode === "none") return false;
-    // Fallback for legacy isBlindfoldMode boolean
     if (isBlindfoldMode) return true;
     return false;
   };
@@ -1793,7 +1819,7 @@ function ChessBoardInner() {
         {/* Right: Quick Controls */}
         <div className="flex items-center gap-1 shrink-0">
           {/* Peek button - only show when blindfold mode is active */}
-          {isBlindfoldMode && (
+          {(isBlindfoldMode || (blindfoldMode && blindfoldMode !== "none")) && (
             <button
               onClick={handlePeekClick}
               disabled={isPeeking}

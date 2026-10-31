@@ -1,158 +1,177 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import GameLobby from "../../src/components/GameLobby";
+import { useWalletStore } from "../../src/store/walletStore";
+import { useGameStore } from "../../src/store/gameStore";
 
-// Mock gameStore if needed
-vi.mock("../../src/stores/gameStore", () => ({
+vi.mock("qrcode", () => ({
   default: {
-    createGame: vi.fn(),
-    timeControlSeconds: 180,
+    toDataURL: vi.fn().mockResolvedValue("data:image/png;base64,mockqr"),
   },
 }));
+
+vi.mock("../../src/services/stellarService", () => ({
+  depositXLM: vi.fn().mockResolvedValue("mock-tx-hash"),
+  fetchAccountBalances: vi.fn().mockResolvedValue([{ assetCode: "XLM", balance: "100" }]),
+}));
+
+const renderGameLobby = () => {
+  return render(
+    <MemoryRouter>
+      <GameLobby />
+    </MemoryRouter>
+  );
+};
 
 describe("GameLobby Component Tests", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  test("disables create game button when wager is negative", () => {
-    render(<GameLobby />);
-    const input = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(input, { target: { value: "-5" } });
-    expect(screen.getByRole("button", { name: /create/i })).toBeDisabled();
-  });
-
-  test("disables create game button when wager is empty", () => {
-    render(<GameLobby />);
-    const input = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(input, { target: { value: "" } });
-    expect(screen.getByRole("button", { name: /create/i })).toBeDisabled();
-  });
-
-  test("shows validation error for negative wager amount", () => {
-    render(<GameLobby />);
-    const input = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(input, { target: { value: "-10" } });
-    fireEvent.blur(input);
-    expect(screen.getByText(/wager.*negative|invalid/i)).toBeInTheDocument();
-  });
-
-  test("shows validation error for non-numeric wager input", () => {
-    render(<GameLobby />);
-    const input = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(input, { target: { value: "abc" } });
-    fireEvent.blur(input);
-    expect(screen.getByText(/valid.*number|numeric/i)).toBeInTheDocument();
-  });
-
-  test("clicking time control preset updates time control state", () => {
-    render(<GameLobby />);
-    const blitzButton = screen.getByRole("button", { name: /3.*min.*blitz|blitz.*3/i });
-    fireEvent.click(blitzButton);
-    // Verify selection via UI state (e.g., active class or selected indicator)
-    expect(blitzButton).toHaveClass(/active|selected/);
-  });
-
-  test("clicking bullet preset (1 min) updates time control", () => {
-    render(<GameLobby />);
-    const bulletButton = screen.getByRole("button", { name: /1.*min.*bullet|bullet.*1/i });
-    fireEvent.click(bulletButton);
-    expect(bulletButton).toHaveClass(/active|selected/);
-  });
-
-  test("clicking rapid preset (10 min) updates time control", () => {
-    render(<GameLobby />);
-    const rapidButton = screen.getByRole("button", { name: /10.*min.*rapid|rapid.*10/i });
-    fireEvent.click(rapidButton);
-    expect(rapidButton).toHaveClass(/active|selected/);
+    useWalletStore.setState({
+      isConnected: false,
+      address: null,
+      walletType: null,
+      networkPassphrase: null,
+    });
+    useGameStore.setState({
+      gameCode: null,
+      playerColor: null,
+    });
   });
 
   test("disables create game button when wallet is disconnected", () => {
-    // Mock wallet disconnected state
-    vi.mock("../../src/hooks/useWallet", () => ({
-      default: () => ({ connected: false, publicKey: null }),
-    }));
-    
-    render(<GameLobby />);
-    expect(screen.getByRole("button", { name: /create/i })).toBeDisabled();
-  });
-
-  test("shows warning when wager exceeds available balance", () => {
-    // Mock wallet with low balance
-    vi.mock("../../src/hooks/useWallet", () => ({
-      default: () => ({ connected: true, balance: 50 }),
-    }));
-    
-    render(<GameLobby />);
-    const input = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(input, { target: { value: "100" } });
-    fireEvent.blur(input);
-    expect(screen.getByText(/insufficient.*balance|exceeds.*balance/i)).toBeInTheDocument();
-  });
-
-  test("allows valid wager input and enables create button", () => {
-    render(<GameLobby />);
-    const input = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(input, { target: { value: "50" } });
-    expect(screen.getByRole("button", { name: /create/i })).not.toBeDisabled();
-  });
-
-  test("clicking create game calls createGame API with correct parameters", async () => {
-    const mockCreateGame = vi.fn();
-    vi.mock("../../src/stores/gameStore", () => ({
-      default: {
-        createGame: mockCreateGame,
-      },
-    }));
-
-    render(<GameLobby />);
-    
-    // Set up game parameters
-    const wagerInput = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(wagerInput, { target: { value: "100" } });
-    
-    const blitzButton = screen.getByRole("button", { name: /3.*min.*blitz/i });
-    fireEvent.click(blitzButton);
-    
+    renderGameLobby();
     const createButton = screen.getByRole("button", { name: /create/i });
-    fireEvent.click(createButton);
-    
-    expect(mockCreateGame).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wagerAmount: 100,
-        timeControlSeconds: 180,
-      })
-    );
+    expect(createButton).toBeDisabled();
+    expect(screen.getByRole("button", { name: /freighter/i })).toBeInTheDocument();
   });
 
-  test("resets form after successful game creation", async () => {
-    render(<GameLobby />);
-    
-    const wagerInput = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(wagerInput, { target: { value: "50" } });
-    
+  test("enables create game button when wallet is connected", () => {
+    useWalletStore.setState({
+      isConnected: true,
+      address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+    });
+    renderGameLobby();
     const createButton = screen.getByRole("button", { name: /create/i });
-    fireEvent.click(createButton);
-    
-    // Wait for async operation
-    await screen.findByPlaceholderText(/wager/i);
-    
-    // Verify form reset
-    expect(wagerInput).toHaveValue("");
+    expect(createButton).not.toBeDisabled();
   });
 
-  test("prevents form submission with zero wager", () => {
-    render(<GameLobby />);
-    const input = screen.getByPlaceholderText(/wager/i);
-    fireEvent.change(input, { target: { value: "0" } });
-    expect(screen.getByRole("button", { name: /create/i })).toBeDisabled();
+  test("clicking time control preset updates time control state", () => {
+    useWalletStore.setState({
+      isConnected: true,
+      address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+    });
+    renderGameLobby();
+    const fiveMinButton = screen.getAllByRole("button", { name: /5 min/i })[0];
+    fireEvent.click(fiveMinButton);
+    expect(fiveMinButton.className).toContain("border-(--accent-primary)");
   });
 
-  test("handles decimal wager amounts correctly", () => {
-    render(<GameLobby />);
-    const input = screen.getByPlaceholderText(/wager/i);
+  test("toggling custom time control reveals sliders", () => {
+    useWalletStore.setState({
+      isConnected: true,
+      address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+    });
+    renderGameLobby();
+    const customButton = screen.getByText("Custom");
+    fireEvent.click(customButton);
+    expect(screen.getByText(/Base time/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Increment/i).length).toBeGreaterThan(0);
+  });
+
+  test("toggling wager enables the wager amount input", () => {
+    useWalletStore.setState({
+      isConnected: true,
+      address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+    });
+    renderGameLobby();
+
+    const wagerToggle = screen.getByText("Play with wager");
+    fireEvent.click(wagerToggle);
+
+    expect(screen.getByPlaceholderText("e.g. 10")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create game & wager xlm/i })).toBeInTheDocument();
+  });
+
+  test("clicking quick wager preset updates wager input", () => {
+    useWalletStore.setState({
+      isConnected: true,
+      address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+    });
+    renderGameLobby();
+
+    const wagerToggle = screen.getByText("Play with wager");
+    fireEvent.click(wagerToggle);
+
+    const preset25 = screen.getByRole("button", { name: "25 XLM" });
+    fireEvent.click(preset25);
+
+    const input = screen.getByPlaceholderText("e.g. 10") as HTMLInputElement;
+    expect(input.value).toBe("25");
+  });
+
+  test("allows custom numeric and decimal wager input", () => {
+    useWalletStore.setState({
+      isConnected: true,
+      address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+    });
+    renderGameLobby();
+
+    const wagerToggle = screen.getByText("Play with wager");
+    fireEvent.click(wagerToggle);
+
+    const input = screen.getByPlaceholderText("e.g. 10");
     fireEvent.change(input, { target: { value: "10.5" } });
-    expect(input).toHaveValue("10.5");
-    expect(screen.getByRole("button", { name: /create/i })).not.toBeDisabled();
+    expect(input).toHaveValue(10.5);
+  });
+
+  test("allows typing a game code to join", () => {
+    renderGameLobby();
+    const joinInput = screen.getByPlaceholderText(/enter game code/i) as HTMLInputElement;
+    fireEvent.change(joinInput, { target: { value: "TEST12" } });
+    expect(joinInput.value).toBe("TEST12");
+  });
+
+  test("disables join game button when game code is empty", () => {
+    renderGameLobby();
+    const joinButton = screen.getByRole("button", { name: /join game/i });
+    expect(joinButton).toBeDisabled();
+  });
+
+  test("enables join game button when connected and code is typed", () => {
+    useWalletStore.setState({
+      isConnected: true,
+      address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+    });
+    renderGameLobby();
+    const joinInput = screen.getByPlaceholderText(/enter game code/i);
+    fireEvent.change(joinInput, { target: { value: "ABC123" } });
+    const joinButton = screen.getByRole("button", { name: /join game/i });
+    expect(joinButton).not.toBeDisabled();
+  });
+
+  test("calls createGame on store when create game button is clicked without wager", async () => {
+    const mockCreateGame = vi.fn().mockResolvedValue(undefined);
+    useGameStore.setState({
+      createGame: mockCreateGame,
+      gameCode: "MOCKCD",
+    });
+    useWalletStore.setState({
+      isConnected: true,
+      address: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+    });
+
+    renderGameLobby();
+    const createButton = screen.getByRole("button", { name: /create new game/i });
+    fireEvent.click(createButton);
+
+    await waitFor(() => {
+      expect(mockCreateGame).toHaveBeenCalledWith(
+        "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFTGAAA5CDU9999999999",
+        undefined,
+        1800,
+        0
+      );
+    });
   });
 });

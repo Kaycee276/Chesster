@@ -3,25 +3,37 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Mock the Stellar SDK and wallet services
 vi.mock("@stellar/stellar-sdk", () => ({
 	rpc: {
-		Server: vi.fn(() => ({
-			getAccount: vi.fn(),
-			prepareTransaction: vi.fn(),
-			sendTransaction: vi.fn(),
-			getTransaction: vi.fn(),
-		})),
+		Server: vi.fn(function () {
+			return {
+				getAccount: vi.fn().mockResolvedValue({}),
+				prepareTransaction: vi.fn().mockResolvedValue({ toXDR: () => "mock-prepared-xdr" }),
+				sendTransaction: vi.fn().mockResolvedValue({ status: "PENDING", hash: "mock-hash" }),
+				getTransaction: vi.fn().mockResolvedValue({ status: "SUCCESS" }),
+			};
+		}),
 	},
-	TransactionBuilder: vi.fn(() => ({
-		addOperation: vi.fn(function () {
-			return this;
+	TransactionBuilder: Object.assign(
+		vi.fn(function () {
+			return {
+				addOperation: vi.fn(function () {
+					return this;
+				}),
+				setTimeout: vi.fn(function () {
+					return this;
+				}),
+				build: vi.fn(() => ({ toXDR: vi.fn(() => "mock-xdr") })),
+			};
 		}),
-		setTimeout: vi.fn(function () {
-			return this;
-		}),
-		build: vi.fn(() => ({ toXDR: vi.fn(() => "mock-xdr") })),
-		fromXDR: vi.fn(() => ({})),
-	})),
+		{
+			fromXDR: vi.fn(() => ({})),
+		}
+	),
 	Networks: { TESTNET: "Test SDF Network ; September 2015" },
-	Contract: vi.fn(),
+	Contract: vi.fn(function () {
+		return {
+			call: vi.fn(() => ({})),
+		};
+	}),
 	nativeToScVal: vi.fn(),
 	Transaction: vi.fn(),
 }));

@@ -42,8 +42,8 @@ export function mapWalletError(error: unknown): MappedWalletError {
 
   if (error instanceof Error) {
     errorMessage = error.message;
-    errorCode = (error as Record<string, unknown>).code as string || "";
-    errorObj = error as Record<string, unknown>;
+    errorCode = (error as unknown as Record<string, unknown>).code as string || "";
+    errorObj = error as unknown as Record<string, unknown>;
   } else if (typeof error === "object" && error !== null) {
     errorObj = error as Record<string, unknown>;
     errorMessage = String(errorObj.message || errorObj.msg || errorObj.detail || "");

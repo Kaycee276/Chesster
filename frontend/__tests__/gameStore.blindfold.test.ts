@@ -33,6 +33,7 @@ describe("Game Store - Blindfold Mode", () => {
 			chatMessages: [],
 			unreadCount: 0,
 			chatOpen: false,
+			blindfoldMode: "none",
 			isBlindfoldMode: false,
 		});
 		// Clear localStorage

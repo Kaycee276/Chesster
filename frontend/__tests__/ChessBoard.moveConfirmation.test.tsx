@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { BrowserRouter } from "react-router-dom";
 import ChessBoard from "../src/components/ChessBoard";
+import GameSettings from "../src/components/GameSettings";
 import { useGameStore } from "../src/store/gameStore";
 
 // Mock the dependencies
@@ -490,7 +491,7 @@ describe("GameSettings - Move Confirmation Toggle", () => {
 
 	it("toggle switch is rendered in game settings", () => {
 		useGameStore.setState({ isSettingsOpen: true });
-		renderChessBoard();
+		render(<GameSettings />);
 
 		// Look for move confirmation label in settings
 		const moveConfirmationLabel = screen.getByText(/Move Confirmation/i);
@@ -499,7 +500,7 @@ describe("GameSettings - Move Confirmation Toggle", () => {
 
 	it("toggle switch reflects current state", () => {
 		useGameStore.setState({ isSettingsOpen: true, isMoveConfirmationEnabled: true });
-		const { rerender } = renderChessBoard();
+		const { rerender } = render(<GameSettings />);
 
 		// Find toggle switch (it's a button with role="switch")
 		let toggleButtons = screen.getAllByRole("switch");
@@ -512,11 +513,7 @@ describe("GameSettings - Move Confirmation Toggle", () => {
 
 		// Disable it
 		useGameStore.setState({ isMoveConfirmationEnabled: false });
-		rerender(
-			<BrowserRouter>
-				<ChessBoard />
-			</BrowserRouter>,
-		);
+		rerender(<GameSettings />);
 
 		toggleButtons = screen.getAllByRole("switch");
 		const updatedToggle = toggleButtons.find((btn) =>
@@ -528,7 +525,7 @@ describe("GameSettings - Move Confirmation Toggle", () => {
 
 	it("toggle switch can be clicked to change state", () => {
 		useGameStore.setState({ isSettingsOpen: true, isMoveConfirmationEnabled: false });
-		renderChessBoard();
+		render(<GameSettings />);
 
 		const toggleButtons = screen.getAllByRole("switch");
 		const moveConfirmationToggle = toggleButtons.find((btn) =>
@@ -553,7 +550,7 @@ describe("GameSettings - Move Confirmation Toggle", () => {
 
 	it("setting description explains the feature", () => {
 		useGameStore.setState({ isSettingsOpen: true });
-		renderChessBoard();
+		render(<GameSettings />);
 
 		const description = screen.getByText(/Require confirmation before committing moves/i);
 		expect(description).toBeTruthy();

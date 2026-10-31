@@ -63,11 +63,5 @@
     "vite": "^7.3.1",
     "vite-plugin-pwa": "^2.0.0",
     "vitest": "^4.1.11"
-  },
-  "allowScripts": {
-    "bufferutil@4.1.0": true,
-    "utf-8-validate@5.0.10": true,
-    "@reown/appkit@1.8.23": true,
-    "esbuild@0.28.1": true
   }
 }
