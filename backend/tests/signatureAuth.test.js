@@ -32,7 +32,7 @@ describe("Signature Authentication Middleware (Issue #323)", () => {
   function generateSignatureHeaders(kp, method, path, body, timestamp = Date.now()) {
     const bodyStr = typeof body === "object" ? JSON.stringify(body) : body || "";
     const message = `${method.toUpperCase()}:${path}:${timestamp}:${bodyStr}`;
-    const signature = kp.sign(Buffer.from(message)).toString("base64");
+    const signature = Buffer.from(kp.sign(Buffer.from(message))).toString("base64");
 
     return {
       "x-signature": signature,
@@ -112,7 +112,7 @@ describe("Signature Authentication Middleware (Issue #323)", () => {
 
   test("verifyStellarSignature helper functions properly", () => {
     const msg = "test-message";
-    const sig = keypair.sign(Buffer.from(msg)).toString("base64");
+    const sig = Buffer.from(keypair.sign(Buffer.from(msg))).toString("base64");
     expect(verifyStellarSignature(keypair.publicKey(), msg, sig)).toBe(true);
     expect(verifyStellarSignature(keypair.publicKey(), "altered", sig)).toBe(false);
   });
@@ -161,7 +161,7 @@ describe("Coordinator Signature Freshness & Nonce Replay Expiry (Issue #445)", (
   function signCoordinatorPayload(kp, body, timestamp = Date.now(), nonce = "nonce-" + Math.random()) {
     const bodyStr = typeof body === "object" && body !== null ? JSON.stringify(body) : body || "";
     const message = `${timestamp}.${nonce}.${bodyStr}`;
-    const signature = kp.sign(Buffer.from(message)).toString("base64");
+    const signature = Buffer.from(kp.sign(Buffer.from(message))).toString("base64");
 
     return {
       headers: {

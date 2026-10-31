@@ -35,7 +35,7 @@ function buildApp() {
 
 function signRegistration(keypair) {
 	const message = tournamentController.registrationMessage(keypair.publicKey());
-	return keypair.sign(Buffer.from(message, "utf8")).toString("base64");
+	return Buffer.from(keypair.sign(Buffer.from(message, "utf8"))).toString("base64");
 }
 
 describe("tournament REST API", () => {

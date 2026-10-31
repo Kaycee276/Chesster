@@ -397,7 +397,7 @@ describe("Distributed Lock", () => {
     it("[ACCEPTANCE] should prevent concurrent execution via withLock wrapper", async () => {
       jest.useRealTimers(); // Use real timers for accurate timing
       getRedisClient.mockReturnValue(mockRedis);
-      mockRedis.set.mockResolvedValue("OK");
+      mockRedis.set.mockResolvedValueOnce("OK").mockResolvedValue(null);
       mockRedis.eval.mockResolvedValue(1);
 
       const key = "withloc-concurrency";
