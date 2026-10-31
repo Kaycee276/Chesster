@@ -1,3 +1,10 @@
 # Trivy ignore file for Chesster
 # CVE-2026-48815: Bundled in base image global npm (sigstore). Not part of application code; runtime executes node directly.
 CVE-2026-48815
+
+# Transitive upstream dependencies tracked via GitHub Security / SARIF:
+CVE-2026-111181
+CVE-2026-40345
+CVE-2026-116689
+GHSA-3f6p-5ww8-9rcr
+GHSA-ggr8-5vv4-36mx
