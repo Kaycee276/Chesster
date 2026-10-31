@@ -1,7 +1,7 @@
 import React from "react";
 import type { AnnotationArrow, AnnotationColor, SquareHighlight } from "../types/chess";
 
-export const ANNOTATION_COLORS: Record<AnnotationColor, string> = {
+const ANNOTATION_COLORS: Record<AnnotationColor, string> = {
   blue: "#3689e6",
   green: "rgba(34, 197, 94, 0.8)",
   red: "#e0403c",
@@ -15,6 +15,7 @@ export interface BoardAnnotationsProps {
   arrows: AnnotationArrow[];
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function squareCenterPx(
   row: number,
   col: number,

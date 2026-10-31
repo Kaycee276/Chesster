@@ -7,8 +7,6 @@ import {
   getYesterdayUtcDateString,
   getDaysDifference,
   getWeeklyCalendarDays,
-  evaluateStreakStatus,
-  parseStoredStreak,
 } from "../usePuzzleStreak";
 
 describe("usePuzzleStreak Helper Functions", () => {

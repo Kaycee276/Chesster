@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 
 export const PUZZLE_STREAK_STORAGE_KEY = "chesster:puzzle_streak";
 
@@ -178,16 +178,16 @@ export function usePuzzleStreak(customDate?: Date) {
 
   const [isNewBestStreak, setIsNewBestStreak] = useState(false);
 
-  // Sync / refresh state if date changes or storage changes
-  useEffect(() => {
+  const [prevCustomDate, setPrevCustomDate] = useState(customDate);
+  if (customDate !== prevCustomDate) {
+    setPrevCustomDate(customDate);
     const todayStr = getUtcDateString(customDate);
-    if (typeof window === "undefined" || !window.localStorage) return;
-
-    const raw = window.localStorage.getItem(PUZZLE_STREAK_STORAGE_KEY);
-    const parsed = parseStoredStreak(raw);
-    const evaluated = evaluateStreakStatus(parsed, todayStr);
-    setStreakData(evaluated);
-  }, [customDate]);
+    if (typeof window !== "undefined" && window.localStorage) {
+      const raw = window.localStorage.getItem(PUZZLE_STREAK_STORAGE_KEY);
+      const parsed = parseStoredStreak(raw);
+      setStreakData(evaluateStreakStatus(parsed, todayStr));
+    }
+  }
 
   /**
    * Called when a puzzle is successfully solved.

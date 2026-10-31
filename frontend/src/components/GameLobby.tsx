@@ -432,7 +432,7 @@ export default function GameLobby() {
       try {
         await depositXLM("create_match", preGeneratedCode, wagerAmount, address);
         // Toast is handled by depositXLM itself
-      } catch (err: unknown) {
+      } catch {
         // depositXLM already dispatched a toast, just reset state and return
         return;
       } finally {
@@ -552,7 +552,7 @@ export default function GameLobby() {
     try {
       await depositXLM("join_match", gameCode, pendingWager.wagerAmount, address);
       // Toast is handled by depositXLM itself
-    } catch (err: unknown) {
+    } catch {
       // depositXLM already dispatched a toast, just reset state and return
       setStep("join-confirming");
       return;

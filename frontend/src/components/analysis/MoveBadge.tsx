@@ -1,6 +1,5 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { MOVE_QUALITY_META, type MoveQuality } from "../../utils/moveAccuracy";
-import type { EngineEvaluation } from "../../utils/engineEvaluation";
 import { formatEvaluation } from "../../utils/engineEvaluation";
 
 interface MoveBadgeProps {
@@ -89,7 +88,8 @@ export default function MoveBadge({
 		}
 	};
 
-	const tooltipId = `move-badge-tooltip-${Math.random().toString(36).slice(2, 9)}`;
+	const generatedId = useId();
+	const tooltipId = `move-badge-tooltip-${generatedId}`;
 
 	return (
 		<span

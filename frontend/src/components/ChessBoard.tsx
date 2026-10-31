@@ -133,15 +133,6 @@ const BLACK_PIECE_STYLE: React.CSSProperties = {
   WebkitTextStroke: "0.5px #fff",
 };
 
-// ── Board annotation colors (#252) ─────────────────────────────────────────────
-// Right-click plain = blue, Shift = green, Alt = red, Ctrl/Cmd = yellow.
-const ANNOTATION_COLORS: Record<AnnotationColor, string> = {
-  blue: "#3689e6",
-  green: "#22ac38",
-  red: "#e0403c",
-  yellow: "#e6c729",
-};
-
 function colorFromModifiers(e: {
   shiftKey: boolean;
   altKey: boolean;
@@ -1305,15 +1296,6 @@ function ChessBoardInner() {
     } else {
       toggleArrow(start.row, start.col, row, col, start.color);
     }
-  };
-
-  // Square center in on-screen pixels, respecting the board's flip state,
-  // for positioning the SVG annotation overlay.
-  const squareCenterPx = (row: number, col: number) => {
-    const rowIndex = playerColor === "black" ? 7 - row : row;
-    const colIndex = playerColor === "black" ? 7 - col : col;
-    const squareSize = boardPx / 8;
-    return { x: colIndex * squareSize + squareSize / 2, y: rowIndex * squareSize + squareSize / 2 };
   };
 
   const displayBoard =

@@ -272,7 +272,7 @@ describe("mapWalletError", () => {
 			[404, "Not Found"],
 			[500, "Internal Server Error"],
 			[503, "Service Unavailable"],
-		])("maps HTTP %d status to network_error", (status, _msg) => {
+		])("maps HTTP %d status to network_error", (status) => {
 			const result = mapWalletError({ status });
 			expect(result.category).toBe("network_error");
 		});

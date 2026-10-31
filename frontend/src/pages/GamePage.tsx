@@ -184,7 +184,7 @@ export default function GamePage() {
       try {
         await depositXLM("join_match", gameCode, String(wagerAmount), address);
         // Toast is handled by depositXLM itself
-      } catch (err: unknown) {
+      } catch {
         // depositXLM already dispatched a toast
         setJoinStep("idle");
         return;

@@ -454,7 +454,7 @@ describe("ChessBoard - Move Confirmation (#493)", () => {
 
 	it("confirmation does not appear when toggle is disabled mid-game", async () => {
 		useGameStore.setState({ isMoveConfirmationEnabled: false });
-		const { container, rerender } = renderChessBoard();
+		const { container } = renderChessBoard();
 
 		// Select e2 pawn
 		const e2Square = container.querySelector('[data-testid="square-6-4"]');

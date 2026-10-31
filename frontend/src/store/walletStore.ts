@@ -26,6 +26,7 @@ export const useWalletStore = create<WalletState>((set) => {
       set({ ...connected, isConnected: true });
     },
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     connectWith: async (_type: WalletType) => {
       const connected = await connectWithWalletKit();
       set({ ...connected, isConnected: true });

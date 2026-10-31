@@ -1,6 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import MoveBadge from "../../src/components/analysis/MoveBadge";
 
 describe("MoveBadge Component", () => {
@@ -359,7 +358,7 @@ describe("MoveBadge Component", () => {
 					quality="blunder"
 					cpl={100000}
 					evalBefore={-100000} // mate loss
-					evalAfter={100}
+					evalAfter={10}
 					bestLine={null}
 				/>
 			);
@@ -402,7 +401,6 @@ describe("MoveBadge Component", () => {
 			);
 			const badge = container.querySelector(".acc-badge") as HTMLElement;
 			badge.focus();
-			const initialFocus = document.activeElement;
 
 			fireEvent.keyDown(badge, { key: "Escape" });
 			await waitFor(() => {

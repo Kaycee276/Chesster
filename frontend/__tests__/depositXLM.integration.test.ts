@@ -10,7 +10,7 @@ vi.mock("@stellar/stellar-sdk", () => ({
 			getTransaction: vi.fn(),
 		})),
 	},
-	TransactionBuilder: vi.fn((account, opts) => ({
+	TransactionBuilder: vi.fn(() => ({
 		addOperation: vi.fn(function () {
 			return this;
 		}),

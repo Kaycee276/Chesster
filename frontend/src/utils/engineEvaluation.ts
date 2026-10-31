@@ -149,6 +149,9 @@ export function formatEvaluation(scoreCp: number, mate: number | null = null): s
 		if (mate === 0) return scoreCp > 0 ? "1-0" : "0-1";
 		return `${mate < 0 ? "-" : ""}M${Math.abs(mate)}`;
 	}
+	if (Math.abs(scoreCp) >= MATE_SCORE_CP) {
+		return scoreCp < 0 ? "-M" : "+M";
+	}
 	const pawns = (scoreCp / 100).toFixed(1);
 	return scoreCp > 0 ? `+${pawns}` : pawns === "-0.0" ? "0.0" : pawns;
 }

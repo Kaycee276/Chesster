@@ -130,19 +130,6 @@ export default function AnalysisPage() {
   const accuracy = useMoveAccuracyAnalysis(moves);
   const classifiedMoves = accuracy.result?.moves;
 
-  // For badge tooltips, we need evaluation data before/after each move.
-  // This is computed separately from classification; the accuracy analysis
-  // worker evaluates each unique position and we store the results by ply.
-  // Since evaluations are indexed by FEN in the live eval system, we build
-  // a map from move index to the FEN of the position before/after the move.
-  const evalsByPly = useMemo<(EngineEvaluation | undefined)[]>(() => {
-    const evals: (EngineEvaluation | undefined)[] = [];
-    // We don't have direct access to the full evaluations from useMoveAccuracyAnalysis,
-    // but we can use variations if available. For now, we'll just have classification
-    // and use variations when available for the live position.
-    return evals;
-  }, [moves]);
-
   const classificationFor = (moveIndex: number) => classifiedMoves?.[moveIndex];
 
   const qualityBadge = (moveIndex: number) => {
@@ -153,7 +140,7 @@ export default function AnalysisPage() {
     // We use a simple heuristic: if the live evaluation matches the position
     // after this move, we can extract the before-eval from the move history.
     // Otherwise, we'll get partial data when variations are available.
-    let evalBefore: number | null = null;
+    const evalBefore: number | null = null;
     let evalAfter: number | null = null;
     let bestLine: string | null = null;
 
@@ -304,15 +291,13 @@ export default function AnalysisPage() {
     });
   };
 
-  const formattedVariations = useMemo(() => {
-    return variations
-      .filter((v): v is EngineEvaluation => Boolean(v && v.pv && v.pv.length > 0))
-      .map((v) => ({
-        multipv: v.multipv ?? 1,
-        scoreText: formatEvaluation(v.scoreCp, v.mate),
-        pv: v.pv ?? [],
-      }));
-  }, [variations]);
+  const formattedVariations = variations
+    .filter((v): v is EngineEvaluation => Boolean(v && v.pv && v.pv.length > 0))
+    .map((v) => ({
+      multipv: v.multipv ?? 1,
+      scoreText: formatEvaluation(v.scoreCp, v.mate),
+      pv: v.pv ?? [],
+    }));
 
   const isPlayerPieceOf = (piece: string, color: "white" | "black") =>
     piece !== "." &&
