@@ -212,12 +212,12 @@ describe("ipUtils", () => {
 				expect(getSubnetFromIp("gggg::1")).toBe("unknown-subnet"); // Invalid hex
 				expect(getSubnetFromIp("::1::2")).toBe("unknown-subnet"); // Multiple ::
 				expect(getSubnetFromIp("1:2:3:4:5:6:7:8:9")).toBe("unknown-subnet"); // Too many groups
-				expect(getSubnetFromIp("192.168.1.1")).toBe("unknown-subnet"); // Wait, this is valid IPv4!
+				expect(getSubnetFromIp("not:a:valid:ipv6")).toBe("unknown-subnet");
 			});
 
 			it("handles whitespace gracefully", () => {
 				expect(getSubnetFromIp("  192.0.2.1  ")).toBe("192.0.2.0/24");
-				expect(getSubnetFromIp("\n2001:db8::1\t")).toBe("2001:0db8:0000:0000:0000:0000:0000:0001::/48");
+				expect(getSubnetFromIp("\n2001:db8::1\t")).toBe("2001:0db8:0000::/48");
 			});
 
 			it("does not throw on any input", () => {

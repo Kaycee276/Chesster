@@ -135,8 +135,11 @@ app.get("/api/csrf-token", (req, res) => {
 });
 
 // Swagger API documentation (Issue #152)
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
-app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+const swaggerOptions = {
+	customSiteTitle: swaggerDocument?.info?.title || "Chesster Platform REST API",
+};
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOptions));
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOptions));
 
 // Security middleware: strip/reject malicious input before it reaches any route
 // handler, and rate-limit the API surface to blunt brute-forcing and DoS.

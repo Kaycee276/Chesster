@@ -419,8 +419,8 @@ describe("rateLimiter", () => {
 				// Third request from same IP fails
 				limiter(mockReq({ ip: "10.0.0.1", body: { address: "GADDR3" } }), mockRes(), jest.fn());
 
-				// But neighbors can still make requests (subnet has used 2 of 10)
-				for (let i = 2; i <= 7; i++) {
+				// But neighbors can still make requests
+				for (let i = 2; i <= 8; i++) {
 					const res = mockRes();
 					const next = jest.fn();
 					limiter(mockReq({ ip: `10.0.0.${i}`, body: { address: `GADDR${i}` } }), res, next);
@@ -428,10 +428,10 @@ describe("rateLimiter", () => {
 					expect(res.status).not.toHaveBeenCalled();
 				}
 
-				// Eighth different IP would exceed subnet (8 total), should fail
-				const res8 = mockRes();
-				limiter(mockReq({ ip: "10.0.0.8", body: { address: "GADDR8" } }), res8, jest.fn());
-				expect(res8.status).toHaveBeenCalledWith(429);
+				// Ninth different IP would exceed subnet (10 max reached), should fail
+				const res9 = mockRes();
+				limiter(mockReq({ ip: "10.0.0.9", body: { address: "GADDR9" } }), res9, jest.fn());
+				expect(res9.status).toHaveBeenCalledWith(429);
 			});
 
 			it("window reset clears all three counters", () => {

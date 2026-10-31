@@ -111,7 +111,7 @@ function createAuthChallengeRateLimiter({
 	// Lazy-load getSubnetFromIp to avoid circular dependency at module load time
 	if (!subnetKeyGenerator) {
 		subnetKeyGenerator = (ip) => {
-			const { getSubnetFromIp } = require("./ipUtils");
+			const { getSubnetFromIp } = require("../utils/ipUtils");
 			return getSubnetFromIp(ip);
 		};
 	}
@@ -129,14 +129,16 @@ function createAuthChallengeRateLimiter({
 		const ipKey = req.ip || req.connection?.remoteAddress || "unknown";
 		const subnetKey = subnetKeyGenerator(ipKey);
 
-		// Check IP limit first
+		// Increment both IP and subnet counters on every request
 		const ipResult = ipCounter.hit(ipKey);
+		const subnetResult = subnetCounter.hit(subnetKey);
+
+		// Check IP limit first
 		if (ipResult.exceeded) {
 			return reject(res, ipResult.retryAfterSec);
 		}
 
 		// Check subnet limit second
-		const subnetResult = subnetCounter.hit(subnetKey);
 		if (subnetResult.exceeded) {
 			return reject(res, subnetResult.retryAfterSec);
 		}
