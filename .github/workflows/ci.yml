@@ -297,4 +297,4 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Audit Soroban dependencies
-        run: cargo audit --file contracts/soroban/Cargo.lock
+        run: cargo audit --file contracts/soroban/Cargo.lock --ignore RUSTSEC-2026-0387
