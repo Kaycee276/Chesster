@@ -167,7 +167,7 @@ function verifyMatchAuditChain(auditEntries) {
         return {
           valid: false,
           tamperedIndex: i,
-          error: `Chain broken at index ${i}: expected prev_hash=${expectedPrevHash}, got ${storedPrevHash}`,
+          error: `Broken chain link at index ${i}: expected prev_hash=${expectedPrevHash}, got ${storedPrevHash}`,
           totalEntries: auditEntries.length,
           genesisHash,
         };

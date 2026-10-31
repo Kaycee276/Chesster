@@ -340,7 +340,7 @@ async function exportMatchAudit(idOrCode) {
  *   chainIntegrity: { valid, totalEntries, tamperedIndex, error }
  * }
  */
-function verifyAuditPackage(pkg) {
+function verifyAuditPackage(pkg, options = {}) {
 	const result = {
 		valid: false,
 		outcomeSignatureValid: false,
@@ -350,7 +350,7 @@ function verifyAuditPackage(pkg) {
 
 	if (!pkg || !pkg.integrity || !pkg.integrity.outcome) {
 		result.errors.push("Missing or invalid integrity section in package");
-		return result;
+		return options.detailed ? result : false;
 	}
 
 	const { outcome, outcomeHash, signature } = pkg.integrity;
@@ -358,15 +358,15 @@ function verifyAuditPackage(pkg) {
 	// Verify outcome hash
 	if (outcome.movesDigest !== sha256(canonicalJson(pkg.moves))) {
 		result.errors.push("Moves digest mismatch");
-		return result;
+		return options.detailed ? result : false;
 	}
 	if (outcome.eventsDigest !== sha256(canonicalJson(pkg.events))) {
 		result.errors.push("Events digest mismatch");
-		return result;
+		return options.detailed ? result : false;
 	}
 	if (outcomeHash !== sha256(canonicalJson(outcome))) {
 		result.errors.push("Outcome hash mismatch");
-		return result;
+		return options.detailed ? result : false;
 	}
 
 	// Verify signature
@@ -377,7 +377,7 @@ function verifyAuditPackage(pkg) {
 
 	if (!signatureValid) {
 		result.errors.push("Signature verification failed");
-		return result;
+		return options.detailed ? result : false;
 	}
 
 	result.outcomeSignatureValid = true;
@@ -396,7 +396,7 @@ function verifyAuditPackage(pkg) {
 	// Chain tampering is tracked separately in chainIntegrity
 	result.valid = result.outcomeSignatureValid;
 
-	return result;
+	return options.detailed ? result : result.valid;
 }
 
 const ANTI_CHEAT_ALERT_EVENT = "anti_cheat.time_entropy_flag";

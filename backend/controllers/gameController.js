@@ -465,13 +465,13 @@ class GameController {
 			});
 
 			if (format === "csv") {
-				res.attachment(`${filename}.csv`);
+				res.setHeader("Content-Disposition", `attachment; filename="${filename}.csv"`);
 				res.type("text/csv; charset=utf-8");
 				return res.send(auditService.toCsv(audit));
 			}
 
 			if (["1", "true"].includes(String(req.query.download).toLowerCase())) {
-				res.attachment(`${filename}.json`);
+				res.setHeader("Content-Disposition", `attachment; filename="${filename}.json"`);
 			}
 			res.json({ success: true, data: audit });
 		} catch (error) {
