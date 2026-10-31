@@ -31,9 +31,9 @@ const DEFAULT_PRESET = "rapid";
 const RECONNECT_GRACE_SECONDS = 60;
 
 // Heartbeat configuration for detecting dead mobile connections
-const HEARTBEAT_INTERVAL_MS = 15 * 1000; // Send ping every 15 seconds
-const HEARTBEAT_TIMEOUT_MS = 10 * 1000; // Wait 10 seconds for pong response
-const HEARTBEAT_MAX_MISSES = 2; // Disconnect after 2 consecutive missed pongs
+let HEARTBEAT_INTERVAL_MS = Number(process.env.HEARTBEAT_INTERVAL_MS) || 15 * 1000; // Send ping every 15 seconds
+let HEARTBEAT_TIMEOUT_MS = Number(process.env.HEARTBEAT_TIMEOUT_MS) || 10 * 1000; // Wait 10 seconds for pong response
+let HEARTBEAT_MAX_MISSES = Number(process.env.HEARTBEAT_MAX_MISSES) || 2; // Disconnect after 2 consecutive missed pongs
 
 function resolveTimeControl({ preset, baseSeconds, incrementSeconds } = {}) {
 	if (preset && TIME_CONTROLS[preset]) {
@@ -565,6 +565,18 @@ class TimerService {
 	getHeartbeatState(socket, gameCode) {
 		const key = `${gameCode}:${socket.id}`;
 		return this.heartbeats.get(key) || null;
+	}
+
+	setHeartbeatConfig({ intervalMs, timeoutMs, maxMisses } = {}) {
+		if (typeof intervalMs === "number") HEARTBEAT_INTERVAL_MS = intervalMs;
+		if (typeof timeoutMs === "number") HEARTBEAT_TIMEOUT_MS = timeoutMs;
+		if (typeof maxMisses === "number") HEARTBEAT_MAX_MISSES = maxMisses;
+	}
+
+	resetHeartbeatConfig() {
+		HEARTBEAT_INTERVAL_MS = Number(process.env.HEARTBEAT_INTERVAL_MS) || 15 * 1000;
+		HEARTBEAT_TIMEOUT_MS = Number(process.env.HEARTBEAT_TIMEOUT_MS) || 10 * 1000;
+		HEARTBEAT_MAX_MISSES = Number(process.env.HEARTBEAT_MAX_MISSES) || 2;
 	}
 }
 

@@ -62,6 +62,7 @@ describe("Socket Heartbeat Ping-Pong Validation (Issue #490)", () => {
   const GAME_CODE = "HEARTBEAT_TEST_GAME";
 
   beforeAll(async () => {
+    timerService.setHeartbeatConfig({ intervalMs: 50, timeoutMs: 50, maxMisses: 2 });
     httpServer = http.createServer();
     io = new Server(httpServer, { cors: { origin: "*" } });
     timerService.init(io);
@@ -118,6 +119,12 @@ describe("Socket Heartbeat Ping-Pong Validation (Issue #490)", () => {
         entry[playerColor].socketId = null;
         entry[playerColor].status = "offline";
 
+        io.to(gameCode).emit("presence-update", {
+          gameCode,
+          color: playerColor,
+          status: "offline",
+        });
+
         io.to(gameCode).emit("player_status", {
           color: playerColor,
           status: "disconnected",
@@ -152,6 +159,7 @@ describe("Socket Heartbeat Ping-Pong Validation (Issue #490)", () => {
   });
 
   afterAll(async () => {
+    timerService.resetHeartbeatConfig();
     for (const c of clients) {
       c.removeAllListeners();
       c.close();
@@ -196,6 +204,24 @@ describe("Socket Heartbeat Ping-Pong Validation (Issue #490)", () => {
     return new Promise((resolve, reject) => {
       const socket = Client(customServerUrl, { transports: ["websocket"], forceNew: true });
       clients.push(socket);
+
+      socket.heartbeatUnresponsive = false;
+      const origEmit = socket.emit.bind(socket);
+      socket.emit = (...args) => {
+        if (args[0] === "set_heartbeat_unresponsive") {
+          socket.heartbeatUnresponsive = true;
+        } else if (args[0] === "set_heartbeat_responsive") {
+          socket.heartbeatUnresponsive = false;
+        }
+        return origEmit(...args);
+      };
+
+      socket.on("ping_heartbeat", (data) => {
+        if (!socket.heartbeatUnresponsive) {
+          socket.emit("pong_heartbeat", { timestamp: data?.timestamp || Date.now() });
+        }
+      });
+
       socket.on("connect", () => {
         socket.emit(
           "join-game",
