@@ -64,6 +64,8 @@ class MatchmakingService {
 		this.defaultElo = 1200;
 		this.maxRatingGap = MAX_RATING_GAP;
 		this.pollTimer = null;
+		this._pairedGames = [];
+		this._pairedPlayerIds = new Set();
 	}
 
 	/**
@@ -442,6 +444,78 @@ class MatchmakingService {
 	 */
 	clearQueue() {
 		this.queue.clear();
+		this._pairedGames = [];
+		this._pairedPlayerIds = new Set();
+	}
+
+	/**
+	 * High-level helper for joining queue and finding immediate matches.
+	 */
+	async joinQueue(walletAddress, elo) {
+		const id = String(walletAddress);
+		if (this.queue.has(id)) {
+			return this.queue.get(id);
+		}
+		if (this._pairedPlayerIds && this._pairedPlayerIds.has(id)) {
+			return { userId: id, elo };
+		}
+		const entry = {
+			userId: id,
+			socketId: `socket_${id}`,
+			elo: this._normalizeElo(elo),
+			wagerTier: "free",
+			queuedAt: Date.now(),
+		};
+
+		let bestMatch = null;
+		for (const candidate of this.queue.values()) {
+			if (!this.canPair(entry, candidate)) continue;
+			if (!bestMatch || this._isBetterOpponent(entry, candidate, bestMatch)) {
+				bestMatch = candidate;
+			}
+		}
+
+		if (bestMatch) {
+			this.queue.delete(bestMatch.userId);
+			this._pairedGames = this._pairedGames || [];
+			this._pairedPlayerIds = this._pairedPlayerIds || new Set();
+			this._pairedPlayerIds.add(entry.userId);
+			this._pairedPlayerIds.add(bestMatch.userId);
+			this._pairedGames.push({
+				id: this.generateMatchCode(),
+				players: [entry.userId, bestMatch.userId],
+			});
+			return entry;
+		}
+
+		this.queue.set(id, entry);
+		return entry;
+	}
+
+	async leaveQueue(walletAddress) {
+		const id = String(walletAddress);
+		const removed = this.removeFromQueue(id);
+		if (this._pairedPlayerIds) {
+			this._pairedPlayerIds.delete(id);
+		}
+		return removed;
+	}
+
+	getPairedGames() {
+		return this._pairedGames || [];
+	}
+
+	getPairedCount() {
+		return (this._pairedGames || []).length * 2;
+	}
+
+	getQueueState() {
+		return Array.from(this.queue.values());
+	}
+
+	clearMatches() {
+		this._pairedGames = [];
+		this._pairedPlayerIds = new Set();
 	}
 
 	_normalizeElo(elo) {

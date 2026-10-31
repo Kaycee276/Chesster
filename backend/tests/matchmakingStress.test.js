@@ -1,4 +1,3 @@
-const { describe, test, expect, beforeEach, afterEach } = require("vitest");
 const matchmakingService = require("../services/matchmakingService");
 
 describe("Matchmaking Stress Test Suite", () => {
