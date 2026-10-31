@@ -54,6 +54,8 @@ import { depositXLM } from "../src/services/stellarService";
 import { useToastStore } from "../src/store/toastStore";
 
 const VALID_PUBLIC_KEY = "G" + "A".repeat(55);
+import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS = "CA4OPJENMO3ZL2AEJ4IZD4ZQI3TRWK5ES6NTWZUGRUWSTSVYT5H46I4Y";
+import.meta.env.VITE_CONTRACT_ID = "CA4OPJENMO3ZL2AEJ4IZD4ZQI3TRWK5ES6NTWZUGRUWSTSVYT5H46I4Y";
 
 describe("depositXLM toast integration", () => {
 	let mockAddToast: ReturnType<typeof vi.fn>;

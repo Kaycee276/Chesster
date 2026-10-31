@@ -4,7 +4,9 @@ import { useToastStore } from "../store/toastStore";
 
 const RPC_URL = import.meta.env.VITE_STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = import.meta.env.VITE_STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
-const ESCROW_ADDRESS = import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS || import.meta.env.VITE_CONTRACT_ID || "";
+function getEscrowAddress(): string {
+  return import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS || import.meta.env.VITE_CONTRACT_ID || "";
+}
 const HORIZON_URL = import.meta.env.VITE_STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org";
 
 const server = new rpc.Server(RPC_URL);
@@ -264,11 +266,12 @@ export async function depositXLM(fnName: "create_match" | "join_match", gameCode
     // lookup, network call, or transaction construction.
     assertValidPublicKey(publicKey);
 
-    if (!ESCROW_ADDRESS) throw new Error("Escrow contract address not configured");
+    const escrowAddress = getEscrowAddress();
+    if (!escrowAddress) throw new Error("Escrow contract address not configured");
 
     try {
         const account = await server.getAccount(publicKey);
-        const contract = new Contract(ESCROW_ADDRESS);
+        const contract = new Contract(escrowAddress);
 
         // Convert amount to stroops (1 XLM = 10,000,000 stroops)
         const amountStroops = BigInt(Math.round(parseFloat(amount) * 10_000_000)).toString();

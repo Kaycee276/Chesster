@@ -1,5 +1,12 @@
 // Shared vitest setup: DOM matchers for component tests (#315/#317/#318).
 import "@testing-library/jest-dom/vitest";
+
+if (!import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS) {
+	import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS = "CA4OPJENMO3ZL2AEJ4IZD4ZQI3TRWK5ES6NTWZUGRUWSTSVYT5H46I4Y";
+}
+if (!import.meta.env.VITE_CONTRACT_ID) {
+	import.meta.env.VITE_CONTRACT_ID = "CA4OPJENMO3ZL2AEJ4IZD4ZQI3TRWK5ES6NTWZUGRUWSTSVYT5H46I4Y";
+}
 /**
  * Vitest global setup.
  *
