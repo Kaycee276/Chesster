@@ -79,7 +79,6 @@ describe("useFocusTrap", () => {
     // Note: since we didn't manually focus priorButton, we focus it first
     priorButton.focus();
     rerender(<TestComponent isActive={true} />);
-    const activeInTrap = document.activeElement;
 
     rerender(<TestComponent isActive={false} />);
     expect(document.activeElement).toBe(priorButton);
@@ -127,7 +126,7 @@ describe("useFocusTrap", () => {
   });
 
   it("includes dynamically added focusables in cycle", () => {
-    const { getByTestId, rerender } = render(
+    const { getByTestId } = render(
       <TestComponent isActive={true} focusableCount={1} hasDynamic={true} />
     );
 
@@ -148,7 +147,6 @@ describe("useFocusTrap", () => {
 
   it("removes keydown listener on deactivation", () => {
     const { getByTestId, rerender } = render(<TestComponent isActive={true} />);
-    const container = getByTestId("trap-container");
     const first = getByTestId("focusable-0") as HTMLButtonElement;
     const last = getByTestId("focusable-2") as HTMLButtonElement;
 
@@ -214,7 +212,6 @@ describe("useFocusTrap", () => {
   it("ignores non-Tab keys", () => {
     const { getByTestId } = render(<TestComponent isActive={true} focusableCount={2} />);
     const btn0 = getByTestId("focusable-0") as HTMLButtonElement;
-    const btn1 = getByTestId("focusable-1") as HTMLButtonElement;
 
     btn0.focus();
     fireEvent.keyDown(btn0, { key: "Enter", code: "Enter" });
@@ -222,16 +219,8 @@ describe("useFocusTrap", () => {
   });
 
   it("cleans up on unmount", () => {
-    const { unmount, getByTestId } = render(<TestComponent isActive={true} />);
-    const container = getByTestId("trap-container");
-
-    // Listener should be attached while active
-    const listenerCount = (container as any).__listeners?.keydown?.length || 0;
-
+    const { unmount } = render(<TestComponent isActive={true} />);
     unmount();
-
-    // After unmount, listener should be cleaned up
-    // (Can't directly verify in jsdom, but no errors should occur)
     expect(true).toBe(true);
   });
 

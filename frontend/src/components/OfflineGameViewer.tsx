@@ -14,7 +14,8 @@ interface OfflineGameViewerProps {
 }
 
 // Basic PGN parsing to extract moves
-function parsePgn(pgn: string): Move[] {
+function parsePgn(_pgn: string): Move[] {
+  void _pgn;
   // Simple extraction: look for standard algebraic notation in the PGN text
   // For now, return empty array as a placeholder; full parsing is complex
   // In production, moveHistory would be persisted alongside PGN

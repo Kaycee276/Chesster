@@ -121,6 +121,24 @@ describe("stockfishWorker move handler", () => {
 		expect(second.fallbackReason).toBe("engine unavailable");
 	});
 
+	it("keeps returning legal fallback moves while the binary cooldown is active", async () => {
+		handler = createMoveHandler({ enginePath: "missing-stockfish-binary" });
+
+		const first = await handler.computeMove(task());
+		const second = await handler.computeMove(task({ turn: "black" }));
+
+		expect(first.engine).toBe("heuristic");
+		expect(second.engine).toBe("heuristic");
+		expect(second.fallbackReason).toBe("engine unavailable");
+		expect(chessEngine.isValidMove(
+			chessEngine.initBoard(),
+			second.move.from,
+			second.move.to,
+			"black",
+			null,
+		).valid).toBe(true);
+	});
+
 	it("uses the heuristic directly when no engine is configured", async () => {
 		handler = createMoveHandler({ enginePath: null });
 
@@ -128,5 +146,55 @@ describe("stockfishWorker move handler", () => {
 
 		expect(result.engine).toBe("heuristic");
 		expect(result.fallbackReason).toBe("no engine configured");
+	});
+});
+
+describe("stockfishWorker analysis handler", () => {
+	let handler;
+	let logFile;
+
+	beforeEach(() => {
+		logFile = path.join(os.tmpdir(), `fake-uci-analyze-${process.pid}-${Date.now()}.log`);
+	});
+
+	afterEach(() => {
+		if (handler) handler.dispose();
+		handler = null;
+		fs.rmSync(logFile, { force: true });
+	});
+
+	it("searches at full strength to a fixed depth and reports the score", async () => {
+		handler = createMoveHandler({ enginePath: process.execPath, engineArgs: [FAKE_ENGINE, "ok", logFile] });
+
+		const result = await handler.analyzePosition({ kind: "analyze", fen: START_FEN, depth: 16, deadline: Date.now() + 3000 });
+
+		expect(result).toEqual({ bestMove: "e2e4", scoreCp: 20 });
+		const commands = fs.readFileSync(logFile, "utf8").trim().split("\n");
+		expect(commands).toContain("setoption name Skill Level value 20");
+		expect(commands.find((c) => c.startsWith("go"))).toBe("go depth 16");
+	});
+
+	it("rejects a hanging analysis before the deadline and tears the engine down", async () => {
+		const pids = [];
+		handler = createMoveHandler({
+			enginePath: process.execPath,
+			engineArgs: [FAKE_ENGINE, "hang"],
+			onEnginePid: (pid) => pids.push(pid),
+		});
+
+		const deadline = Date.now() + 1000;
+		await expect(handler.analyzePosition({ fen: START_FEN, depth: 16, deadline }))
+			.rejects.toMatchObject({ code: "ENGINE_TIMEOUT" });
+		expect(Date.now()).toBeLessThan(deadline);
+		expect(pids[pids.length - 1]).toBeNull();
+	});
+
+	it("rejects with ENGINE_UNAVAILABLE after a missing binary instead of falling back", async () => {
+		handler = createMoveHandler({ enginePath: "definitely-not-a-real-stockfish-binary" });
+
+		await expect(handler.analyzePosition({ fen: START_FEN, depth: 8, deadline: Date.now() + 3000 }))
+			.rejects.toMatchObject({ code: "ENOENT" });
+		await expect(handler.analyzePosition({ fen: START_FEN, depth: 8, deadline: Date.now() + 3000 }))
+			.rejects.toMatchObject({ code: "ENGINE_UNAVAILABLE" });
 	});
 });

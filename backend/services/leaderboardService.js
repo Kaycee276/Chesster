@@ -2,19 +2,26 @@ const db = require("../config/db");
 const { queryWithRetry } = require("../config/db");
 const { getRedisClient } = require("../config/redis");
 
-const LEADERBOARD_CACHE_PREFIX = "cache:leaderboard";
+const LEADERBOARD_CACHE_PREFIX = "chesster:leaderboard";
+const LEADERBOARD_CACHE_KEY_TOP100 = "chesster:leaderboard:top100";
 const LEADERBOARD_CACHE_TTL_SECONDS = 60;
 
 class LeaderboardService {
 	constructor({ database = db } = {}) {
 		this.db = database;
+		this.invalidateLeaderboardCache = this.invalidateLeaderboardCache.bind(this);
+		this.invalidateCache = this.invalidateCache.bind(this);
+		this.getLeaderboard = this.getLeaderboard.bind(this);
 	}
 
 	getCacheKey(category = "all", limit = 50, offset = 0) {
+		if (limit === 100 && offset === 0 && (!category || category === "all")) {
+			return LEADERBOARD_CACHE_KEY_TOP100;
+		}
 		return `${LEADERBOARD_CACHE_PREFIX}:${category || "all"}:${limit}:${offset}`;
 	}
 
-	async invalidateCache() {
+	async invalidateLeaderboardCache() {
 		const redis = getRedisClient();
 		if (!redis) return;
 		try {
@@ -25,6 +32,10 @@ class LeaderboardService {
 		} catch (err) {
 			console.warn(`[LeaderboardService] Cache invalidation failed: ${err.message}`);
 		}
+	}
+
+	async invalidateCache() {
+		return this.invalidateLeaderboardCache();
 	}
 
 	async getFinishedGames(category) {
@@ -158,7 +169,16 @@ class LeaderboardService {
 		if (redis) {
 			try {
 				const cached = await redis.get(cacheKey);
-				if (cached) return JSON.parse(cached);
+				if (cached) {
+					const parsed = JSON.parse(cached);
+					Object.defineProperty(parsed, "_cacheHit", {
+						value: true,
+						writable: true,
+						enumerable: false,
+						configurable: true,
+					});
+					return parsed;
+				}
 			} catch (err) {
 				console.warn(`[LeaderboardService] Redis cache read failed: ${err.message}`);
 			}
@@ -275,6 +295,13 @@ class LeaderboardService {
 			}
 		}
 
+		Object.defineProperty(result, "_cacheHit", {
+			value: false,
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		});
+
 		return result;
 	}
 
@@ -341,4 +368,8 @@ class LeaderboardService {
 	}
 }
 
-module.exports = new LeaderboardService();
+const leaderboardServiceInstance = new LeaderboardService();
+
+module.exports = leaderboardServiceInstance;
+module.exports.LeaderboardService = LeaderboardService;
+module.exports.invalidateLeaderboardCache = leaderboardServiceInstance.invalidateLeaderboardCache;

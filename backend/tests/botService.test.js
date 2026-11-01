@@ -2,7 +2,9 @@ const path = require("path");
 const chessEngine = require("../services/chessEngine");
 const botService = require("../services/botService");
 
-const { BotService, BotWorkerPool } = botService;
+const { StockfishPool: BotWorkerPool } = require("../services/stockfishPool");
+
+const { BotService } = botService;
 const FAKE_ENGINE = path.join(__dirname, "fixtures", "fakeUciEngine.js");
 
 describe("BotService", () => {
@@ -22,6 +24,13 @@ describe("BotService", () => {
 	});
 
 	describe("parseUciMove", () => {
+		it("selects a weighted move from the initial ECO position", () => {
+			const move = botService.getOpeningBookMove(
+				"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+				() => 0,
+			);
+			expect(["e2e4", "d2d4", "c2c4", "g1f3"]).toContain(move);
+		});
 		it("parses a simple move", () => {
 			const move = botService.parseUciMove("e2e4");
 			expect(move.from).toEqual([6, 4]);
@@ -88,6 +97,32 @@ describe("BotService", () => {
 		it("derives a bounded depth for numeric skill levels", () => {
 			expect(botService.resolveDifficulty(0)).toEqual({ skillLevel: 0, depth: 3 });
 			expect(botService.resolveDifficulty(20).depth).toBeLessThanOrEqual(22);
+		});
+
+		it("maps bot levels 1-8 onto increasing skill level and depth", () => {
+			const resolved = [1, 2, 3, 4, 5, 6, 7, 8].map((level) => botService.resolveDifficulty({ level }));
+
+			expect(resolved[0]).toEqual({ skillLevel: 0, depth: 1 });
+			expect(resolved[7]).toEqual({ skillLevel: 20, depth: 20 });
+			for (let i = 1; i < resolved.length; i++) {
+				expect(resolved[i].skillLevel).toBeGreaterThan(resolved[i - 1].skillLevel);
+				expect(resolved[i].depth).toBeGreaterThan(resolved[i - 1].depth);
+			}
+			resolved.forEach(({ skillLevel }) => {
+				expect(skillLevel).toBeGreaterThanOrEqual(0);
+				expect(skillLevel).toBeLessThanOrEqual(20);
+			});
+		});
+
+		it("spans the Beginner (800) to Grandmaster (2500) ELO range", () => {
+			expect(botService.BOT_LEVELS[1].elo).toBe(800);
+			expect(botService.BOT_LEVELS[8].elo).toBe(2500);
+		});
+
+		it("only accepts integer levels 1-8", () => {
+			expect([1, 8].every(botService.isValidBotLevel)).toBe(true);
+			expect([0, 9, 2.5, "3", null, undefined].some(botService.isValidBotLevel)).toBe(false);
+			expect(botService.resolveDifficulty({ level: 99 })).toEqual(botService.resolveDifficulty("medium"));
 		});
 	});
 

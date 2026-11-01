@@ -1,4 +1,4 @@
-const { checkDbHealth, clearDbHealthCache } = require("../services/dbHealthService");
+const { checkDbHealth, clearDbHealthCache, getPoolMetrics } = require("../services/dbHealthService");
 
 function createClient(result, delayMs = 0) {
   return {
@@ -42,4 +42,13 @@ describe("Database health probe", () => {
     expect(health.status).toBe("unhealthy");
     expect(health.error).toContain("timed out");
   });
+});
+
+describe("PostgreSQL pool metrics", () => {
+	it("returns active pool counts without querying the database", () => {
+		const metrics = getPoolMetrics({ totalCount: 8, idleCount: 3, waitingCount: 2 });
+
+		expect(metrics).toMatchObject({ total: 8, idle: 3, waiting: 2 });
+		expect(Number.isNaN(Date.parse(metrics.timestamp))).toBe(false);
+	});
 });

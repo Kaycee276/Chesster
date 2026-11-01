@@ -1,2 +1,13 @@
 allowBuilds:
   esbuild: true
+  "@reown/appkit": true
+  bufferutil: true
+  secp256k1: true
+  utf-8-validate: true
+
+onlyBuiltDependencies:
+  - "@reown/appkit"
+  - bufferutil
+  - esbuild
+  - secp256k1
+  - utf-8-validate

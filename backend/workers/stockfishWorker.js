@@ -12,6 +12,7 @@ const { parseUciMove, toUciMove, pickHeuristicMove } = require("../services/botH
  *
  * Protocol with the pool:
  *   in:  { type: "task", id, payload: { fen, board, turn, lastMove, skillLevel, depth, moveTimeMs, deadline } }
+ *        { type: "task", id, payload: { kind: "analyze", fen, depth, deadline } } -> result { bestMove, scoreCp }
  *        (`deadline` is an absolute Date.now() timestamp set by the pool)
  *   out: { type: "result", id, result } | { type: "result", id, error: { message, code } }
  *   out: { type: "engine-pid", pid }   (pid of the engine process, null once it is gone)
@@ -129,6 +130,19 @@ class UciEngine {
 	 * (e.g. "e2e4", or "(none)" when the side to move has no legal moves).
 	 */
 	async search({ fen, skillLevel, depth, moveTimeMs, deadline }) {
+		const { bestMove } = await this._go({ fen, skillLevel, goCommand: `go depth ${depth} movetime ${moveTimeMs}`, deadline });
+		return bestMove;
+	}
+
+	/**
+	 * Run a full-strength fixed-depth search and resolve to the best move and
+	 * the last reported score from the side to move's perspective (mate = ±100000).
+	 */
+	analyze({ fen, depth, deadline }) {
+		return this._go({ fen, skillLevel: 20, goCommand: `go depth ${depth}`, deadline });
+	}
+
+	async _go({ fen, skillLevel, goCommand, deadline }) {
 		await this._handshake(deadline);
 
 		this.send(`setoption name Skill Level value ${skillLevel}`);
@@ -139,11 +153,18 @@ class UciEngine {
 		this.send("isready");
 		await ready;
 
-		const bestMove = this.waitFor((line) => line.startsWith("bestmove"), deadline - Date.now(), "bestmove");
+		let scoreCp = null;
+		const bestMove = this.waitFor((line) => {
+			const score = line.match(/\bscore\s+(cp|mate)\s+(-?\d+)/);
+			if (score) {
+				scoreCp = score[1] === "mate" ? Math.sign(Number(score[2])) * 100000 : Number(score[2]);
+			}
+			return line.startsWith("bestmove");
+		}, deadline - Date.now(), "bestmove");
 		this.send(`position fen ${fen}`);
-		this.send(`go depth ${depth} movetime ${moveTimeMs}`);
+		this.send(goCommand);
 		const line = await bestMove;
-		return line.split(/\s+/)[1];
+		return { bestMove: line.split(/\s+/)[1], scoreCp };
 	}
 
 	kill() {
@@ -165,10 +186,25 @@ function createMoveHandler({ enginePath, engineArgs = [], onEnginePid } = {}) {
 	let engine = null;
 	let engineUnavailableUntil = 0;
 
-	async function askEngine(task, deadline) {
+	function ensureEngine() {
 		if (!engine || engine.dead) {
 			engine = new UciEngine(enginePath, engineArgs, { onPid: onEnginePid });
 		}
+		return engine;
+	}
+
+	// A hung or broken engine is killed and lazily re-spawned on the next
+	// request; a missing binary is not retried for a while.
+	function discardEngine(err) {
+		if (engine) engine.kill();
+		engine = null;
+		if (err.code === "ENOENT" || err.code === "EACCES") {
+			engineUnavailableUntil = Date.now() + ENGINE_RETRY_COOLDOWN_MS;
+		}
+	}
+
+	async function askEngine(task, deadline) {
+		ensureEngine();
 
 		const budget = deadline - Date.now();
 		const moveTimeMs = Math.max(
@@ -207,13 +243,7 @@ function createMoveHandler({ enginePath, engineArgs = [], onEnginePid } = {}) {
 				fallbackReason = `unparseable engine move "${uci}"`;
 			} catch (err) {
 				fallbackReason = err.message;
-				// A hung or broken engine is killed and lazily re-spawned on
-				// the next request; a missing binary is not retried for a while.
-				if (engine) engine.kill();
-				engine = null;
-				if (err.code === "ENOENT" || err.code === "EACCES") {
-					engineUnavailableUntil = Date.now() + ENGINE_RETRY_COOLDOWN_MS;
-				}
+				discardEngine(err);
 			}
 		}
 
@@ -230,12 +260,27 @@ function createMoveHandler({ enginePath, engineArgs = [], onEnginePid } = {}) {
 		};
 	}
 
+	/** Full-strength analysis for post-game review. No heuristic fallback: a missing engine is an error. */
+	async function analyzePosition(task) {
+		if (!enginePath || Date.now() < engineUnavailableUntil) {
+			const err = new Error("Stockfish engine is unavailable for analysis");
+			err.code = "ENGINE_UNAVAILABLE";
+			throw err;
+		}
+		try {
+			return await ensureEngine().analyze({ fen: task.fen, depth: task.depth, deadline: task.deadline - FALLBACK_RESERVE_MS });
+		} catch (err) {
+			discardEngine(err);
+			throw err;
+		}
+	}
+
 	function dispose() {
 		if (engine) engine.kill();
 		engine = null;
 	}
 
-	return { computeMove, dispose };
+	return { computeMove, analyzePosition, dispose };
 }
 
 if (!isMainThread && parentPort) {
@@ -248,7 +293,9 @@ if (!isMainThread && parentPort) {
 	parentPort.on("message", async (message) => {
 		if (!message || message.type !== "task") return;
 		try {
-			const result = await handler.computeMove(message.payload);
+			const result = message.payload.kind === "analyze"
+				? await handler.analyzePosition(message.payload)
+				: await handler.computeMove(message.payload);
 			parentPort.postMessage({ type: "result", id: message.id, result });
 		} catch (err) {
 			parentPort.postMessage({ type: "result", id: message.id, error: { message: err.message, code: err.code } });

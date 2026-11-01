@@ -1,10 +1,26 @@
 const supabase = require("../config/supabase");
 const botService = require("./botService");
 const gameModel = require("../models/gameModel");
+const chessEngine = require("./chessEngine");
 const { boardToFEN } = require("./botService");
 
 const FLAG_THRESHOLD = 0.85;
 const MIN_TIMED_MOVES = 5;
+const ACPL_WINDOW_SIZE = 10;
+const ENGINE_STREAK_MAX_ACPL = 5;
+const ENGINE_STREAK_MIN_CORRELATION = 0.9;
+
+// Move time variance entropy (Issue #461). Think times are binned into
+// logarithmic intervals: 0-1s, 1-2s, 2-4s, 4-8s, 8-16s and >16s.
+const ENTROPY_BIN_EDGES_MS = [1000, 2000, 4000, 8000, 16000];
+const ENTROPY_BIN_COUNT = ENTROPY_BIN_EDGES_MS.length + 1;
+const OPENING_BOOK_MOVES = 5;
+const MIN_ENTROPY_SAMPLES = 10;
+const LOW_ENTROPY_THRESHOLD = 0.35;
+const HIGH_ENTROPY_THRESHOLD = 0.95;
+const HIGH_ENTROPY_MIN_ENGINE_CORRELATION = 0.9;
+const ANTI_CHEAT_FLAG_LOW_ENTROPY = "low_time_variance_entropy";
+const ANTI_CHEAT_FLAG_HIGH_ENTROPY = "high_time_variance_entropy_engine_correlation";
 
 function mean(values) {
 	return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -28,6 +44,284 @@ function calculateTimingEntropy(moveDurationsMs) {
 	return average > 0 ? standardDeviation(moveDurationsMs) / average : 0;
 }
 
+function calculateVariance(values) {
+	if (!values || values.length === 0) return 0;
+	const avg = mean(values);
+	return mean(values.map((v) => (v - avg) ** 2));
+}
+
+/**
+ * Pearson correlation coefficient R between two equal-length arrays.
+ * Returns 0 if either array has zero variance or if lengths < 2.
+ */
+function calculatePearsonCorrelation(x, y) {
+	if (!x || !y || x.length !== y.length || x.length < 2) return 0;
+	const n = x.length;
+	const avgX = mean(x);
+	const avgY = mean(y);
+	let num = 0;
+	let denX = 0;
+	let denY = 0;
+	for (let i = 0; i < n; i++) {
+		const dx = x[i] - avgX;
+		const dy = y[i] - avgY;
+		num += dx * dy;
+		denX += dx * dx;
+		denY += dy * dy;
+	}
+	const den = Math.sqrt(denX * denY);
+	if (den === 0) return 0;
+	return Number((num / den).toFixed(4));
+}
+
+/**
+ * Compute move time entropy variance to flag programmatic bot play (Issue #553).
+ *
+ * @param {Array<number>} moveTimes - Deliberation durations per move (seconds or ms)
+ * @param {Array<number|object>} [evaluations=[]] - Evaluation scores or objects with centipawnLoss / delta
+ * @param {object} [options]
+ * @param {number} [options.varianceThreshold=0.05] - Threshold for suspicious low variance
+ * @param {number} [options.minMoves=15] - Minimum moves to flag suspect timing
+ * @returns {{
+ *   isSuspectTiming: boolean,
+ *   timingVariance: number,
+ *   entropyScore: number,
+ *   complexityCorrelation: number,
+ *   flagReason: string|null
+ * }}
+ */
+function analyzeMoveTimeDistribution(moveTimes = [], evaluations = [], options = {}) {
+	const validMoveTimes = (moveTimes || [])
+		.map(toFiniteNumber)
+		.filter((t) => t !== null && t >= 0);
+
+	const minMoves = options.minMoves ?? 15;
+	const varianceThreshold = options.varianceThreshold ?? 0.05;
+
+	// If timestamps/durations are in ms (> 100 on average), scale to seconds for consistent variance check
+	const avgTime = mean(validMoveTimes);
+	const isMs = avgTime > 100;
+	const timesInSec = isMs ? validMoveTimes.map((t) => t / 1000) : validMoveTimes;
+
+	const timingVariance = Number(calculateVariance(timesInSec).toFixed(4));
+
+	// Shannon entropy score over binned move durations (normalized 0..1)
+	const timesInMs = isMs ? validMoveTimes : validMoveTimes.map((t) => t * 1000);
+	const entropyScore = moveTimeEntropyScore(timesInMs) ?? 0;
+
+	// Calculate Move-Time Complexity Correlation (R_tc):
+	// Pearson correlation between position evaluation delta |Δeval_i| and move time t_i.
+	let evalDeltas = [];
+	if (Array.isArray(evaluations) && evaluations.length > 0) {
+		const numericEvals = evaluations.map((ev) => {
+			if (typeof ev === "number") return ev;
+			if (ev && typeof ev.eval === "number") return ev.eval;
+			if (ev && typeof ev.centipawnLoss === "number") return ev.centipawnLoss;
+			if (ev && typeof ev.scoreCp === "number") return ev.scoreCp;
+			return null;
+		});
+
+		if (numericEvals.length === validMoveTimes.length) {
+			// Pre-calculated per-move eval or delta
+			evalDeltas = numericEvals.map((v) => Math.abs(v ?? 0));
+		} else {
+			// Compute sequential deltas: |eval[i] - eval[i-1]|
+			for (let i = 0; i < numericEvals.length; i++) {
+				if (i === 0) {
+					evalDeltas.push(Math.abs(numericEvals[0] ?? 0));
+				} else {
+					evalDeltas.push(Math.abs((numericEvals[i] ?? 0) - (numericEvals[i - 1] ?? 0)));
+				}
+			}
+		}
+	}
+
+	// Truncate or pad to match moveTimes length
+	const count = Math.min(timesInSec.length, evalDeltas.length);
+	const complexityCorrelation = count >= 2
+		? calculatePearsonCorrelation(evalDeltas.slice(0, count), timesInSec.slice(0, count))
+		: 0;
+
+	const isSuspectTiming = validMoveTimes.length >= minMoves && (timingVariance < varianceThreshold || entropyScore < LOW_ENTROPY_THRESHOLD);
+	let flagReason = null;
+	if (isSuspectTiming) {
+		if (timingVariance < varianceThreshold && entropyScore < LOW_ENTROPY_THRESHOLD) {
+			flagReason = "Low move time variance and anomalous entropy indicate automated bot timing";
+		} else if (timingVariance < varianceThreshold) {
+			flagReason = "Low move time variance indicates automated bot timing";
+		} else {
+			flagReason = "Anomalously low move time entropy profile indicates automated bot timing";
+		}
+	}
+
+	return {
+		isSuspectTiming,
+		timingVariance,
+		entropyScore,
+		complexityCorrelation,
+		flagReason,
+	};
+}
+
+function toFiniteNumber(value) {
+	if (value === null || value === undefined || value === "") return null;
+	const number = Number(value);
+	return Number.isFinite(number) ? number : null;
+}
+
+/** Index of the logarithmic interval a think time falls into. */
+function binMoveDuration(durationMs) {
+	const index = ENTROPY_BIN_EDGES_MS.findIndex((edge) => durationMs < edge);
+	return index === -1 ? ENTROPY_BIN_EDGES_MS.length : index;
+}
+
+function moveTimeHistogram(durationsMs) {
+	const counts = new Array(ENTROPY_BIN_COUNT).fill(0);
+	for (const duration of durationsMs) counts[binMoveDuration(duration)] += 1;
+	return counts;
+}
+
+/**
+ * Shannon entropy H = -sum(p_k * log2(p_k)) of think times over the
+ * logarithmic bins, normalised by log2(K) to a 0..1 score. Returns null when
+ * there are no samples.
+ */
+function moveTimeEntropyScore(durationsMs) {
+	const samples = durationsMs.filter((value) => Number.isFinite(value) && value >= 0);
+	if (samples.length === 0) return null;
+	let entropy = 0;
+	for (const count of moveTimeHistogram(samples)) {
+		if (count === 0) continue;
+		const p = count / samples.length;
+		entropy -= p * Math.log2(p);
+	}
+	return Number((entropy / Math.log2(ENTROPY_BIN_COUNT)).toFixed(4));
+}
+
+/**
+ * Normalised move time entropy from ordered move timestamps (ms): the delay
+ * before each move is t_i = timestamp[i] - timestamp[i-1].
+ */
+function calculateMoveTimeEntropy(timestamps) {
+	const values = (timestamps || []).map(toFiniteNumber).filter((value) => value !== null);
+	const delays = [];
+	for (let i = 1; i < values.length; i += 1) delays.push(Math.max(0, values[i] - values[i - 1]));
+	return moveTimeEntropyScore(delays);
+}
+
+/** Legal moves for `color`, counting at most `limit` (forced-move detection). */
+function countLegalMoves(board, color, limit = Infinity) {
+	if (!Array.isArray(board) || board.length !== 8) return null;
+	let count = 0;
+	for (let r = 0; r < 8; r += 1) {
+		for (let c = 0; c < 8; c += 1) {
+			const piece = board[r][c];
+			if (!piece || piece === "." || (piece === piece.toUpperCase()) !== (color === "white")) continue;
+			for (let tr = 0; tr < 8; tr += 1) {
+				for (let tc = 0; tc < 8; tc += 1) {
+					if (chessEngine.isValidMove(board, [r, c], [tr, tc], color).valid) {
+						count += 1;
+						if (count >= limit) return count;
+					}
+				}
+			}
+		}
+	}
+	return count;
+}
+
+/** Legal move count (capped at 2) for the position a telemetry move was played from. */
+function forcedMoveCount(eventData) {
+	if (!eventData) return null;
+	if (eventData.legalMoveCount !== undefined) return toFiniteNumber(eventData.legalMoveCount);
+	try {
+		return countLegalMoves(eventData.boardBefore, eventData.color, 2);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Think time before every move in a game history (both colours, in order).
+ * The server-measured move_duration_ms is preferred; otherwise the delay is
+ * derived from consecutive move timestamps.
+ */
+function extractMoveDelays(moveHistory = []) {
+	let previousTimestamp = null;
+	return moveHistory.map((entry) => {
+		const timestamp = toFiniteNumber(entry.timestamp ?? entry.move_timestamp_ms);
+		const duration = toFiniteNumber(entry.durationMs ?? entry.move_duration_ms);
+		let delayMs = null;
+		if (duration !== null && duration >= 0) delayMs = duration;
+		else if (timestamp !== null && previousTimestamp !== null) delayMs = Math.max(0, timestamp - previousTimestamp);
+		if (timestamp !== null) previousTimestamp = timestamp;
+		return {
+			color: entry.color ?? entry.event_data?.color ?? null,
+			delayMs,
+			legalMoveCount: toFiniteNumber(entry.legalMoveCount ?? entry.event_data?.legalMoveCount),
+		};
+	});
+}
+
+/**
+ * Entropy summary for one player's ordered move delays. Opening book moves
+ * (the player's first five) and forced moves (a single legal reply) are
+ * excluded because they carry no timing signal.
+ */
+function summarizeMoveTimeEntropy(delays) {
+	const samples = [];
+	let excludedMoves = 0;
+	delays.forEach((delay, index) => {
+		const forced = delay.legalMoveCount !== null && delay.legalMoveCount <= 1;
+		if (index < OPENING_BOOK_MOVES || forced || delay.delayMs === null) {
+			excludedMoves += 1;
+			return;
+		}
+		samples.push(delay.delayMs);
+	});
+	return {
+		sampleCount: samples.length,
+		excludedMoves,
+		histogram: moveTimeHistogram(samples),
+		timeVarianceEntropyScore: samples.length >= MIN_ENTROPY_SAMPLES ? moveTimeEntropyScore(samples) : null,
+	};
+}
+
+/** Telemetry flags raised by a move time entropy score. */
+function entropyFlags(entropyScore, engineCorrelation) {
+	if (entropyScore === null || entropyScore === undefined) return [];
+	if (entropyScore < LOW_ENTROPY_THRESHOLD) {
+		return [{ type: ANTI_CHEAT_FLAG_LOW_ENTROPY, timeVarianceEntropyScore: entropyScore, threshold: LOW_ENTROPY_THRESHOLD }];
+	}
+	if (entropyScore > HIGH_ENTROPY_THRESHOLD && engineCorrelation !== null && engineCorrelation > HIGH_ENTROPY_MIN_ENGINE_CORRELATION) {
+		return [{
+			type: ANTI_CHEAT_FLAG_HIGH_ENTROPY,
+			timeVarianceEntropyScore: entropyScore,
+			threshold: HIGH_ENTROPY_THRESHOLD,
+			engineCorrelation: Number(engineCorrelation.toFixed(4)),
+		}];
+	}
+	return [];
+}
+
+/**
+ * Per-player move time variance entropy for a whole game.
+ * @param {object[]} moveHistory - moves in game order with `color` and a
+ *   `timestamp` (or `durationMs`); `legalMoveCount` marks forced moves.
+ * @param {{engineCorrelation?: {white?: number, black?: number}}} [options]
+ */
+function analyzeGameMoveTimes(moveHistory, { engineCorrelation = {} } = {}) {
+	const delays = extractMoveDelays(moveHistory);
+	const result = {};
+	for (const color of ["white", "black"]) {
+		const summary = summarizeMoveTimeEntropy(delays.filter((delay) => delay.color === color));
+		const correlation = toFiniteNumber(engineCorrelation[color]);
+		const flags = entropyFlags(summary.timeVarianceEntropyScore, correlation);
+		result[color] = { ...summary, flags, flagged: flags.length > 0 };
+	}
+	return result;
+}
+
 function summarizeCentipawnLoss(losses) {
 	return {
 		count: losses.length,
@@ -35,6 +329,19 @@ function summarizeCentipawnLoss(losses) {
 		median: percentile(losses, 0.5),
 		p90: percentile(losses, 0.9),
 	};
+}
+
+function computeWindowedCentipawnLoss(evaluations, windowSize = ACPL_WINDOW_SIZE) {
+	if (!Number.isInteger(windowSize) || windowSize < 1) return [];
+	const windows = [];
+	for (let start = 0; start <= evaluations.length - windowSize; start += 1) {
+		const slice = evaluations.slice(start, start + windowSize);
+		if (slice.some((evaluation) => !evaluation || evaluation.centipawnLoss == null || !Number.isFinite(Number(evaluation.centipawnLoss)))) continue;
+		const averageCentipawnLoss = mean(slice.map((evaluation) => Number(evaluation.centipawnLoss)));
+		const engineMatchRate = slice.filter((evaluation) => evaluation.matchesTopMove === true).length / windowSize;
+		windows.push({ start, end: start + windowSize - 1, averageCentipawnLoss, engineMatchRate });
+	}
+	return windows;
 }
 
 function calculateAnomalyScore({ moveDurationsMs, engineMatches, centipawnLosses }) {
@@ -59,10 +366,11 @@ function moveToUci(move) {
 }
 
 class AntiCheatService {
-	constructor({ db = supabase, engine = botService, games = gameModel, logger = console } = {}) {
+	constructor({ db = supabase, engine = botService, games = gameModel, audit = null, logger = console } = {}) {
 		this.db = db;
 		this.engine = engine;
 		this.games = games;
+		this.audit = audit;
 		this.logger = logger;
 		this.pendingTelemetry = new Map();
 	}
@@ -138,7 +446,7 @@ class AntiCheatService {
 		};
 	}
 
-	buildPlayerAnalysis(color, playerAddress, telemetry, engineResults) {
+	buildPlayerAnalysis(color, playerAddress, telemetry, engineResults, rating = null, timing = null) {
 		const durations = telemetry
 			.map((entry) => entry.move_duration_ms)
 			.filter((value) => Number.isFinite(value) && value >= 0);
@@ -154,6 +462,20 @@ class AntiCheatService {
 			engineMatches,
 			centipawnLosses,
 		});
+		const hasRating = rating !== null && rating !== undefined && Number.isFinite(Number(rating));
+		const evaluationWindows = computeWindowedCentipawnLoss(engineResults);
+		const suspiciousEngineWindow = evaluationWindows.find((window) =>
+			hasRating && Number(rating) < 1500 &&
+			window.averageCentipawnLoss < ENGINE_STREAK_MAX_ACPL &&
+			window.engineMatchRate > ENGINE_STREAK_MIN_CORRELATION
+		);
+		const ratingRisk = hasRating ? Math.max(0, Math.min(1, (2000 - Number(rating)) / 1200)) : 0;
+		const suspicionScore = Math.round(Math.min(100, Math.max(0,
+			score * 35 +
+			(engineMatches.length ? engineMatches.filter(Boolean).length / engineMatches.length : 0) * 40 +
+			(centipawnLosses.length ? Math.max(0, 1 - mean(centipawnLosses) / 200) : 0) * 15 +
+			ratingRisk * 10,
+		)));
 
 		const reasons = [];
 		if (durations.length >= MIN_TIMED_MOVES && calculateTimingEntropy(durations) < 0.15) {
@@ -165,6 +487,15 @@ class AntiCheatService {
 		if (engineCorrelation != null && engineCorrelation >= 0.9) {
 			reasons.push("at least 90% correlation with Stockfish top moves");
 		}
+		if (suspiciousEngineWindow) reasons.push("low-rated player has a 10-move engine-like ACPL streak");
+
+		const moveTiming = timing || summarizeMoveTimeEntropy(extractMoveDelays(telemetry));
+		const antiCheatFlags = entropyFlags(moveTiming.timeVarianceEntropyScore, engineCorrelation);
+		for (const flag of antiCheatFlags) {
+			reasons.push(flag.type === ANTI_CHEAT_FLAG_LOW_ENTROPY
+				? "suspiciously uniform move time distribution (low time variance entropy)"
+				: "near-maximal move time entropy with over 90% engine correlation");
+		}
 
 		return {
 			color,
@@ -174,9 +505,17 @@ class AntiCheatService {
 			stdDevMoveMs,
 			timingEntropy: Number(calculateTimingEntropy(durations).toFixed(4)),
 			engineCorrelation: engineCorrelation == null ? null : Number(engineCorrelation.toFixed(4)),
+			engineMatchRate: engineCorrelation == null ? null : Number(engineCorrelation.toFixed(4)),
 			centipawnLoss: summarizeCentipawnLoss(centipawnLosses),
+			evaluationWindows,
+			rating: hasRating ? Number(rating) : null,
+			timeVarianceEntropyScore: moveTiming.timeVarianceEntropyScore,
+			moveTimeHistogram: moveTiming.histogram,
+			entropySampleCount: moveTiming.sampleCount,
+			antiCheatFlags,
+			suspicionScore,
 			score,
-			flagged: score > FLAG_THRESHOLD,
+			flagged: score > FLAG_THRESHOLD || Boolean(suspiciousEngineWindow) || antiCheatFlags.length > 0,
 			reasons,
 		};
 	}
@@ -185,11 +524,35 @@ class AntiCheatService {
 		const pendingWrite = this.pendingTelemetry.get(gameId);
 		if (pendingWrite) await pendingWrite;
 		const telemetry = await this.getTelemetry(gameId);
+		let ratings = { white: null, black: null };
+		try {
+			const { data: game, error: gameError } = await this.db.from("games")
+				.select("player_white_address, player_black_address").eq("id", gameId).maybeSingle();
+			if (gameError) throw gameError;
+			for (const color of ["white", "black"]) {
+				const address = game?.[`player_${color}_address`];
+				if (!address) continue;
+				const { data: player, error } = await this.db.from("players")
+					.select("elo_rating").eq("wallet_address", address).maybeSingle();
+				if (error) throw error;
+				ratings[color] = player?.elo_rating !== null && player?.elo_rating !== undefined && Number.isFinite(Number(player.elo_rating))
+					? Number(player.elo_rating)
+					: null;
+			}
+		} catch (error) {
+			this.logger.warn(`[AntiCheat] Player ratings unavailable: ${error.message}`);
+		}
 		const grouped = { white: [], black: [] };
 		for (const entry of telemetry) {
 			const color = entry.event_data?.color;
 			if (grouped[color]) grouped[color].push(entry);
 		}
+		const moveTimes = analyzeGameMoveTimes(telemetry.map((entry) => ({
+			color: entry.event_data?.color,
+			timestamp: entry.move_timestamp_ms,
+			durationMs: entry.move_duration_ms,
+			legalMoveCount: forcedMoveCount(entry.event_data),
+		})));
 
 		const analysis = {};
 		for (const color of ["white", "black"]) {
@@ -208,10 +571,39 @@ class AntiCheatService {
 				entries[0]?.player_address || null,
 				entries,
 				engineResults,
+				ratings[color],
+				moveTimes[color],
 			);
 		}
 
 		await this.games.recordCheatAnalysis(gameId, analysis);
+		return analysis;
+	}
+
+	/**
+	 * Full post-game inspection: runs the analysis (persisting scores, review
+	 * flags and anti_cheat_flags) and dispatches an audit alert for every
+	 * player with a move time entropy violation.
+	 */
+	async inspectGameSession(gameId) {
+		const analysis = await this.analyzeGame(gameId);
+		const audit = this.audit || require("./auditService");
+		for (const color of ["white", "black"]) {
+			const player = analysis[color];
+			if (!player?.antiCheatFlags?.length) continue;
+			try {
+				await audit.recordAntiCheatAlert({
+					gameId,
+					color,
+					playerAddress: player.playerAddress,
+					flags: player.antiCheatFlags,
+					timeVarianceEntropyScore: player.timeVarianceEntropyScore,
+					engineCorrelation: player.engineCorrelation,
+				});
+			} catch (error) {
+				this.logger.warn(`[AntiCheat] audit alert failed for ${color}: ${error.message}`);
+			}
+		}
 		return analysis;
 	}
 }
@@ -222,4 +614,18 @@ module.exports.FLAG_THRESHOLD = FLAG_THRESHOLD;
 module.exports.calculateTimingEntropy = calculateTimingEntropy;
 module.exports.calculateAnomalyScore = calculateAnomalyScore;
 module.exports.summarizeCentipawnLoss = summarizeCentipawnLoss;
+module.exports.computeWindowedCentipawnLoss = computeWindowedCentipawnLoss;
 module.exports.moveToUci = moveToUci;
+module.exports.calculateMoveTimeEntropy = calculateMoveTimeEntropy;
+module.exports.moveTimeEntropyScore = moveTimeEntropyScore;
+module.exports.binMoveDuration = binMoveDuration;
+module.exports.countLegalMoves = countLegalMoves;
+module.exports.analyzeGameMoveTimes = analyzeGameMoveTimes;
+module.exports.analyzeMoveTimeDistribution = analyzeMoveTimeDistribution;
+module.exports.calculateVariance = calculateVariance;
+module.exports.calculatePearsonCorrelation = calculatePearsonCorrelation;
+module.exports.ENTROPY_BIN_EDGES_MS = ENTROPY_BIN_EDGES_MS;
+module.exports.LOW_ENTROPY_THRESHOLD = LOW_ENTROPY_THRESHOLD;
+module.exports.HIGH_ENTROPY_THRESHOLD = HIGH_ENTROPY_THRESHOLD;
+module.exports.MIN_ENTROPY_SAMPLES = MIN_ENTROPY_SAMPLES;
+module.exports.OPENING_BOOK_MOVES = OPENING_BOOK_MOVES;

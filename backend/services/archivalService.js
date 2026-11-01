@@ -22,19 +22,47 @@ class SupabaseArchiveRepository {
   }
 
   async fetchBatch(cutoffDate, limit = ARCHIVE_BATCH_SIZE) {
-    const { data: games, error: gamesError } = await this.client
+    let gamesQuery = this.client
       .from("games")
       .select("*")
       .in("status", ["finished", "completed"])
       .lt("updated_at", cutoffDate.toISOString())
       .order("updated_at", { ascending: true })
       .limit(limit);
+    // Soft-delete / retention filters (#471): never archive deleted or
+    // already-archived rows. Guarded for query-builder compat in tests.
+    if (gamesQuery && typeof gamesQuery.is === "function") {
+      gamesQuery = gamesQuery.is("deleted_at", null);
+    }
+    if (gamesQuery && typeof gamesQuery.eq === "function") {
+      gamesQuery = gamesQuery.eq("is_archived", false);
+    }
+
+    const { data: games, error: gamesError } = await gamesQuery;
 
     if (gamesError) throw gamesError;
     if (!games?.length) return [];
 
-    const gameIds = games.map((game) => game.id);
-    const gameCodes = games.map((game) => game.game_code);
+    // Never archive soft-deleted / already-archived rows even if the
+    // underlying store lacks the columns (defensive JS filter).
+    const eligible = games.filter((g) => !g.deleted_at && !g.is_archived);
+    if (!eligible.length) return [];
+
+    // Never archive games with open disputes / cheat flags under review.
+    let disputableIds = new Set();
+    try {
+      const flagQuery = this.client.from("player_flags").select("game_id").eq("status", "pending");
+      const flagResult = await flagQuery;
+      const flags = flagResult?.data || [];
+      disputableIds = new Set(flags.map((f) => f.game_id));
+    } catch (_) {
+      // If flags table is unavailable, proceed without dispute exclusion.
+    }
+    const archivable = eligible.filter((g) => !disputableIds.has(g.id));
+    if (!archivable.length) return [];
+
+    const gameIds = archivable.map((game) => game.id);
+    const gameCodes = archivable.map((game) => game.game_code);
     const [movesResult, auditResult, chatResult] = await Promise.all([
       this.client.from("moves").select("*").in("game_id", gameIds).order("move_number"),
       this.client.from("match_audit_logs").select("*").in("game_id", gameIds).order("created_at"),
@@ -45,7 +73,7 @@ class SupabaseArchiveRepository {
       if (result.error) throw result.error;
     }
 
-    return games.map((game) => ({
+    return archivable.map((game) => ({
       ...game,
       moves: (movesResult.data || []).filter((move) => move.game_id === game.id),
       auditLogs: (auditResult.data || []).filter((entry) => entry.game_id === game.id),

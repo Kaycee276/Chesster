@@ -2,8 +2,14 @@ const express = require("express");
 const router = express.Router();
 const authController = require("../controllers/authController");
 const { requireAuth } = require("../middleware/authMiddleware");
+const { createAuthChallengeRateLimiter } = require("../middleware/rateLimiter");
 
-router.post("/auth/challenge", authController.createChallenge);
+// Dedicated sliding-window limiter on top of the global API limiter: caps
+// nonce generation per IP and per wallet address to blunt challenge-flooding
+// DoS attempts (Issue #435).
+const authChallengeRateLimiter = createAuthChallengeRateLimiter();
+
+router.post("/auth/challenge", authChallengeRateLimiter, authController.createChallenge);
 router.post("/auth/login", authController.login);
 router.get("/auth/profile", requireAuth, authController.getProfile);
 router.put("/auth/profile", requireAuth, authController.updateProfile);

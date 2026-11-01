@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import { BrowserRouter } from "react-router-dom";
 import "fake-indexeddb/auto";
 import * as offlineStorage from "../../src/utils/offlineStorage";
 
@@ -12,14 +10,17 @@ vi.mock("../../src/hooks/useOfflineDetection", () => ({
 describe("GamePage Offline Support", () => {
   beforeEach(() => {
     // Clear IndexedDB before each test
+    offlineStorage.closeChessterDB();
     const req = indexedDB.deleteDatabase("chesster-offline");
     return new Promise((resolve) => {
       req.onsuccess = resolve;
       req.onerror = resolve;
+      req.onblocked = resolve;
     });
   });
 
   afterEach(() => {
+    offlineStorage.closeChessterDB();
     vi.clearAllMocks();
   });
 

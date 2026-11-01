@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   saveGameToOfflineCache,
   getOfflineGame,
@@ -6,6 +6,7 @@ import {
   savePuzzleToOfflineCache,
   getOfflinePuzzle,
   getLatestOfflinePuzzle,
+  closeChessterDB,
   type ReplayMetadata,
   type PuzzleData,
 } from "../../src/utils/offlineStorage";
@@ -15,19 +16,22 @@ import "fake-indexeddb/auto";
 
 describe("offlineStorage", () => {
   beforeEach(() => {
-    // Clear IndexedDB before each test
+    closeChessterDB();
     const req = indexedDB.deleteDatabase("chesster-offline");
     return new Promise((resolve) => {
       req.onsuccess = resolve;
       req.onerror = resolve;
+      req.onblocked = resolve;
     });
   });
 
   afterEach(() => {
+    closeChessterDB();
     const req = indexedDB.deleteDatabase("chesster-offline");
     return new Promise((resolve) => {
       req.onsuccess = resolve;
       req.onerror = resolve;
+      req.onblocked = resolve;
     });
   });
 
@@ -290,9 +294,10 @@ describe("offlineStorage", () => {
       const result = await getOfflineGame("TEST");
       expect(result.data).toBeDefined();
       // Verify no sensitive fields are stored
-      expect((result.data as any)?.token).toBeUndefined();
-      expect((result.data as any)?.secret).toBeUndefined();
-      expect((result.data as any)?.sessionId).toBeUndefined();
+      const rawData = result.data as unknown as Record<string, unknown>;
+      expect(rawData?.token).toBeUndefined();
+      expect(rawData?.secret).toBeUndefined();
+      expect(rawData?.sessionId).toBeUndefined();
     });
 
     it("stores only puzzle public data", async () => {
@@ -314,7 +319,8 @@ describe("offlineStorage", () => {
       // Solution should be stored (it's part of the puzzle)
       expect(result.data?.solution).toBeDefined();
       // No secret or auth data
-      expect((result.data as any)?.apiKey).toBeUndefined();
+      const rawPuzzle = result.data as unknown as Record<string, unknown>;
+      expect(rawPuzzle?.apiKey).toBeUndefined();
     });
   });
 });

@@ -10,47 +10,40 @@ import { useEffect, useRef } from "react";
  * @param ref - Reference to the container element
  * @param isActive - Whether the trap is currently active
  */
-export function useFocusTrap(ref: React.RefObject<HTMLElement>, isActive: boolean): void {
+export function useFocusTrap(ref: React.RefObject<HTMLElement | null>, isActive: boolean): void {
   const priorElement = useRef<HTMLElement | null>(null);
-
-  /**
-   * Get all focusable elements within the container.
-   * Computed at runtime to support dynamic content.
-   */
-  const getFocusableElements = (): HTMLElement[] => {
-    if (!ref.current) return [];
-
-    const selector =
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-    const elements = Array.from(ref.current.querySelectorAll(selector));
-
-    return elements.filter((el) => {
-      const elem = el as HTMLElement;
-      // Exclude disabled, hidden, aria-hidden, or display:none elements
-      if (
-        (elem as any).disabled ||
-        (elem as any).hidden ||
-        elem.getAttribute("aria-hidden") === "true"
-      ) {
-        return false;
-      }
-
-      const style = window.getComputedStyle(elem);
-      if (
-        style.display === "none" ||
-        style.visibility === "hidden" ||
-        style.visibility === "collapse"
-      ) {
-        return false;
-      }
-
-      return true;
-    }) as HTMLElement[];
-  };
 
   useEffect(() => {
     const container = ref.current;
     if (!container) return;
+
+    const getFocusableElements = (): HTMLElement[] => {
+      const selector =
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+      const elements = Array.from(container.querySelectorAll(selector));
+
+      return elements.filter((el) => {
+        const elem = el as HTMLElement;
+        if (
+          ("disabled" in elem && Boolean((elem as unknown as { disabled?: boolean }).disabled)) ||
+          elem.hidden ||
+          elem.getAttribute("aria-hidden") === "true"
+        ) {
+          return false;
+        }
+
+        const style = window.getComputedStyle(elem);
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          style.visibility === "collapse"
+        ) {
+          return false;
+        }
+
+        return true;
+      }) as HTMLElement[];
+    };
 
     if (!isActive) {
       // Deactivation: restore focus to prior element
@@ -79,8 +72,8 @@ export function useFocusTrap(ref: React.RefObject<HTMLElement>, isActive: boolea
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
 
-      const focusables = getFocusableElements();
-      if (focusables.length === 0) {
+      const currentFocusables = getFocusableElements();
+      if (currentFocusables.length === 0) {
         // No focusables: keep focus on container
         e.preventDefault();
         if (container.getAttribute("tabindex") === null) {
@@ -90,19 +83,23 @@ export function useFocusTrap(ref: React.RefObject<HTMLElement>, isActive: boolea
         return;
       }
 
-      const focusedIndex = focusables.indexOf(document.activeElement as HTMLElement);
+      const focusedIndex = currentFocusables.indexOf(document.activeElement as HTMLElement);
 
       if (e.shiftKey) {
         // Shift+Tab: move backward
+        e.preventDefault();
         if (focusedIndex <= 0) {
-          e.preventDefault();
-          focusables[focusables.length - 1].focus();
+          currentFocusables[currentFocusables.length - 1].focus();
+        } else {
+          currentFocusables[focusedIndex - 1].focus();
         }
       } else {
         // Tab: move forward
-        if (focusedIndex >= focusables.length - 1) {
-          e.preventDefault();
-          focusables[0].focus();
+        e.preventDefault();
+        if (focusedIndex >= currentFocusables.length - 1 || focusedIndex === -1) {
+          currentFocusables[0].focus();
+        } else {
+          currentFocusables[focusedIndex + 1].focus();
         }
       }
     };
@@ -119,5 +116,5 @@ export function useFocusTrap(ref: React.RefObject<HTMLElement>, isActive: boolea
         container.removeAttribute("tabindex");
       }
     };
-  }, [isActive]);
+  }, [isActive, ref]);
 }

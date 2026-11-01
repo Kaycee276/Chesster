@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const supabase = require("../config/supabase");
 const eventBus = require("../services/eventBus");
+const { executeWithRetry, OptimisticLockError } = require("../database/transactionRetry");
 
 const REFERRAL_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -311,6 +312,65 @@ class UserModel {
 		if (!data) throw new Error("Player profile not found");
 		await this.invalidateProfileCache(address);
 		return data;
+	}
+
+	/**
+	 * Optimistic-locking update for concurrent rating/stats writes (#472).
+	 * Reads the current `version`, then does a conditional
+	 * `UPDATE ... SET patch, version = version+1 WHERE wallet_address = $id
+	 * AND version = $currentVersion`. Zero matched rows → OptimisticLockError.
+	 * Retries up to 3 times with exponential backoff + jitter via
+	 * transactionRetry.executeWithRetry.
+	 *
+	 * @param {string} address - wallet address (users.wallet_address)
+	 * @param {(current: object) => object} buildPatch - derives update fields from current row
+	 * @param {object} [options] - { maxRetries = 3, table = "users", idColumn = "wallet_address" }
+	 */
+	async updateWithOptimisticLock(address, buildPatch, options = {}) {
+		const { maxRetries = 3, table = "users", idColumn = "wallet_address" } = options;
+		return executeWithRetry(
+			async () => {
+				const { data: current, error: fetchError } = await supabase
+					.from(table)
+					.select("*")
+					.eq(idColumn, address)
+					.maybeSingle();
+				if (fetchError) throw fetchError;
+				if (!current) throw new Error("Profile not found");
+				const hasVersion = current && Object.prototype.hasOwnProperty.call(current, "version");
+				const currentVersion = current.version ?? 1;
+				const patch = buildPatch(current) || {};
+				let updateQuery = supabase
+					.from(table)
+					.update(hasVersion ? { ...patch, version: currentVersion + 1 } : { ...patch })
+					.eq(idColumn, address);
+				// Enforce WHERE version = $currentVersion only when the column exists
+				// (keeps old DBs / unit-test fakes without `version` working).
+				if (hasVersion) updateQuery = updateQuery.eq("version", currentVersion);
+				const { data, error: updateError } = await updateQuery.maybeSingle();
+				if (updateError) throw updateError;
+				if (!data) {
+					throw new OptimisticLockError(
+						`Concurrent modification for ${address} (version ${currentVersion})`
+					);
+				}
+				if (table === "users") await this.invalidateProfileCache(address);
+				return data;
+			},
+			{ maxRetries, baseDelayMs: 100, context: `${table}-optimistic-update` }
+		);
+	}
+
+	/**
+	 * Rating/stats update using optimistic locking (#472).
+	 * Example: updateWithOptimisticLock(addr, (u) => ({ elo_rating: newRating })).
+	 */
+	async updateRatingWithOptimisticLock(address, newRating, options = {}) {
+		return this.updateWithOptimisticLock(
+			address,
+			() => ({ elo_rating: newRating }),
+			{ table: options.table || "users", ...options }
+		);
 	}
 }
 

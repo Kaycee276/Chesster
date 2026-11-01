@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const supabase = require("../config/supabase");
 const { boardToFEN } = require("./botService");
 const { JWT_SECRET } = require("../middleware/authMiddleware");
+const { verifyMatchAuditChain, buildChainVerificationReport } = require("./auditHashUtil");
 
 /**
  * Match audit exporter (Issue #243).
@@ -248,10 +249,15 @@ function signOutcome(outcome) {
 async function buildAuditPackage(game) {
 	const [moveRows, logRows] = await Promise.all([getMoves(game.id), getAuditLogs(game.id)]);
 
-	const events = logRows
+	// Sort audit logs chronologically for hash chain verification
+	const sortedLogRows = logRows
 		.slice()
-		.sort((a, b) => (toMs(a.created_at) ?? 0) - (toMs(b.created_at) ?? 0))
-		.map(buildEvent);
+		.sort((a, b) => (toMs(a.created_at) ?? 0) - (toMs(b.created_at) ?? 0));
+
+	// Verify hash chain integrity of audit logs
+	const chainVerification = verifyMatchAuditChain(sortedLogRows);
+
+	const events = sortedLogRows.map(buildEvent);
 	const moves = buildMoves(game, moveRows, events);
 	const finished = game.status === "finished";
 
@@ -303,6 +309,14 @@ async function buildAuditPackage(game) {
 			outcome,
 			outcomeHash,
 			signature,
+			// Hash chain verification results
+			chainVerification: {
+				valid: chainVerification.valid,
+				totalEntries: chainVerification.totalEntries,
+				tamperedIndex: chainVerification.tamperedIndex,
+				error: chainVerification.error,
+				genesisHash: chainVerification.genesisHash,
+			},
 		},
 	};
 }
@@ -315,19 +329,124 @@ async function exportMatchAudit(idOrCode) {
 }
 
 /**
- * Check that a package's moves/events still match its signed outcome and
- * that the signature was produced with this server's key.
+ * Check that a package's moves/events still match its signed outcome,
+ * that the signature was produced with this server's key, and that the
+ * hash chain for audit logs is intact.
+ *
+ * Returns an object with detailed verification results:
+ * {
+ *   valid: boolean,
+ *   outcomeSignatureValid: boolean,
+ *   chainIntegrity: { valid, totalEntries, tamperedIndex, error }
+ * }
  */
-function verifyAuditPackage(pkg) {
-	if (!pkg || !pkg.integrity || !pkg.integrity.outcome) return false;
-	const { outcome, outcomeHash, signature } = pkg.integrity;
-	if (outcome.movesDigest !== sha256(canonicalJson(pkg.moves))) return false;
-	if (outcome.eventsDigest !== sha256(canonicalJson(pkg.events))) return false;
-	if (outcomeHash !== sha256(canonicalJson(outcome))) return false;
+function verifyAuditPackage(pkg, options = {}) {
+	const result = {
+		valid: false,
+		outcomeSignatureValid: false,
+		chainIntegrity: null,
+		errors: [],
+	};
 
+	if (!pkg || !pkg.integrity || !pkg.integrity.outcome) {
+		result.errors.push("Missing or invalid integrity section in package");
+		return options.detailed ? result : false;
+	}
+
+	const { outcome, outcomeHash, signature } = pkg.integrity;
+
+	// Verify outcome hash
+	if (outcome.movesDigest !== sha256(canonicalJson(pkg.moves))) {
+		result.errors.push("Moves digest mismatch");
+		return options.detailed ? result : false;
+	}
+	if (outcome.eventsDigest !== sha256(canonicalJson(pkg.events))) {
+		result.errors.push("Events digest mismatch");
+		return options.detailed ? result : false;
+	}
+	if (outcomeHash !== sha256(canonicalJson(outcome))) {
+		result.errors.push("Outcome hash mismatch");
+		return options.detailed ? result : false;
+	}
+
+	// Verify signature
 	const expected = Buffer.from(hmac(outcomeHash), "hex");
 	const actual = Buffer.from(String(signature), "hex");
-	return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+	const signatureValid =
+		actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+
+	if (!signatureValid) {
+		result.errors.push("Signature verification failed");
+		return options.detailed ? result : false;
+	}
+
+	result.outcomeSignatureValid = true;
+
+	// Verify hash chain integrity if available
+	if (pkg.integrity.chainVerification) {
+		result.chainIntegrity = pkg.integrity.chainVerification;
+		if (!result.chainIntegrity.valid) {
+			result.errors.push(
+				`Hash chain verification failed: ${result.chainIntegrity.error}`
+			);
+		}
+	}
+
+	// Package is valid if outcome signature is valid
+	// Chain tampering is tracked separately in chainIntegrity
+	result.valid = result.outcomeSignatureValid;
+
+	return options.detailed ? result : result.valid;
+}
+
+const ANTI_CHEAT_ALERT_EVENT = "anti_cheat.time_entropy_flag";
+
+/**
+ * Append an anti-cheat alert (Issue #461) to the match audit trail so the
+ * move time entropy violation is part of the game's tamper-evident history
+ * and shows up in exported audit packages.
+ */
+async function recordAntiCheatAlert({
+	gameId,
+	color = null,
+	playerAddress = null,
+	flags = [],
+	timeVarianceEntropyScore = null,
+	engineCorrelation = null,
+}, db = supabase) {
+	const { error } = await db.from("match_audit_logs").insert({
+		game_id: gameId,
+		event_type: ANTI_CHEAT_ALERT_EVENT,
+		player_address: playerAddress,
+		event_data: { color, flags, timeVarianceEntropyScore, engineCorrelation },
+	});
+	if (error) throw error;
+}
+
+/**
+ * Get detailed hash chain verification report for a game's audit logs.
+ * Useful for debugging or detailed auditing of tampering claims.
+ *
+ * @param {string} gameId - UUID of the game
+ * @returns {object} Detailed chain verification report with per-entry hashes
+ */
+async function getChainVerificationReport(gameId) {
+	const logRows = await getAuditLogs(gameId);
+	if (!logRows || logRows.length === 0) {
+		return {
+			gameId,
+			valid: true,
+			totalEntries: 0,
+			error: "No audit entries found",
+		};
+	}
+
+	// Sort chronologically
+	const sortedLogRows = logRows
+		.slice()
+		.sort((a, b) => (toMs(a.created_at) ?? 0) - (toMs(b.created_at) ?? 0));
+
+	return buildChainVerificationReport(sortedLogRows);
 }
 
 const CSV_COLUMNS = [
@@ -414,6 +533,9 @@ module.exports = {
 	buildAuditPackage,
 	exportMatchAudit,
 	verifyAuditPackage,
+	getChainVerificationReport,
+	recordAntiCheatAlert,
+	ANTI_CHEAT_ALERT_EVENT,
 	toCsv,
 	hashIp,
 	canonicalJson,

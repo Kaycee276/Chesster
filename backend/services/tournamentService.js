@@ -258,6 +258,15 @@ class TournamentService {
 					});
 				}
 
+				try {
+					const leaderboardService = require("./leaderboardService");
+					if (leaderboardService && typeof leaderboardService.invalidateLeaderboardCache === "function") {
+						await leaderboardService.invalidateLeaderboardCache();
+					}
+				} catch (err) {
+					logger.warn("[TournamentService] Failed to invalidate leaderboard cache:", err.message);
+				}
+
 				return {
 					completedMatchId: matchId,
 					winner: winnerAddress,
@@ -290,6 +299,23 @@ class TournamentService {
 		if (roundMatches.length === 0) return false;
 
 		return roundMatches.every((m) => m.status === "completed" || m.status === "bye");
+	}
+
+	/**
+	 * Generate the next Swiss round without repeating an opponent. Players are
+	 * ordered by score, then rating, then wallet address for deterministic ties.
+	 * A colour preference is chosen from each player's previous colour balance.
+	 * The lowest-ranked player who has not received a bye gets the odd-player bye.
+	 */
+	async generateSwissRoundPairings(tournamentId, roundNumber) {
+		if (!Number.isInteger(roundNumber) || roundNumber < 1) {
+			throw new Error("roundNumber must be a positive integer");
+		}
+		const [participants, matches] = await Promise.all([
+			tournamentModel.getParticipants(tournamentId),
+			tournamentModel.getBracketMatches(tournamentId),
+		]);
+		return pairSwissRound(participants || [], matches || [], roundNumber);
 	}
 
 	/**
@@ -350,6 +376,299 @@ class TournamentService {
 
 		return { totalRounds, rounds };
 	}
+
+	/**
+	 * Formats and escapes a string/number as an RFC 4180 CSV cell.
+	 *
+	 * @param {*} value
+	 * @returns {string}
+	 */
+	formatCsvCell(value) {
+		if (value === null || value === undefined) return "";
+		let text = String(value);
+		if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+		return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+	}
+
+	/**
+	 * Generates an RFC 4180 compliant CSV export for tournament match telemetry and player rankings.
+	 * Headers: Rank,Wallet,Wins,Losses,Draws,Points,PrizeXLM
+	 *
+	 * @param {string} tournamentId
+	 * @returns {Promise<string>}
+	 */
+	async generateTournamentCsv(tournamentId) {
+		const [participants, matches, tournament] = await Promise.all([
+			tournamentModel.getParticipants(tournamentId),
+			tournamentModel.getBracketMatches(tournamentId),
+			typeof tournamentModel.getTournamentById === "function"
+				? tournamentModel.getTournamentById(tournamentId)
+				: tournamentModel.getTournament(tournamentId),
+		]);
+
+		const stats = new Map();
+		for (const p of participants || []) {
+			const wallet = p.wallet_address || p.walletAddress || p.address || "";
+			stats.set(wallet, {
+				wallet,
+				wins: Number(p.wins ?? 0),
+				losses: Number(p.losses ?? 0),
+				draws: Number(p.draws ?? 0),
+				points: Number(p.points ?? p.score ?? 0),
+				prizeXLM: Number(p.prize_xlm ?? p.prizeXlm ?? p.prize_amount ?? 0),
+				tieBreak: Number(p.tie_break ?? p.tiebreak ?? p.buchholz ?? p.seed_number ?? p.seed ?? 0),
+			});
+		}
+
+		// Calculate stats from matches if participants don't have explicit wins/losses tracked
+		const hasExplicitMatchCounts = (participants || []).some(
+			(p) => p.wins !== undefined || p.losses !== undefined || p.draws !== undefined
+		);
+
+		if (!hasExplicitMatchCounts && (matches || []).length > 0) {
+			for (const m of matches) {
+				if (m.status !== "completed" && m.status !== "bye") continue;
+				const p1 = m.player_one || m.player_white || m.player1_address;
+				const p2 = m.player_two || m.player_black || m.player2_address;
+				const winner = m.winner || m.winner_address;
+
+				if (m.status === "bye") {
+					if (winner && stats.has(winner)) {
+						stats.get(winner).wins += 1;
+						stats.get(winner).points += 1;
+					}
+					continue;
+				}
+
+				if (winner) {
+					if (stats.has(winner)) {
+						stats.get(winner).wins += 1;
+						stats.get(winner).points += 1;
+					}
+					const loser = winner === p1 ? p2 : p1;
+					if (loser && stats.has(loser)) {
+						stats.get(loser).losses += 1;
+					}
+				} else if (m.is_draw || m.draw) {
+					if (p1 && stats.has(p1)) {
+						stats.get(p1).draws += 1;
+						stats.get(p1).points += 0.5;
+					}
+					if (p2 && stats.has(p2)) {
+						stats.get(p2).draws += 1;
+						stats.get(p2).points += 0.5;
+					}
+				}
+			}
+		}
+
+		// If tournament has winner_address and prize_pool, assign prize if prizeXLM is 0
+		if (tournament && tournament.winner_address && stats.has(tournament.winner_address)) {
+			const winnerEntry = stats.get(tournament.winner_address);
+			if (winnerEntry.prizeXLM === 0 && Number(tournament.prize_pool || tournament.prizePool || 0) > 0) {
+				winnerEntry.prizeXLM = Number(tournament.prize_pool || tournament.prizePool);
+			}
+		}
+
+		const standings = Array.from(stats.values()).sort((a, b) => {
+			if (b.points !== a.points) return b.points - a.points;
+			if (b.wins !== a.wins) return b.wins - a.wins;
+			if (a.losses !== b.losses) return a.losses - b.losses;
+			if (b.tieBreak !== a.tieBreak) return b.tieBreak - a.tieBreak;
+			return a.wallet.localeCompare(b.wallet);
+		});
+
+		const headers = ["Rank", "Wallet", "Wins", "Losses", "Draws", "Points", "PrizeXLM"];
+		const rows = [headers.join(",")];
+
+		standings.forEach((player, index) => {
+			const rank = index + 1;
+			const row = [
+				this.formatCsvCell(rank),
+				this.formatCsvCell(player.wallet),
+				this.formatCsvCell(player.wins),
+				this.formatCsvCell(player.losses),
+				this.formatCsvCell(player.draws),
+				this.formatCsvCell(player.points),
+				this.formatCsvCell(player.prizeXLM),
+			];
+			rows.push(row.join(","));
+		});
+
+		return rows.join("\n");
+	}
+}
+
+function pairSwissRound(players, previousMatches, roundNumber) {
+	const history = new Map();
+	const colours = new Map();
+	for (const match of previousMatches) {
+		const a = match.player_one || match.player1_address;
+		const b = match.player_two || match.player2_address;
+		if (a && b) {
+			if (!history.has(a)) history.set(a, new Set());
+			if (!history.has(b)) history.set(b, new Set());
+			history.get(a).add(b);
+			history.get(b).add(a);
+		}
+		if (match.player_white) colours.set(match.player_white, (colours.get(match.player_white) || 0) + 1);
+		if (match.player_black) colours.set(match.player_black, (colours.get(match.player_black) || 0) - 1);
+	}
+	const ranked = players.filter((p) => p && (p.wallet_address || p.walletAddress))
+		.map((p) => ({ ...p, wallet_address: p.wallet_address || p.walletAddress, score: Number(p.score || 0), elo: Number(p.elo || p.rating || 1200) }))
+		.sort((a, b) => b.score - a.score || b.elo - a.elo || a.wallet_address.localeCompare(b.wallet_address));
+	const pairings = [];
+	let bye = null;
+	if (ranked.length % 2 === 1) {
+		for (let i = ranked.length - 1; i >= 0; i -= 1) {
+			const candidate = ranked[i];
+			const hasBye = previousMatches.some((m) => m.status === "bye" && (m.winner || m.player_one || m.player_two) === candidate.wallet_address);
+			if (!hasBye) { bye = { walletAddress: candidate.wallet_address, round: roundNumber, status: "bye" }; ranked.splice(i, 1); break; }
+		}
+	}
+	while (ranked.length) {
+		const player = ranked.shift();
+		const opponentIndex = ranked.findIndex((candidate) => !(history.get(player.wallet_address) || new Set()).has(candidate.wallet_address));
+		if (opponentIndex === -1) throw new Error(`Unable to find a non-rematch opponent for ${player.wallet_address}`);
+		const opponent = ranked.splice(opponentIndex, 1)[0];
+		const playerBalance = colours.get(player.wallet_address) || 0;
+		const opponentBalance = colours.get(opponent.wallet_address) || 0;
+		const white = playerBalance <= opponentBalance ? player.wallet_address : opponent.wallet_address;
+		const black = white === player.wallet_address ? opponent.wallet_address : player.wallet_address;
+		pairings.push({ round: roundNumber, player_one: white, player_two: black, player_white: white, player_black: black, status: "ready" });
+	}
+	return { round: roundNumber, pairings, bye };
+}
+
+/**
+ * Calculates Buchholz tiebreak score for each player:
+ * The sum of the final scores of each of the opponents that player faced.
+ *
+ * @param {Array<object>} players - Array of { wallet_address, score, ... }
+ * @param {Array<object>} matches - Array of completed matches
+ * @param {object} options - Optional { median: boolean } for Median-Buchholz (drops highest and lowest)
+ * @returns {Map<string, number>} Map of wallet_address -> buchholz score
+ */
+function calculateBuchholz(players, matches, options = {}) {
+	const scoreMap = new Map();
+	for (const p of players) {
+		const addr = p.wallet_address || p.walletAddress;
+		scoreMap.set(addr, Number(p.score || 0));
+	}
+
+	const opponentsMap = new Map();
+	for (const p of players) {
+		const addr = p.wallet_address || p.walletAddress;
+		opponentsMap.set(addr, []);
+	}
+
+	for (const m of matches) {
+		if (m.status === "bye") continue;
+		const p1 = m.player_one || m.player1_address;
+		const p2 = m.player_two || m.player2_address;
+		if (p1 && p2 && opponentsMap.has(p1) && opponentsMap.has(p2)) {
+			opponentsMap.get(p1).push(p2);
+			opponentsMap.get(p2).push(p1);
+		}
+	}
+
+	const buchholzMap = new Map();
+	for (const [addr, opps] of opponentsMap.entries()) {
+		let oppScores = opps.map((oppAddr) => scoreMap.get(oppAddr) || 0);
+		if (options.median && oppScores.length > 2) {
+			oppScores.sort((a, b) => a - b);
+			oppScores = oppScores.slice(1, -1);
+		}
+		const sum = oppScores.reduce((acc, s) => acc + s, 0);
+		buchholzMap.set(addr, sum);
+	}
+
+	return buchholzMap;
+}
+
+/**
+ * Calculates Sonneborn-Berger tiebreak score for each player:
+ * Sum of the scores of opponents defeated + half the scores of opponents drawn against.
+ *
+ * @param {Array<object>} players - Array of { wallet_address, score, ... }
+ * @param {Array<object>} matches - Array of completed matches
+ * @returns {Map<string, number>} Map of wallet_address -> sonneborn-berger score
+ */
+function calculateSonnebornBerger(players, matches) {
+	const scoreMap = new Map();
+	for (const p of players) {
+		const addr = p.wallet_address || p.walletAddress;
+		scoreMap.set(addr, Number(p.score || 0));
+	}
+
+	const sbMap = new Map();
+	for (const p of players) {
+		const addr = p.wallet_address || p.walletAddress;
+		sbMap.set(addr, 0);
+	}
+
+	for (const m of matches) {
+		if (m.status === "bye") continue;
+		const p1 = m.player_one || m.player1_address;
+		const p2 = m.player_two || m.player2_address;
+		if (!p1 || !p2 || !sbMap.has(p1) || !sbMap.has(p2)) continue;
+
+		const winner = m.winner;
+		const isDraw = m.is_draw || m.result === "draw" || (!winner && m.status === "completed");
+
+		if (winner === p1) {
+			sbMap.set(p1, sbMap.get(p1) + (scoreMap.get(p2) || 0));
+		} else if (winner === p2) {
+			sbMap.set(p2, sbMap.get(p2) + (scoreMap.get(p1) || 0));
+		} else if (isDraw) {
+			sbMap.set(p1, sbMap.get(p1) + 0.5 * (scoreMap.get(p2) || 0));
+			sbMap.set(p2, sbMap.get(p2) + 0.5 * (scoreMap.get(p1) || 0));
+		}
+	}
+
+	return sbMap;
+}
+
+/**
+ * Calculates all Swiss-system tiebreak scores and returns ranked player standings.
+ *
+ * @param {Array<object>} players - Array of players
+ * @param {Array<object>} matches - Array of all tournament matches
+ * @returns {Array<object>} Ranked players with score, buchholz, and sonnebornBerger
+ */
+function calculateTiebreaks(players, matches) {
+	const buchholzMap = calculateBuchholz(players, matches);
+	const sbMap = calculateSonnebornBerger(players, matches);
+
+	const enriched = players.map((p) => {
+		const addr = p.wallet_address || p.walletAddress;
+		const score = Number(p.score || 0);
+		const buchholz = buchholzMap.get(addr) || 0;
+		const sonnebornBerger = sbMap.get(addr) || 0;
+		return {
+			...p,
+			wallet_address: addr,
+			score,
+			buchholz,
+			sonnebornBerger,
+		};
+	});
+
+	// Sort rank: Score desc, Buchholz desc, Sonneborn-Berger desc, Elo desc
+	enriched.sort((a, b) => {
+		if (b.score !== a.score) return b.score - a.score;
+		if (b.buchholz !== a.buchholz) return b.buchholz - a.buchholz;
+		if (b.sonnebornBerger !== a.sonnebornBerger) return b.sonnebornBerger - a.sonnebornBerger;
+		const eloA = Number(a.elo || a.rating || 1200);
+		const eloB = Number(b.elo || b.rating || 1200);
+		if (eloB !== eloA) return eloB - eloA;
+		return a.wallet_address.localeCompare(b.wallet_address);
+	});
+
+	return enriched.map((p, index) => ({
+		...p,
+		rank: index + 1,
+	}));
 }
 
 function broadcastTournamentEvent(io, tournamentId, eventName, payload) {
@@ -382,6 +701,10 @@ function emitTournamentCompleted(io, tournamentId, payload) {
 }
 
 const tournamentService = new TournamentService();
+tournamentService.__pairSwissRoundForTest = pairSwissRound;
+tournamentService.calculateBuchholz = calculateBuchholz;
+tournamentService.calculateSonnebornBerger = calculateSonnebornBerger;
+tournamentService.calculateTiebreaks = calculateTiebreaks;
 tournamentService.broadcastTournamentEvent = broadcastTournamentEvent;
 tournamentService.emitPlayerJoined = emitPlayerJoined;
 tournamentService.emitBracketGenerated = emitBracketGenerated;
@@ -390,6 +713,9 @@ tournamentService.emitMatchCompleted = emitMatchCompleted;
 tournamentService.emitTournamentCompleted = emitTournamentCompleted;
 
 module.exports = tournamentService;
+module.exports.calculateBuchholz = calculateBuchholz;
+module.exports.calculateSonnebornBerger = calculateSonnebornBerger;
+module.exports.calculateTiebreaks = calculateTiebreaks;
 module.exports.broadcastTournamentEvent = broadcastTournamentEvent;
 module.exports.emitPlayerJoined = emitPlayerJoined;
 module.exports.emitBracketGenerated = emitBracketGenerated;

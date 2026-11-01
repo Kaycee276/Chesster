@@ -183,9 +183,120 @@ async function getDashboardSummary(dateRange = null) {
 	}
 }
 
+/**
+ * Aggregate hourly platform metrics from games table and store in hourly_platform_metrics.
+ * This function is idempotent: calling it multiple times for the same hour will not create duplicates.
+ *
+ * Computes:
+ * - total_matches: count of all games created in the hour
+ * - completed_matches: count of games with status='completed'
+ * - total_wager_xlm: sum of wager_amount for games (assumes XLM token)
+ * - total_wager_usdc: sum of wager_amount for games (filtered by token_address, assumes USDC token)
+ * - unique_players: count of distinct wallet addresses (player_white_address or player_black_address)
+ *
+ * @param {Date|string} targetHour - The hour to aggregate. Can be a Date object or ISO string.
+ *                                   The function will truncate to the hour boundary (e.g., 14:00:00).
+ * @returns {object} Result object with aggregation stats: { bucketStart, rowsInserted, aggregatedMetrics }
+ * @throws {Error} If database query or upsert fails
+ */
+async function aggregateHourlyMetrics(targetHour) {
+	try {
+		// Normalize input and truncate to hour boundary
+		const hourDate = new Date(targetHour);
+		hourDate.setUTCMinutes(0, 0, 0);
+		const bucketStart = hourDate.toISOString();
+		const bucketEnd = new Date(hourDate.getTime() + 60 * 60 * 1000).toISOString();
+
+		// Query all games created within this hour
+		const { data: games, error: gamesError } = await supabase
+			.from("games")
+			.select("status, winner, wager_amount, token_address, player_white_address, player_black_address")
+			.gte("created_at", bucketStart)
+			.lt("created_at", bucketEnd);
+
+		if (gamesError) throw gamesError;
+
+		const gamesList = games || [];
+		const wallets = new Set();
+		let totalMatches = 0;
+		let completedMatches = 0;
+		let totalWagerXlm = 0;
+		let totalWagerUsdc = 0;
+
+		// Process games and aggregate metrics
+		for (const game of gamesList) {
+			totalMatches++;
+
+			// Collect unique players
+			if (game.player_white_address) wallets.add(game.player_white_address);
+			if (game.player_black_address) wallets.add(game.player_black_address);
+
+			// Count completed matches
+			if (game.status === "completed") {
+				completedMatches++;
+			}
+
+			// Aggregate wager amounts by token type
+			const wagerAmount = parseFloat(game.wager_amount) || 0;
+			if (wagerAmount > 0) {
+				// Determine token type from token_address if available, otherwise assume XLM
+				// This can be enhanced with token type detection if token_address is provided
+				if (game.token_address && game.token_address.toLowerCase().includes("usdc")) {
+					totalWagerUsdc += wagerAmount;
+				} else {
+					totalWagerXlm += wagerAmount;
+				}
+			}
+		}
+
+		// Upsert metrics into hourly_platform_metrics table
+		// ON CONFLICT on bucket_start, update the metrics (idempotent)
+		const { data: upsertResult, error: upsertError } = await supabase
+			.from("hourly_platform_metrics")
+			.upsert(
+				{
+					bucket_start: bucketStart,
+					total_matches: totalMatches,
+					completed_matches: completedMatches,
+					total_wager_xlm: totalWagerXlm.toFixed(7),
+					total_wager_usdc: totalWagerUsdc.toFixed(2),
+					unique_players: wallets.size,
+				},
+				{
+					onConflict: "bucket_start",
+				}
+			)
+			.select();
+
+		if (upsertError) throw upsertError;
+
+		console.log(
+			`[AnalyticsService] Aggregated hourly metrics for ${bucketStart}: ` +
+				`${totalMatches} matches, ${completedMatches} completed, ` +
+				`${wallets.size} unique players, XLM: ${totalWagerXlm.toFixed(7)}, USDC: ${totalWagerUsdc.toFixed(2)}`
+		);
+
+		return {
+			bucketStart,
+			rowsInserted: upsertResult?.length || 1,
+			aggregatedMetrics: {
+				totalMatches,
+				completedMatches,
+				uniquePlayers: wallets.size,
+				totalWagerXlm: parseFloat(totalWagerXlm.toFixed(7)),
+				totalWagerUsdc: parseFloat(totalWagerUsdc.toFixed(2)),
+			},
+		};
+	} catch (error) {
+		console.error("[AnalyticsService] Error aggregating hourly metrics:", error.message);
+		throw error;
+	}
+}
+
 module.exports = {
 	getDailyActivePlayers,
 	getDailyMatchVolume,
 	getTokenWageredSummary,
 	getDashboardSummary,
+	aggregateHourlyMetrics,
 };

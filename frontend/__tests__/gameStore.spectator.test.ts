@@ -104,14 +104,14 @@ describe("gameStore.spectator", () => {
   });
 
   it("handles malformed payload by using empty list if list is not provided", () => {
-    useGameStore.getState().setSpectatorData(2, [] as any);
+    useGameStore.getState().setSpectatorData(2, []);
     expect(useGameStore.getState().spectatorList).toEqual([]);
   });
 
   it("does not throw on setSpectatorData with missing fields", () => {
     const spectators = [
       { address: "GABC1234567890" }, // missing username is OK
-    ] as any;
+    ];
 
     expect(() => {
       useGameStore.getState().setSpectatorData(1, spectators);

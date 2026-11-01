@@ -1,18 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useWalletStore, type WalletType } from "../store/walletStore";
+import { useWalletStore } from "../store/walletStore";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
 import { ChevronDown, LogOut, RefreshCw, UserRound, Wallet, Gift } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchAccountBalances } from "../services/stellarService";
-
-const WALLET_OPTIONS: { type: WalletType; label: string; hint: string }[] = [
-  { type: "freighter", label: "Freighter", hint: "Official Stellar wallet" },
-  { type: "xbull", label: "xBull", hint: "xBull browser extension" },
-  { type: "albedo", label: "Albedo", hint: "Albedo web signer" },
-  { type: "rabet", label: "Rabet", hint: "Rabet browser extension" },
-];
 
 export default function WalletDropdown() {
   const { address, walletType, connectWith, disconnect } = useWalletStore();
@@ -20,7 +13,7 @@ export default function WalletDropdown() {
   const { addToast } = useToastStore();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
-  const [connecting, setConnecting] = useState<WalletType | null>(null);
+  const [connecting, setConnecting] = useState(false);
   const [balance, setBalance] = useState<string>("0");
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -46,16 +39,16 @@ export default function WalletDropdown() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleConnect = async (type: WalletType) => {
-    setConnecting(type);
+  const handleConnect = async () => {
+    setConnecting(true);
     try {
-      await connectWith(type);
+      await connectWith("stellar-wallets-kit");
       setIsOpen(false);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      addToast(`Failed to connect ${type}: ${msg}`, "error");
+      addToast(`Failed to connect wallet: ${msg}`, "error");
     } finally {
-      setConnecting(null);
+      setConnecting(false);
     }
   };
 
@@ -69,36 +62,16 @@ export default function WalletDropdown() {
     return (
       <div className="relative" ref={dropdownRef}>
         <button
-          onClick={() => setIsOpen(!isOpen)}
+          onClick={handleConnect}
+          disabled={connecting}
+          aria-label={connecting ? "Connecting wallet" : "Connect wallet"}
           className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm bg-(--bg-secondary) hover:bg-(--bg-tertiary) px-2.5 sm:px-3 py-1.5 rounded-lg border border-(--border) transition-colors shrink-0"
         >
           <Wallet size={14} className="shrink-0" />
           <span>
-            <span className="hidden xs:inline">Connect </span>Wallet
+            <span className="hidden xs:inline">{connecting ? "Connecting…" : "Connect "}</span>Wallet
           </span>
-          <ChevronDown
-            size={14}
-            className={`shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`}
-          />
         </button>
-
-        {isOpen && (
-          <div className="absolute right-0 mt-2 w-52 bg-(--bg-secondary) border border-(--border) rounded-xl shadow-xl overflow-hidden z-50">
-            <div className="p-1.5 flex flex-col gap-0.5">
-              {WALLET_OPTIONS.map(({ type, label, hint }) => (
-                <button
-                  key={type}
-                  onClick={() => handleConnect(type)}
-                  disabled={connecting !== null}
-                  className="flex flex-col items-start w-full px-3 py-2 text-sm text-(--text-secondary) hover:text-(--text) hover:bg-(--bg-tertiary) rounded-lg transition-colors disabled:opacity-50"
-                >
-                  <span className="font-medium">{connecting === type ? "Connecting…" : label}</span>
-                  <span className="text-[11px] text-(--text-tertiary)">{hint}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     );
   }

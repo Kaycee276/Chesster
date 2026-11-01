@@ -161,6 +161,23 @@ describe("soundService", () => {
 		});
 	});
 
+	describe("sound packs and preview", () => {
+		it("switches sound pack and persists to localStorage", async () => {
+			const soundService = await loadService();
+			soundService.setSoundPack("modern-digital");
+			expect(soundService.getSoundPack()).toBe("modern-digital");
+			expect(localStorage.getItem("chesster_sound_pack")).toBe("modern-digital");
+		});
+
+		it("previews sound using previewSound()", async () => {
+			const soundService = await loadService();
+			soundService.previewSound("move");
+			expect(created).toHaveLength(1);
+			soundService.previewSound("capture");
+			expect(created.length).toBeGreaterThan(1);
+		});
+	});
+
 	describe("error handling", () => {
 		it("does not throw when AudioContext construction fails", async () => {
 			const soundService = await loadService();

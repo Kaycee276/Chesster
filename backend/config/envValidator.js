@@ -6,6 +6,13 @@ const REQUIRED_ENV_VARS = [
 ];
 
 /**
+ * Optional env vars used by specific features.
+ * COMMUNITY_WEBHOOK_URL: Discord/Telegram webhook for high-wager match broadcasts (issue #533).
+ * When set, matches with wager_amount >= 100 XLM will trigger a rich embed notification.
+ */
+// COMMUNITY_WEBHOOK_URL is intentionally optional; absence simply disables the broadcast.
+
+/**
  * Validates backend environment variables.
  * Logs a formatted error and exits process with code 1 if critical keys are missing.
  *

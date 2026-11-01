@@ -196,6 +196,34 @@ function _getSecret() {
   return process.env.WEBHOOK_SECRET || "";
 }
 
+const WEBHOOK_SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
+
+function verifyWebhookSignature(
+  header,
+  rawBody,
+  secret,
+  nowSeconds = Math.floor(Date.now() / 1000),
+) {
+  if (typeof header !== "string" || typeof secret !== "string" || !secret) return false;
+  if (typeof rawBody !== "string" && !Buffer.isBuffer(rawBody)) return false;
+
+  const match = /^t=(\d+),v1=([a-f0-9]{64})$/i.exec(header);
+  if (!match) return false;
+
+  const timestamp = Number(match[1]);
+  if (!Number.isSafeInteger(timestamp) || !Number.isSafeInteger(nowSeconds)) return false;
+  const ageSeconds = nowSeconds - timestamp;
+  if (ageSeconds < 0 || ageSeconds > WEBHOOK_SIGNATURE_TOLERANCE_SECONDS) return false;
+
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(`${match[1]}.`, "utf8")
+    .update(rawBody)
+    .digest();
+  const provided = Buffer.from(match[2], "hex");
+  return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+}
+
 function _getTimeout() {
   return Number(process.env.WEBHOOK_TIMEOUT_MS) || 5000;
 }
@@ -438,14 +466,17 @@ class WebhookService {
   // Subscriber management
   // -------------------------------------------------------------------
 
-  register(eventType, url) {
+  register(eventType, url, secret = _getSecret()) {
     if (!eventType || !url) throw new Error("eventType and url are required");
     this.validateDestinationSync(url);
+    if (!secret || typeof secret !== "string") {
+      throw new Error("Webhook subscriber secret is required");
+    }
 
     if (!this.subscribers.has(eventType)) {
-      this.subscribers.set(eventType, new Set());
+      this.subscribers.set(eventType, new Map());
     }
-    this.subscribers.get(eventType).add(url);
+    this.subscribers.get(eventType).set(url, secret);
   }
 
   unregister(eventType, url) {
@@ -455,8 +486,8 @@ class WebhookService {
 
   getSubscribers() {
     const result = {};
-    for (const [event, set] of this.subscribers) {
-      result[event] = [...set];
+    for (const [event, subscribers] of this.subscribers) {
+      result[event] = [...subscribers.keys()];
     }
     return result;
   }
@@ -495,7 +526,7 @@ class WebhookService {
     };
   }
 
-  async _postOnce(url, payload, body, signature, redirectCount = 0) {
+  async _postOnce(url, payload, body, headers, redirectCount = 0) {
     const MAX_REDIRECTS = 5;
     if (redirectCount > MAX_REDIRECTS) {
       throw new Error(`Too many redirects (limit: ${MAX_REDIRECTS})`);
@@ -512,7 +543,7 @@ class WebhookService {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Webhook-Signature": `sha256=${signature}`,
+          ...headers,
           "X-Webhook-Event": payload.event,
         },
         body,
@@ -524,7 +555,7 @@ class WebhookService {
         const location = response.headers?.get ? response.headers.get("location") : null;
         if (location) {
           const nextUrl = new URL(location, url).href;
-          return await this._postOnce(nextUrl, payload, body, signature, redirectCount + 1);
+          return await this._postOnce(nextUrl, payload, body, headers, redirectCount + 1);
         }
       }
 
@@ -542,9 +573,18 @@ class WebhookService {
    * When `deadLetter` is true, a delivery that ultimately fails is archived
    * in the dead-letter queue and the entry carries its `deadLetterId`.
    */
-  async _deliverWithRetry(url, payload, { deadLetter = true } = {}) {
+  async _deliverWithRetry(url, payload, { deadLetter = true, secret = _getSecret() } = {}) {
     const body = JSON.stringify(payload);
-    const signature = this.sign(body);
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signaturePayload = `${timestamp}.${body}`;
+    const signature = crypto.createHmac("sha256", secret).update(signaturePayload, "utf8").digest("hex");
+    const headers = {
+      "X-Chesster-Timestamp": String(timestamp),
+      "X-Chesster-Signature": `t=${timestamp},v1=${signature}`,
+      // Keep the legacy headers during the migration for existing consumers.
+      "X-Webhook-Signature": `sha256=${this.sign(body)}`,
+      "X-Webhook-Event": payload.event,
+    };
     const maxAttempts = _getMaxRetries();
     let lastError = null;
     let lastStatusCode = null;
@@ -555,7 +595,7 @@ class WebhookService {
       let retryable = true;
 
       try {
-        const response = await this._postOnce(url, payload, body, signature);
+        const response = await this._postOnce(url, payload, body, headers);
 
         if (response && response.ok) {
           const entry = {
@@ -710,7 +750,7 @@ class WebhookService {
     const payload = this._buildPayload(eventType, data);
 
     const results = await Promise.allSettled(
-      [...urls].map((url) => this._deliverWithRetry(url, payload))
+      [...urls].map(([url, secret]) => this._deliverWithRetry(url, payload, { secret }))
     );
 
     return results.map((r) =>
@@ -754,3 +794,4 @@ module.exports.DLQ_STATUS = DLQ_STATUS;
 module.exports.computeBackoffDelay = computeBackoffDelay;
 module.exports.isPrivateOrReservedIp = isPrivateOrReservedIp;
 module.exports.defaultDnsLookup = defaultDnsLookup;
+module.exports.verifyWebhookSignature = verifyWebhookSignature;

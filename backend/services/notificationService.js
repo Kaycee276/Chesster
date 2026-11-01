@@ -88,6 +88,54 @@ class NotificationService {
 		};
 	}
 
+	/**
+	 * Broadcasts a rich embed alert to the configured community webhook when a
+	 * high-stakes wagered match is created or resolved (wager_amount >= 100 XLM).
+	 *
+	 * The dispatch is fire-and-forget with a 3-second timeout so it never blocks
+	 * or delays the main game flow. Any network / HTTP failure is silently swallowed.
+	 *
+	 * Supports Discord webhook format (embeds array). When COMMUNITY_WEBHOOK_URL
+	 * is unset the function returns immediately without making any HTTP request.
+	 *
+	 * @param {object} game
+	 * @param {string} game.white_player   - White player username
+	 * @param {string} [game.black_player] - Black player username (null for open lobby)
+	 * @param {string|number} game.wager_amount - Wager in XLM
+	 * @param {string} game.game_code      - Unique game code used to build the spectator URL
+	 * @param {string} [game.time_control] - Human-readable time control label (e.g. "10+0")
+	 * @returns {Promise<{sent: boolean}>}
+	 */
+	async broadcastHighWagerAlert(game) {
+		const webhookUrl = process.env.COMMUNITY_WEBHOOK_URL;
+		if (!webhookUrl || Number(game.wager_amount) < 100) return { sent: false };
+
+		const appUrl = (process.env.APP_URL || "https://chesster.app").replace(/\/$/, "");
+		const spectatorUrl = `${appUrl}/game/${game.game_code}`;
+
+		const embed = {
+			title: "⚔️ High-Stakes Match Created!",
+			description: `**${escapeHtml(game.white_player)}** vs **${escapeHtml(game.black_player || "Open Lobby")}**\nWager: **${game.wager_amount} XLM**`,
+			url: spectatorUrl,
+			color: 0x10b981,
+			fields: [
+				{ name: "Players", value: `${escapeHtml(game.white_player)} vs ${escapeHtml(game.black_player || "Open Lobby")}`, inline: true },
+				{ name: "Wager", value: `${game.wager_amount} XLM`, inline: true },
+				...(game.time_control ? [{ name: "Time Control", value: String(game.time_control), inline: true }] : []),
+			],
+			timestamp: new Date().toISOString(),
+		};
+
+		await this.http
+			.post(webhookUrl, { embeds: [embed] }, {
+				headers: { "Content-Type": "application/json" },
+				timeout: 3000,
+			})
+			.catch(() => {});
+
+		return { sent: true };
+	}
+
 	async sendTournamentWinnerAnnouncement(tournament) {
 		if (!process.env.DISCORD_WEBHOOK_URL) return { sent: false };
 		const embed = {

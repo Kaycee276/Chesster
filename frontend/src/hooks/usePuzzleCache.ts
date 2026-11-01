@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { savePuzzleToOfflineCache, getLatestOfflinePuzzle } from "../utils/offlineStorage";
 import type { Puzzle } from "../api/puzzleApi";
 

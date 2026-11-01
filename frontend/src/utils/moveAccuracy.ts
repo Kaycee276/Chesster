@@ -15,10 +15,10 @@ import { MATE_SCORE_CP } from "./engineEvaluation";
  */
 
 /** Move quality categories, worst last. */
-export type MoveQuality = "best" | "good" | "inaccuracy" | "mistake" | "blunder";
+export type MoveQuality = "brilliant" | "best" | "good" | "inaccuracy" | "mistake" | "blunder";
 
 /** Classification thresholds, in centipawns of loss (≤ threshold). */
-export const CPL_THRESHOLDS: Record<Exclude<MoveQuality, "blunder">, number> = {
+export const CPL_THRESHOLDS: Record<Exclude<MoveQuality, "brilliant" | "blunder">, number> = {
 	best: 15,
 	good: 60,
 	inaccuracy: 150,
@@ -95,7 +95,7 @@ export interface AccuracySummary {
 }
 
 function emptyCounts(): Record<MoveQuality, number> {
-	return { best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
+	return { brilliant: 0, best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 };
 }
 
 /**
@@ -146,6 +146,7 @@ export const MOVE_QUALITY_META: Record<
 	MoveQuality,
 	{ glyph: string; label: string; className: string }
 > = {
+	brilliant: { glyph: "!!", label: "Brilliant", className: "acc-brilliant" },
 	best: { glyph: "!", label: "Best", className: "acc-best" },
 	good: { glyph: "✓", label: "Good", className: "acc-good" },
 	inaccuracy: { glyph: "?!", label: "Inaccuracy", className: "acc-inaccuracy" },

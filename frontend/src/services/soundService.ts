@@ -4,23 +4,26 @@
  * Synthesises chess sound effects using the Web Audio API.
  * No audio files needed — all sounds are generated in-browser.
  *
- * Supports 4 sound packs:
+ * Supports 7 sound packs:
  *   - wood: Classic wooden piece sounds
  *   - plastic: Modern plastic piece sounds
  *   - arcade: Retro arcade synth sounds
  *   - retro: 8-bit retro chiptune sounds
+ *   - classic-wood: Warm mellow woody tones (sine waves, lower frequencies)
+ *   - modern-digital: Crisp synthesized digital tones (triangle waves, higher frequencies)
+ *   - lofi-soft: Muted subtle organic tones (very low volume sine waves)
  *
  * Usage:
  *   import { soundService } from "../services/soundService";
  *   soundService.move();
  *   soundService.setEnabled(false);
  *   soundService.setVolume(0.5);
- *   soundService.setSoundPack('arcade');
+ *   soundService.setSoundPack('classic-wood');
  */
 
 type OscType = OscillatorType;
 
-export type SoundPack = "wood" | "plastic" | "arcade" | "retro";
+export type SoundPack = "wood" | "plastic" | "arcade" | "retro" | "classic-wood" | "modern-digital" | "lofi-soft";
 
 const LS_MUTED_KEY = "chesster:sound:muted";
 const LS_VOLUME_KEY = "chesster:sound:volume";
@@ -36,6 +39,7 @@ interface SoundProfile {
   gameEnd: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
   draw: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
   lowTimeTick: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
+  brilliant: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
 }
 
 /**
@@ -84,6 +88,12 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     lowTimeTick: [
       { freq: 1200, duration: 0.05, type: "sine", volume: 0.2, delay: 0 },
     ],
+    brilliant: [
+      { freq: 523.25, duration: 0.1, type: "sine", volume: 0.25, delay: 0 },
+      { freq: 659.25, duration: 0.1, type: "sine", volume: 0.25, delay: 0.08 },
+      { freq: 783.99, duration: 0.12, type: "sine", volume: 0.28, delay: 0.16 },
+      { freq: 1046.5, duration: 0.25, type: "sine", volume: 0.3, delay: 0.24 },
+    ],
   },
   plastic: {
     // Modern plastic piece sounds - brighter and snappier
@@ -125,6 +135,12 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     ],
     lowTimeTick: [
       { freq: 1400, duration: 0.04, type: "triangle", volume: 0.2, delay: 0 },
+    ],
+    brilliant: [
+      { freq: 587.33, duration: 0.09, type: "triangle", volume: 0.22, delay: 0 },
+      { freq: 739.99, duration: 0.09, type: "triangle", volume: 0.22, delay: 0.07 },
+      { freq: 880, duration: 0.12, type: "triangle", volume: 0.25, delay: 0.14 },
+      { freq: 1174.66, duration: 0.22, type: "triangle", volume: 0.28, delay: 0.22 },
     ],
   },
   arcade: {
@@ -168,6 +184,12 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     lowTimeTick: [
       { freq: 1600, duration: 0.04, type: "sawtooth", volume: 0.18, delay: 0 },
     ],
+    brilliant: [
+      { freq: 500, duration: 0.08, type: "sawtooth", volume: 0.2, delay: 0 },
+      { freq: 700, duration: 0.08, type: "sawtooth", volume: 0.2, delay: 0.06 },
+      { freq: 900, duration: 0.08, type: "sawtooth", volume: 0.22, delay: 0.12 },
+      { freq: 1300, duration: 0.2, type: "sawtooth", volume: 0.25, delay: 0.18 },
+    ],
   },
   retro: {
     // 8-bit chiptune sounds - classic video game vibe
@@ -209,6 +231,156 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
     ],
     lowTimeTick: [
       { freq: 2000, duration: 0.03, type: "square", volume: 0.18, delay: 0 },
+    ],
+    brilliant: [
+      { freq: 660, duration: 0.06, type: "square", volume: 0.18, delay: 0 },
+      { freq: 880, duration: 0.06, type: "square", volume: 0.18, delay: 0.05 },
+      { freq: 1100, duration: 0.08, type: "square", volume: 0.2, delay: 0.1 },
+      { freq: 1760, duration: 0.18, type: "square", volume: 0.22, delay: 0.16 },
+    ],
+  },
+  "classic-wood": {
+    // Classic Wood — warm, mellow, woody tones using sine waves at slightly lower frequencies
+    move: [{ freq: 460, duration: 0.09, type: "sine", volume: 0.16, delay: 0 }],
+    capture: [
+      { freq: 260, duration: 0.09, type: "sine", volume: 0.24, delay: 0 },
+      { freq: 190, duration: 0.13, type: "sine", volume: 0.18, delay: 0.07 },
+    ],
+    check: [
+      { freq: 760, duration: 0.13, type: "sine", volume: 0.28, delay: 0 },
+      { freq: 760, duration: 0.13, type: "sine", volume: 0.28, delay: 0.18 },
+    ],
+    castle: [
+      { freq: 380, duration: 0.1, type: "sine", volume: 0.16, delay: 0 },
+      { freq: 480, duration: 0.1, type: "sine", volume: 0.16, delay: 0.1 },
+    ],
+    promote: [
+      { freq: 380, duration: 0.11, type: "sine", volume: 0.2, delay: 0 },
+      { freq: 480, duration: 0.11, type: "sine", volume: 0.2, delay: 0.09 },
+      { freq: 570, duration: 0.11, type: "sine", volume: 0.2, delay: 0.18 },
+      { freq: 760, duration: 0.11, type: "sine", volume: 0.2, delay: 0.27 },
+    ],
+    gameStart: [
+      { freq: 280, duration: 0.13, type: "sine", volume: 0.2, delay: 0 },
+      { freq: 380, duration: 0.13, type: "sine", volume: 0.2, delay: 0.1 },
+      { freq: 480, duration: 0.13, type: "sine", volume: 0.2, delay: 0.2 },
+      { freq: 570, duration: 0.13, type: "sine", volume: 0.2, delay: 0.3 },
+    ],
+    gameEnd: [
+      { freq: 570, duration: 0.16, type: "sine", volume: 0.2, delay: 0 },
+      { freq: 480, duration: 0.16, type: "sine", volume: 0.2, delay: 0.13 },
+      { freq: 380, duration: 0.16, type: "sine", volume: 0.2, delay: 0.26 },
+      { freq: 280, duration: 0.16, type: "sine", volume: 0.2, delay: 0.39 },
+      { freq: 190, duration: 0.16, type: "sine", volume: 0.2, delay: 0.52 },
+    ],
+    draw: [
+      { freq: 380, duration: 0.16, type: "sine", volume: 0.2, delay: 0 },
+      { freq: 380, duration: 0.16, type: "sine", volume: 0.2, delay: 0.22 },
+    ],
+    lowTimeTick: [
+      { freq: 1050, duration: 0.06, type: "sine", volume: 0.18, delay: 0 },
+    ],
+    brilliant: [
+      { freq: 460, duration: 0.11, type: "sine", volume: 0.22, delay: 0 },
+      { freq: 580, duration: 0.11, type: "sine", volume: 0.22, delay: 0.09 },
+      { freq: 690, duration: 0.13, type: "sine", volume: 0.26, delay: 0.18 },
+      { freq: 920, duration: 0.26, type: "sine", volume: 0.28, delay: 0.27 },
+    ],
+  },
+  "modern-digital": {
+    // Modern Digital — crisp synthesized tones using triangle waves at higher frequencies
+    move: [{ freq: 820, duration: 0.06, type: "triangle", volume: 0.2, delay: 0 }],
+    capture: [
+      { freq: 560, duration: 0.07, type: "triangle", volume: 0.26, delay: 0 },
+      { freq: 420, duration: 0.1, type: "triangle", volume: 0.2, delay: 0.05 },
+    ],
+    check: [
+      { freq: 1200, duration: 0.1, type: "triangle", volume: 0.3, delay: 0 },
+      { freq: 1200, duration: 0.1, type: "triangle", volume: 0.3, delay: 0.15 },
+    ],
+    castle: [
+      { freq: 680, duration: 0.08, type: "triangle", volume: 0.2, delay: 0 },
+      { freq: 860, duration: 0.08, type: "triangle", volume: 0.2, delay: 0.09 },
+    ],
+    promote: [
+      { freq: 680, duration: 0.09, type: "triangle", volume: 0.22, delay: 0 },
+      { freq: 820, duration: 0.09, type: "triangle", volume: 0.22, delay: 0.07 },
+      { freq: 960, duration: 0.09, type: "triangle", volume: 0.22, delay: 0.14 },
+      { freq: 1200, duration: 0.09, type: "triangle", volume: 0.22, delay: 0.21 },
+    ],
+    gameStart: [
+      { freq: 560, duration: 0.1, type: "triangle", volume: 0.22, delay: 0 },
+      { freq: 700, duration: 0.1, type: "triangle", volume: 0.22, delay: 0.08 },
+      { freq: 840, duration: 0.1, type: "triangle", volume: 0.22, delay: 0.16 },
+      { freq: 1050, duration: 0.1, type: "triangle", volume: 0.22, delay: 0.24 },
+    ],
+    gameEnd: [
+      { freq: 1050, duration: 0.12, type: "triangle", volume: 0.22, delay: 0 },
+      { freq: 840, duration: 0.12, type: "triangle", volume: 0.22, delay: 0.1 },
+      { freq: 700, duration: 0.12, type: "triangle", volume: 0.22, delay: 0.2 },
+      { freq: 560, duration: 0.12, type: "triangle", volume: 0.22, delay: 0.3 },
+      { freq: 420, duration: 0.12, type: "triangle", volume: 0.22, delay: 0.4 },
+    ],
+    draw: [
+      { freq: 700, duration: 0.12, type: "triangle", volume: 0.22, delay: 0 },
+      { freq: 700, duration: 0.12, type: "triangle", volume: 0.22, delay: 0.2 },
+    ],
+    lowTimeTick: [
+      { freq: 1600, duration: 0.04, type: "triangle", volume: 0.2, delay: 0 },
+    ],
+    brilliant: [
+      { freq: 740, duration: 0.09, type: "triangle", volume: 0.24, delay: 0 },
+      { freq: 930, duration: 0.09, type: "triangle", volume: 0.24, delay: 0.07 },
+      { freq: 1110, duration: 0.12, type: "triangle", volume: 0.27, delay: 0.14 },
+      { freq: 1480, duration: 0.22, type: "triangle", volume: 0.3, delay: 0.22 },
+    ],
+  },
+  "lofi-soft": {
+    // Lo-Fi Soft — muted, subtle, organic tones using very low volume sine waves
+    move: [{ freq: 380, duration: 0.1, type: "sine", volume: 0.09, delay: 0 }],
+    capture: [
+      { freq: 220, duration: 0.1, type: "sine", volume: 0.14, delay: 0 },
+      { freq: 165, duration: 0.14, type: "sine", volume: 0.1, delay: 0.08 },
+    ],
+    check: [
+      { freq: 620, duration: 0.14, type: "sine", volume: 0.14, delay: 0 },
+      { freq: 620, duration: 0.14, type: "sine", volume: 0.14, delay: 0.2 },
+    ],
+    castle: [
+      { freq: 300, duration: 0.11, type: "sine", volume: 0.09, delay: 0 },
+      { freq: 380, duration: 0.11, type: "sine", volume: 0.09, delay: 0.11 },
+    ],
+    promote: [
+      { freq: 300, duration: 0.12, type: "sine", volume: 0.11, delay: 0 },
+      { freq: 380, duration: 0.12, type: "sine", volume: 0.11, delay: 0.1 },
+      { freq: 460, duration: 0.12, type: "sine", volume: 0.11, delay: 0.2 },
+      { freq: 620, duration: 0.12, type: "sine", volume: 0.11, delay: 0.3 },
+    ],
+    gameStart: [
+      { freq: 220, duration: 0.14, type: "sine", volume: 0.11, delay: 0 },
+      { freq: 300, duration: 0.14, type: "sine", volume: 0.11, delay: 0.12 },
+      { freq: 380, duration: 0.14, type: "sine", volume: 0.11, delay: 0.24 },
+      { freq: 460, duration: 0.14, type: "sine", volume: 0.11, delay: 0.36 },
+    ],
+    gameEnd: [
+      { freq: 460, duration: 0.16, type: "sine", volume: 0.11, delay: 0 },
+      { freq: 380, duration: 0.16, type: "sine", volume: 0.11, delay: 0.14 },
+      { freq: 300, duration: 0.16, type: "sine", volume: 0.11, delay: 0.28 },
+      { freq: 220, duration: 0.16, type: "sine", volume: 0.11, delay: 0.42 },
+      { freq: 165, duration: 0.16, type: "sine", volume: 0.11, delay: 0.56 },
+    ],
+    draw: [
+      { freq: 300, duration: 0.16, type: "sine", volume: 0.11, delay: 0 },
+      { freq: 300, duration: 0.16, type: "sine", volume: 0.11, delay: 0.24 },
+    ],
+    lowTimeTick: [
+      { freq: 820, duration: 0.06, type: "sine", volume: 0.08, delay: 0 },
+    ],
+    brilliant: [
+      { freq: 380, duration: 0.12, type: "sine", volume: 0.12, delay: 0 },
+      { freq: 480, duration: 0.12, type: "sine", volume: 0.12, delay: 0.1 },
+      { freq: 570, duration: 0.14, type: "sine", volume: 0.14, delay: 0.2 },
+      { freq: 760, duration: 0.28, type: "sine", volume: 0.16, delay: 0.3 },
     ],
   },
 };
@@ -325,6 +497,11 @@ class SoundService {
     this.playSoundEffect("lowTimeTick");
   }
 
+  /** Brilliant move celebratory sound cue */
+  brilliant() {
+    this.playSoundEffect("brilliant");
+  }
+
   /** Clock has dropped into the "urgent" low-time zone */
   lowTime() {
     this.tone(660, 0.06, "triangle", 0.20);
@@ -379,6 +556,10 @@ class SoundService {
     localStorage.setItem(LS_VOLUME_KEY, String(this._volume));
   }
 
+  setMasterVolume(value: number) {
+    this.setVolume(value);
+  }
+
   getVolume() {
     return this._volume;
   }
@@ -395,6 +576,62 @@ class SoundService {
   getSoundPack(): SoundPack {
     return this._soundPack;
   }
+
+  /**
+   * Preview a sound effect (e.g. for audio pack selection in settings).
+   */
+  previewSound(soundType: "move" | "capture" = "move") {
+    if (soundType === "capture") {
+      this.capture();
+    } else {
+      this.move();
+    }
+  }
+
+  getAudioContext(): AudioContext | null {
+    return this.getCtx();
+  }
+
+  playTone(freq: number, duration: number = 0.08, type: OscType = "sine") {
+    this.tone(freq, duration, type);
+  }
+
+  synthesizeBeep(freq: number = 440, duration: number = 0.08, type: OscType = "sine") {
+    this.playTone(freq, duration, type);
+  }
+
+  /**
+   * Attempts to play an audio element or audio asset URL.
+   * If play fails or asset fails to load, gracefully falls back to Web Audio API tone synthesis.
+   */
+  async playWithFallback(
+    audioOrPlayFn: HTMLAudioElement | (() => Promise<void>),
+    fallbackFreq: number = 440,
+    fallbackDuration: number = 0.08,
+    fallbackType: OscType = "sine"
+  ) {
+    try {
+      if (typeof audioOrPlayFn === "function") {
+        await audioOrPlayFn();
+      } else if (audioOrPlayFn && typeof audioOrPlayFn.play === "function") {
+        await audioOrPlayFn.play();
+      }
+    } catch {
+      this.playTone(fallbackFreq, fallbackDuration, fallbackType);
+    }
+  }
 }
 
 export const soundService = new SoundService();
+
+export function getAudioContext(): AudioContext | null {
+  return soundService.getAudioContext();
+}
+
+export function playTone(freq: number, duration: number = 0.08, type: OscType = "sine") {
+  soundService.playTone(freq, duration, type);
+}
+
+export function synthesizeBeep(freq: number = 440, duration: number = 0.08, type: OscType = "sine") {
+  soundService.synthesizeBeep(freq, duration, type);
+}

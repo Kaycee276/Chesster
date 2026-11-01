@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import GameLobby from "./components/GameLobby";
 import GamePage from "./pages/GamePage";
 import SpectatorPage from "./pages/SpectatorPage";
@@ -22,6 +22,12 @@ import { useThemeStore, applyColorMode } from "./store/themeStore";
 function PrivateRoute({ element }: { element: React.ReactNode }) {
 	const { isConnected } = useWalletStore();
 	return isConnected ? element : <Navigate to="/" replace />;
+}
+
+function AppChrome() {
+	const { pathname } = useLocation();
+	if (pathname.startsWith("/overlay/")) return null;
+	return <><NetworkBanner /><Toast /><ThemeSelector /><GameSettings /></>;
 }
 
 const App = () => {
@@ -47,8 +53,7 @@ const App = () => {
 
 	return (
 		<BrowserRouter>
-			<NetworkBanner />
-			<Toast />
+			<AppChrome />
 			<Routes>
 				<Route path="/" element={<GameLobby />} />
 				<Route path="/tournaments" element={<TournamentPage />} />
@@ -62,12 +67,11 @@ const App = () => {
 				<Route path="/analysis" element={<AnalysisPage />} />
 				<Route path="/leaderboard" element={<LeaderboardPage />} />
 				<Route path="/status" element={<StatusPage />} />
+				<Route path="/overlay/:code" element={<OverlayPage />} />
 				<Route path="/overlay/game/:gameCode" element={<OverlayPage />} />
 				<Route path="/:gameCode" element={<GamePage />} />
 				<Route path="/spectate/:gameCode" element={<SpectatorPage />} />
 			</Routes>
-			<ThemeSelector />
-			<GameSettings />
 		</BrowserRouter>
 	);
 };

@@ -108,4 +108,32 @@ describe("Automatic Transaction Deadlock Retry Routine (Issue #443)", () => {
     expect(fn).toHaveBeenCalledTimes(4);
     expect(sleepFn).toHaveBeenCalledTimes(3);
   });
+
+  describe("Randomized jitter calculation (Issue #534)", () => {
+    const { getJitteredDelay } = require("../database/transactionRetry");
+
+    it("bounds jittered delay between 0 and maxDelay", () => {
+      const baseDelay = 50;
+      const maxDelay = 500;
+
+      for (let attempt = 0; attempt < 10; attempt++) {
+        for (let i = 0; i < 50; i++) {
+          const delay = getJitteredDelay(attempt, baseDelay, maxDelay);
+          const maxExpected = Math.min(maxDelay, baseDelay * Math.pow(2, attempt));
+          expect(delay).toBeGreaterThanOrEqual(0);
+          expect(delay).toBeLessThan(maxExpected || 1);
+          expect(delay).toBeLessThanOrEqual(maxDelay);
+        }
+      }
+    });
+
+    it("produces randomized delays across multiple invocations", () => {
+      const delays = new Set();
+      for (let i = 0; i < 50; i++) {
+        delays.add(getJitteredDelay(3, 50, 1000));
+      }
+      expect(delays.size).toBeGreaterThan(1);
+    });
+  });
 });
+

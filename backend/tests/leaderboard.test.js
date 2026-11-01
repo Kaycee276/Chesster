@@ -2,6 +2,14 @@ const request = require("supertest");
 const express = require("express");
 const gameRoutes = require("../routes/gameRoutes");
 const leaderboardService = require("../services/leaderboardService");
+const { getRedisClient } = require("../config/redis");
+
+jest.mock("../config/redis", () => ({
+	getRedisClient: jest.fn(),
+	getRedisConnection: jest.fn(),
+	closeRedis: jest.fn(),
+	getPubSubClients: jest.fn(() => ({ pubClient: null, subClient: null })),
+}));
 
 function buildApp() {
 	const app = express();
@@ -10,8 +18,36 @@ function buildApp() {
 	return app;
 }
 
+function createMockRedis(initialStore = {}) {
+	const store = new Map(Object.entries(initialStore));
+	return {
+		store,
+		get: jest.fn(async (key) => (store.has(key) ? store.get(key) : null)),
+		setex: jest.fn(async (key, ttl, value) => {
+			store.set(key, value);
+			return "OK";
+		}),
+		keys: jest.fn(async (pattern) => {
+			const prefix = pattern.replace(/\*$/, "");
+			return Array.from(store.keys()).filter((k) => k.startsWith(prefix));
+		}),
+		del: jest.fn(async (...keys) => {
+			let deleted = 0;
+			for (const k of keys) {
+				if (store.delete(k)) deleted++;
+			}
+			return deleted;
+		}),
+	};
+}
+
 describe("GET /api/leaderboard", () => {
+	let mockRedis;
+
 	beforeEach(() => {
+		mockRedis = createMockRedis();
+		getRedisClient.mockReturnValue(mockRedis);
+
 		jest.spyOn(leaderboardService, "getFinishedGames").mockResolvedValue([
 			{
 				player_white_address: "WHITE_ADDR",
@@ -28,9 +64,11 @@ describe("GET /api/leaderboard", () => {
 		jest.restoreAllMocks();
 	});
 
-	it("returns 200 and leaderboard array matching LeaderboardEntry schema", async () => {
-		const res = await request(buildApp()).get("/api/leaderboard");
+	it("returns 200 and leaderboard array matching LeaderboardEntry schema with X-Cache: MISS on first call", async () => {
+		const app = buildApp();
+		const res = await request(app).get("/api/leaderboard");
 		expect(res.status).toBe(200);
+		expect(res.headers["x-cache"]).toBe("MISS");
 		expect(res.body.success).toBe(true);
 		expect(Array.isArray(res.body.data)).toBe(true);
 
@@ -45,6 +83,22 @@ describe("GET /api/leaderboard", () => {
 			expect(top).toHaveProperty("winRate");
 			expect(top).toHaveProperty("totalEarnings");
 		}
+	});
+
+	it("serves subsequent repeated requests from cache with X-Cache: HIT", async () => {
+		const app = buildApp();
+
+		const firstRes = await request(app).get("/api/leaderboard?limit=100");
+		expect(firstRes.status).toBe(200);
+		expect(firstRes.headers["x-cache"]).toBe("MISS");
+		expect(leaderboardService.getFinishedGames).toHaveBeenCalledTimes(1);
+
+		const secondRes = await request(app).get("/api/leaderboard?limit=100");
+		expect(secondRes.status).toBe(200);
+		expect(secondRes.headers["x-cache"]).toBe("HIT");
+		expect(secondRes.body.data).toEqual(firstRes.body.data);
+		// Underlying database query not called again on cache HIT
+		expect(leaderboardService.getFinishedGames).toHaveBeenCalledTimes(1);
 	});
 
 	it("filters by category=all, bullet, blitz, rapid", async () => {
@@ -64,7 +118,105 @@ describe("GET /api/leaderboard", () => {
 	});
 });
 
-describe("LeaderboardService unit logic", () => {
+describe("LeaderboardService caching and invalidation logic", () => {
+	let mockRedis;
+
+	beforeEach(() => {
+		mockRedis = createMockRedis();
+		getRedisClient.mockReturnValue(mockRedis);
+	});
+
+	afterEach(() => {
+		jest.restoreAllMocks();
+	});
+
+	it("uses chesster:leaderboard:top100 as cache key for top 100 players", () => {
+		const key = leaderboardService.getCacheKey("all", 100, 0);
+		expect(key).toBe("chesster:leaderboard:top100");
+	});
+
+	it("stores payload in Redis with 60s expiration TTL", async () => {
+		const mockGames = [
+			{
+				player_white_address: "P1",
+				player_black_address: "P2",
+				winner: "white",
+				time_control_seconds: 300,
+			},
+		];
+		const mockDb = {
+			from: () => ({
+				select: () => ({
+					eq: () => Promise.resolve({ data: mockGames, error: null }),
+					in: () => Promise.resolve({ data: [], error: null }),
+				}),
+			}),
+		};
+
+		const service = new leaderboardService.constructor({ database: mockDb });
+		const result = await service.getLeaderboard({ limit: 100, offset: 0 });
+
+		expect(result.length).toBe(2);
+		expect(mockRedis.setex).toHaveBeenCalledWith(
+			"chesster:leaderboard:top100",
+			60,
+			JSON.stringify(result)
+		);
+	});
+
+	it("invalidateLeaderboardCache() clears the cached key on demand", async () => {
+		mockRedis.store.set("chesster:leaderboard:top100", JSON.stringify([{ rank: 1 }]));
+		mockRedis.store.set("chesster:leaderboard:blitz:50:0", JSON.stringify([{ rank: 1 }]));
+
+		expect(mockRedis.store.has("chesster:leaderboard:top100")).toBe(true);
+
+		await leaderboardService.invalidateLeaderboardCache();
+
+		expect(mockRedis.store.has("chesster:leaderboard:top100")).toBe(false);
+		expect(mockRedis.store.has("chesster:leaderboard:blitz:50:0")).toBe(false);
+	});
+
+	it("benchmark test: confirms database query count does not scale linearly with request volume", async () => {
+		let queryCount = 0;
+		const mockDb = {
+			from: () => {
+				queryCount++;
+				return {
+					select: () => ({
+						eq: () => Promise.resolve({
+							data: [
+								{
+									player_white_address: "ALICE",
+									player_black_address: "BOB",
+									winner: "white",
+									time_control_seconds: 300,
+								},
+							],
+							error: null,
+						}),
+						in: () => Promise.resolve({ data: [], error: null }),
+					}),
+				};
+			},
+		};
+
+		const service = new leaderboardService.constructor({ database: mockDb });
+
+		// Initial request (cache miss) populates the cache
+		const firstRes = await service.getLeaderboard({ limit: 100, offset: 0 });
+		expect(firstRes.length).toBe(2);
+		expect(queryCount).toBe(2); // 1 for games + 1 for profiles
+
+		// Subsequent 50 requests are served directly from cache without hitting the database
+		for (let i = 0; i < 50; i++) {
+			const cachedRes = await service.getLeaderboard({ limit: 100, offset: 0 });
+			expect(cachedRes.length).toBe(2);
+		}
+
+		// Database query count remains completely unchanged despite 50 additional requests
+		expect(queryCount).toBe(2);
+	});
+
 	it("correctly aggregates and ranks players from finished games", async () => {
 		const mockGames = [
 			{
@@ -99,6 +251,8 @@ describe("LeaderboardService unit logic", () => {
 			}),
 		};
 
+		// Bypass redis cache for unit logic verification
+		getRedisClient.mockReturnValue(null);
 		const service = new leaderboardService.constructor({ database: mockDb });
 		const result = await service.getLeaderboard();
 
@@ -145,6 +299,7 @@ describe("LeaderboardService unit logic", () => {
 			}),
 		};
 
+		getRedisClient.mockReturnValue(null);
 		const service = new leaderboardService.constructor({ database: mockDb });
 
 		const bulletResult = await service.getLeaderboard({ category: "bullet" });

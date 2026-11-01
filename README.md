@@ -13,7 +13,7 @@ A fully decentralized, two-player chess game built on the Stellar network using 
 
 ## 🏗 Architecture
 
-For component responsibilities, trust boundaries, and match/escrow sequence diagrams, see the [architecture guide](docs/ARCHITECTURE.md).
+For component responsibilities, trust boundaries, and match/escrow sequence diagrams, see the [architecture guide](docs/ARCHITECTURE.md). For contract storage layout, the full error code catalog, token decimal handling, and local Soroban sandbox setup, see the [Soroban integration guide](docs/SOROBAN_INTEGRATION.md).
 
 ```text
 Chesster/
@@ -125,6 +125,7 @@ The Soroban smart contract (`ChessterEscrow`) handles the financial logic of the
 - **`join_match`**: Player 2 locks their matching wager.
 - **`resolve_match`**: The coordinator (backend) resolves the match, paying the winner (minus a small fee) or refunding both players.
 - **`refund_after_timeout`**: Allows players to reclaim funds if a match is abandoned.
+- **`emergency_refund`**: Lets either player split the locked wager evenly if an active match sees no coordinator resolution for 72 hours.
 
 ## 🧪 Testing
 

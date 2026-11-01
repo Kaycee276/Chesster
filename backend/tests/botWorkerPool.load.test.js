@@ -6,7 +6,8 @@
 const path = require("path");
 const { monitorEventLoopDelay } = require("perf_hooks");
 const chessEngine = require("../services/chessEngine");
-const { BotService, BotWorkerPool } = require("../services/botService");
+const { BotService } = require("../services/botService");
+const { StockfishPool: BotWorkerPool } = require("../services/stockfishPool");
 const { pickHeuristicMove } = require("../services/botHeuristics");
 
 const TEST_WORKER = path.join(__dirname, "fixtures", "poolTestWorker.js");

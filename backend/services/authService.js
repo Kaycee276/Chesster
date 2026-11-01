@@ -165,10 +165,23 @@ class AuthService {
 		return true;
 	}
 
-	issueToken(address) {
-		return jwt.sign({ sub: address, address }, JWT_SECRET, {
+	/**
+	 * Issue a JWT token for an authenticated wallet address.
+	 * 
+	 * @param {string} address - Stellar wallet address
+	 * @param {string} ipSubnet - Client IP subnet for binding (optional, e.g., "192.168.1")
+	 * @returns {string} Signed JWT token
+	 */
+	issueToken(address, ipSubnet = null) {
+		const jti = crypto.randomUUID();
+		const payload = {
+			sub: address,
+			address,
+			...(ipSubnet && { ipSubnet }), // Include IP subnet if provided
+		};
+		return jwt.sign(payload, JWT_SECRET, {
 			expiresIn: JWT_EXPIRES_IN,
-			jwtid: crypto.randomUUID(),
+			jwtid: jti,
 		});
 	}
 

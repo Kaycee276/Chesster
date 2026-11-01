@@ -104,13 +104,13 @@ describe("analyzeAccuracy", () => {
 		// White losses: 5, 95, 360 → mean ≈ 153.33.
 		expect(white.meanCpl).toBeCloseTo(460 / 3, 10);
 		expect(white.total).toBe(3);
-		expect(white.counts).toEqual({ best: 1, good: 0, inaccuracy: 1, mistake: 0, blunder: 1 });
+		expect(white.counts).toEqual({ brilliant: 0, best: 1, good: 0, inaccuracy: 1, mistake: 0, blunder: 1 });
 		expect(white.accuracy).toBeCloseTo(moveAccuracyPercent(white.meanCpl), 10);
 
 		// Black losses: 0, 20, 0 → mean ≈ 6.67, all near-best play.
 		expect(black.meanCpl).toBeCloseTo(20 / 3, 10);
 		expect(black.total).toBe(3);
-		expect(black.counts).toEqual({ best: 2, good: 1, inaccuracy: 0, mistake: 0, blunder: 0 });
+		expect(black.counts).toEqual({ brilliant: 0, best: 2, good: 1, inaccuracy: 0, mistake: 0, blunder: 0 });
 		expect(black.accuracy).toBeCloseTo(moveAccuracyPercent(black.meanCpl), 10);
 		expect(black.accuracy).toBeGreaterThan(white.accuracy);
 	});
@@ -137,7 +137,7 @@ describe("analyzeAccuracy", () => {
 			accuracy: 100,
 			meanCpl: 0,
 			total: 0,
-			counts: { best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 },
+			counts: { brilliant: 0, best: 0, good: 0, inaccuracy: 0, mistake: 0, blunder: 0 },
 		});
 		expect(black).toEqual(white);
 	});
@@ -150,7 +150,7 @@ describe("display helpers", () => {
 	});
 
 	it("gives every quality a badge label, glyph and style class", () => {
-		for (const quality of ["best", "good", "inaccuracy", "mistake", "blunder"] as const) {
+		for (const quality of ["brilliant", "best", "good", "inaccuracy", "mistake", "blunder"] as const) {
 			expect(MOVE_QUALITY_META[quality].label.length).toBeGreaterThan(0);
 			expect(MOVE_QUALITY_META[quality].glyph.length).toBeGreaterThan(0);
 			expect(MOVE_QUALITY_META[quality].className).toMatch(/^acc-/);

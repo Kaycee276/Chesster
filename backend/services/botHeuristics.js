@@ -1,4 +1,5 @@
 const chessEngine = require("./chessEngine");
+const openingBook = require("../data/openingBook.json");
 
 /**
  * Pure move helpers shared by botService (main thread) and the Stockfish
@@ -19,6 +20,22 @@ function coordsToSquare([row, col]) {
 }
 
 const UCI_MOVE_PATTERN = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
+
+/** Return a deterministic, weighted opening-book response for a FEN position. */
+function getOpeningBookMove(fen, random = Math.random) {
+	if (typeof fen !== "string") return null;
+	const parts = fen.split(" ");
+	const positionKey = parts.slice(0, 3).join(" ");
+	const options = openingBook[positionKey] || openingBook[`${parts[0]} ${parts[1]} -`];
+	if (!Array.isArray(options) || options.length === 0) return null;
+	const totalWeight = options.reduce((sum, option) => sum + (option.weight || 1), 0);
+	let cursor = Math.max(0, Math.min(0.999999, random())) * totalWeight;
+	for (const option of options) {
+		cursor -= option.weight || 1;
+		if (cursor < 0) return option.move;
+	}
+	return options[options.length - 1].move;
+}
 
 /** Parse a UCI move string ("e2e4", "e7e8q") into { from, to, promotion }. */
 function parseUciMove(uci) {
@@ -93,6 +110,7 @@ module.exports = {
 	coordsToSquare,
 	parseUciMove,
 	toUciMove,
+	getOpeningBookMove,
 	getLegalMoves,
 	pickHeuristicMove,
 };

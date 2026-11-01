@@ -15,6 +15,31 @@
 const MAX_RATING_GAP = 400; // hard ceiling for any pairing (±400)
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
+// Issue #552: Skill-based matchmaking (SBMM) expansion windows over wait time
+const SBMM_BASE_TOLERANCE = 75;
+const SBMM_MAX_TOLERANCE = 400;
+const SBMM_STEP = 75;
+const EXPANSION_THRESHOLDS_SEC = [15, 30, 45];
+
+/**
+ * Calculate dynamic Elo tolerance window over wait time (Issue #552):
+ * - 0-15s: 75 Elo
+ * - 16-30s: 150 Elo
+ * - 31-45s: 250 Elo (or 75 + steps * 75 capped at 400)
+ *
+ * @param {number} queuedAt - Timestamp when the player/ticket entered the queue
+ * @param {number} [baseTolerance=75]
+ * @param {number} [maxTolerance=400]
+ * @param {number} [now=Date.now()]
+ * @returns {number}
+ */
+function calculateEloTolerance(queuedAt, baseTolerance = SBMM_BASE_TOLERANCE, maxTolerance = SBMM_MAX_TOLERANCE, now = Date.now()) {
+	const elapsedSeconds = Math.max(0, (now - queuedAt) / 1000);
+	const steps = Math.floor(elapsedSeconds / 15);
+	const expanded = baseTolerance + steps * SBMM_STEP;
+	return Math.min(expanded, maxTolerance);
+}
+
 /**
  * Compute the eligible rating delta for a queue entry based on wait time.
  * This implements exponential bracket expansion at specific time boundaries:
@@ -58,16 +83,27 @@ class MatchmakingService {
 		this.defaultElo = 1200;
 		this.maxRatingGap = MAX_RATING_GAP;
 		this.pollTimer = null;
+		this._pairedGames = [];
+		this._pairedPlayerIds = new Set();
 	}
 
 	/**
 	 * Add a player to the matchmaking queue. Re-queuing a player who is already
-	 * waiting in the same wager tier (e.g. after a socket reconnect) keeps their
+	 * waiting in the same wager tier and asset (e.g. after a socket reconnect) keeps their
 	 * original queuedAt so they do not lose their accumulated tolerance.
-	 * @param {object} player - { userId, socketId, elo, wagerTier }
+	 * @param {object} player - { userId, socketId, elo, wagerTier, timeControl, wagerAsset, ticketId, timeoutMs }
 	 * @returns {object} queue entry
 	 */
-	addToQueue({ userId, socketId, elo, wagerTier = "free" }) {
+	addToQueue({
+		userId,
+		socketId,
+		elo,
+		wagerTier = "free",
+		timeControl = null,
+		wagerAsset = null,
+		ticketId = null,
+		timeoutMs = null,
+	}) {
 		if (!userId) {
 			throw new Error("userId is required for matchmaking");
 		}
@@ -77,28 +113,81 @@ class MatchmakingService {
 
 		const id = String(userId);
 		const tier = String(wagerTier || "free").toLowerCase();
+		const asset = wagerAsset ? String(wagerAsset).toUpperCase() : null;
+		const tc = timeControl ? String(timeControl) : null;
+		const tid = ticketId ? String(ticketId) : null;
 		const existing = this.queue.get(id);
+		const sameTier = existing && existing.wagerTier === tier;
+		const sameAsset = existing && (existing.wagerAsset || null) === asset;
+		const sameTimeControl = existing && (existing.timeControl || null) === tc;
 
 		const entry = {
 			userId: id,
 			socketId: String(socketId),
 			elo: this._normalizeElo(elo),
 			wagerTier: tier,
-			queuedAt: existing && existing.wagerTier === tier ? existing.queuedAt : Date.now(),
+			queuedAt: (arguments[0] && arguments[0].queuedAt) || (sameTier && sameAsset && sameTimeControl ? existing.queuedAt : Date.now()),
 		};
+
+		if (tid) entry.ticketId = tid;
+		if (asset !== null) entry.wagerAsset = asset;
+		if (tc !== null) entry.timeControl = tc;
+		if (typeof timeoutMs === "number") entry.timeoutMs = timeoutMs;
 
 		this.queue.set(entry.userId, entry);
 		return entry;
 	}
 
 	/**
-	 * Remove a player from the queue by userId.
-	 * @param {string} userId
+	 * Remove a player from the queue by userId or ticketId.
+	 * @param {string} userIdOrTicketId
 	 * @returns {boolean} true if removed, false otherwise
 	 */
-	removeFromQueue(userId) {
-		if (!userId) return false;
-		return this.queue.delete(String(userId));
+	removeFromQueue(userIdOrTicketId) {
+		if (!userIdOrTicketId) return false;
+		const target = String(userIdOrTicketId);
+		if (this.queue.delete(target)) return true;
+		for (const [userId, entry] of this.queue.entries()) {
+			if (entry.ticketId === target) {
+				this.queue.delete(userId);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Explicit ticket cancellation helper (Issue #556).
+	 * Removes ticket from queue and cancels any pending timeouts.
+	 * @param {string} ticketId
+	 * @returns {boolean} true if removed, false otherwise
+	 */
+	cancelMatchmakingTicket(ticketId) {
+		return this.removeFromQueue(ticketId);
+	}
+
+	/**
+	 * Remove tickets that have exceeded their timeoutMs duration.
+	 * @param {number} [now=Date.now()]
+	 * @param {(entry: object) => void} [onTimeout]
+	 * @returns {Array<object>} list of removed expired tickets
+	 */
+	cleanupExpiredTickets(now = Date.now(), onTimeout = null) {
+		const expired = [];
+		for (const [userId, entry] of this.queue.entries()) {
+			if (entry.timeoutMs && now - entry.queuedAt >= entry.timeoutMs) {
+				this.queue.delete(userId);
+				expired.push(entry);
+				if (typeof onTimeout === "function") {
+					try {
+						onTimeout(entry);
+					} catch (err) {
+						console.error("Matchmaking onTimeout handler failed:", err);
+					}
+				}
+			}
+		}
+		return expired;
 	}
 
 	/**
@@ -119,14 +208,72 @@ class MatchmakingService {
 
 	/**
 	 * Whether two queue entries may be paired at time `now`: same wager tier,
-	 * and a rating gap within both players' tolerances and the hard ceiling.
+	 * compatible wager asset, matching time control, and a rating gap within
+	 * acceptable tolerances and the hard ceiling.
+	 *
+	 * When useMaxTolerance is true (Issue #552):
+	 *   |Elo1 - Elo2| <= Math.max(Tolerance(P1), Tolerance(P2))
+	 * Otherwise mutual tolerance requires:
+	 *   |Elo1 - Elo2| <= Math.min(Tolerance(P1), Tolerance(P2))
+	 *
+	 * @param {object} a
+	 * @param {object} b
+	 * @param {number} [now=Date.now()]
+	 * @param {boolean} [useMaxTolerance=false]
 	 * @returns {boolean}
 	 */
-	canPair(a, b, now = Date.now()) {
-		if (a.userId === b.userId || a.wagerTier !== b.wagerTier) return false;
+	canPair(a, b, now = Date.now(), useMaxTolerance = false) {
+		if (a.userId === b.userId) return false;
+		if (a.wagerTier !== b.wagerTier) return false;
+		if ((a.wagerAsset || null) !== (b.wagerAsset || null)) return false;
+		if ((a.timeControl || null) !== (b.timeControl || null)) return false;
 		const gap = Math.abs(a.elo - b.elo);
-		const mutualTolerance = Math.min(getPlayerTolerance(a, now), getPlayerTolerance(b, now));
-		return gap <= Math.min(mutualTolerance, this.maxRatingGap);
+		const tolA = getPlayerTolerance(a, now);
+		const tolB = getPlayerTolerance(b, now);
+		const allowedTolerance = useMaxTolerance ? Math.max(tolA, tolB) : Math.min(tolA, tolB);
+		return gap <= Math.min(allowedTolerance, this.maxRatingGap);
+	}
+
+	/**
+	 * Check queue entries for wait-time expansion thresholds (15s, 30s, 45s)
+	 * and invoke onExpand / notify client if crossed. (Issue #552)
+	 *
+	 * @param {number} [now=Date.now()]
+	 * @param {Function} [onExpand]
+	 * @returns {Array<object>} list of triggered expansion notifications
+	 */
+	checkQueueExpansions(now = Date.now(), onExpand = null) {
+		const expansions = [];
+		for (const entry of this.queue.values()) {
+			const elapsedSec = Math.floor(Math.max(0, now - entry.queuedAt) / 1000);
+			if (!entry.expandedThresholds) {
+				entry.expandedThresholds = new Set();
+			}
+
+			for (const threshold of EXPANSION_THRESHOLDS_SEC) {
+				if (elapsedSec >= threshold && !entry.expandedThresholds.has(threshold)) {
+					entry.expandedThresholds.add(threshold);
+					const currentRadius = calculateEloTolerance(entry.queuedAt, SBMM_BASE_TOLERANCE, SBMM_MAX_TOLERANCE, now);
+					const payload = {
+						userId: entry.userId,
+						socketId: entry.socketId,
+						ticketId: entry.ticketId || null,
+						thresholdSeconds: threshold,
+						elapsedSeconds: elapsedSec,
+						searchRadius: currentRadius,
+					};
+					expansions.push(payload);
+					if (typeof onExpand === "function") {
+						try {
+							onExpand(payload);
+						} catch (err) {
+							console.error("Matchmaking onExpand handler failed:", err);
+						}
+					}
+				}
+			}
+		}
+		return expansions;
 	}
 
 	/**
@@ -143,6 +290,8 @@ class MatchmakingService {
 			userId: String(player.userId),
 			elo: this._normalizeElo(player.elo),
 			wagerTier: String(player.wagerTier || "free").toLowerCase(),
+			wagerAsset: player.wagerAsset ? String(player.wagerAsset).toUpperCase() : null,
+			timeControl: player.timeControl ? String(player.timeControl) : null,
 			queuedAt: player.queuedAt || now,
 		};
 
@@ -158,20 +307,36 @@ class MatchmakingService {
 
 		this.removeFromQueue(target.userId);
 		this.removeFromQueue(bestMatch.userId);
-		return { player1: target, player2: bestMatch };
+		const matchCode = this.generateMatchCode();
+		return {
+			matchCode,
+			round: 1,
+			player1: target,
+			player2: bestMatch,
+		};
+	}
+
+	/**
+	 * Generate a unique match code.
+	 * @returns {string}
+	 */
+	generateMatchCode() {
+		return `MATCH_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 	}
 
 	/**
 	 * Scan the queue and pair every eligible player, closest rating gaps first.
 	 * Ties on rating gap go to the pair containing the longest-waiting player.
 	 * @param {number} [now=Date.now()]
-	 * @returns {Array<{player1: object, player2: object}>} list of matched pairs
+	 * @returns {Array<{matchCode: string, round: number, player1: object, player2: object}>} list of matched pairs
 	 */
 	processQueue(now = Date.now()) {
+		this.cleanupExpiredTickets(now);
 		const tiers = new Map();
 		for (const entry of this.queue.values()) {
-			if (!tiers.has(entry.wagerTier)) tiers.set(entry.wagerTier, []);
-			tiers.get(entry.wagerTier).push(entry);
+			const groupKey = `${entry.wagerTier}:${entry.wagerAsset || "DEFAULT"}:${entry.timeControl || "DEFAULT"}`;
+			if (!tiers.has(groupKey)) tiers.set(groupKey, []);
+			tiers.get(groupKey).push(entry);
 		}
 
 		const candidatePairs = [];
@@ -200,8 +365,14 @@ class MatchmakingService {
 			if (!this.queue.has(a.userId) || !this.queue.has(b.userId)) continue;
 			this.removeFromQueue(a.userId);
 			this.removeFromQueue(b.userId);
+			const matchCode = this.generateMatchCode();
 			// The longer-waiting player is listed first.
-			matches.push(a.queuedAt <= b.queuedAt ? { player1: a, player2: b } : { player1: b, player2: a });
+			const pair = a.queuedAt <= b.queuedAt ? { player1: a, player2: b } : { player1: b, player2: a };
+			matches.push({
+				matchCode,
+				round: 1,
+				...pair,
+			});
 		}
 
 		return matches;
@@ -212,15 +383,19 @@ class MatchmakingService {
 	 * paired without needing a new player to join.
 	 * @param {object} options
 	 * @param {(match: {player1: object, player2: object}) => void} options.onMatch
+	 * @param {(expansion: object) => void} [options.onExpand]
 	 * @param {number} [options.intervalMs=1000]
 	 */
-	startQueueWorker({ onMatch, intervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) {
+	startQueueWorker({ onMatch, onExpand = null, intervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) {
 		if (typeof onMatch !== "function") {
 			throw new Error("onMatch callback is required to start the matchmaking worker");
 		}
 		this.stopQueueWorker();
 
 		this.pollTimer = setInterval(() => {
+			if (typeof onExpand === "function") {
+				this.checkQueueExpansions(Date.now(), onExpand);
+			}
 			for (const match of this.processQueue()) {
 				try {
 					onMatch(match);
@@ -288,6 +463,78 @@ class MatchmakingService {
 	 */
 	clearQueue() {
 		this.queue.clear();
+		this._pairedGames = [];
+		this._pairedPlayerIds = new Set();
+	}
+
+	/**
+	 * High-level helper for joining queue and finding immediate matches.
+	 */
+	async joinQueue(walletAddress, elo) {
+		const id = String(walletAddress);
+		if (this.queue.has(id)) {
+			return this.queue.get(id);
+		}
+		if (this._pairedPlayerIds && this._pairedPlayerIds.has(id)) {
+			return { userId: id, elo };
+		}
+		const entry = {
+			userId: id,
+			socketId: `socket_${id}`,
+			elo: this._normalizeElo(elo),
+			wagerTier: "free",
+			queuedAt: Date.now(),
+		};
+
+		let bestMatch = null;
+		for (const candidate of this.queue.values()) {
+			if (!this.canPair(entry, candidate)) continue;
+			if (!bestMatch || this._isBetterOpponent(entry, candidate, bestMatch)) {
+				bestMatch = candidate;
+			}
+		}
+
+		if (bestMatch) {
+			this.queue.delete(bestMatch.userId);
+			this._pairedGames = this._pairedGames || [];
+			this._pairedPlayerIds = this._pairedPlayerIds || new Set();
+			this._pairedPlayerIds.add(entry.userId);
+			this._pairedPlayerIds.add(bestMatch.userId);
+			this._pairedGames.push({
+				id: this.generateMatchCode(),
+				players: [entry.userId, bestMatch.userId],
+			});
+			return entry;
+		}
+
+		this.queue.set(id, entry);
+		return entry;
+	}
+
+	async leaveQueue(walletAddress) {
+		const id = String(walletAddress);
+		const removed = this.removeFromQueue(id);
+		if (this._pairedPlayerIds) {
+			this._pairedPlayerIds.delete(id);
+		}
+		return removed;
+	}
+
+	getPairedGames() {
+		return this._pairedGames || [];
+	}
+
+	getPairedCount() {
+		return (this._pairedGames || []).length * 2;
+	}
+
+	getQueueState() {
+		return Array.from(this.queue.values());
+	}
+
+	clearMatches() {
+		this._pairedGames = [];
+		this._pairedPlayerIds = new Set();
 	}
 
 	_normalizeElo(elo) {
@@ -307,6 +554,14 @@ module.exports = new MatchmakingService();
 module.exports.MatchmakingService = MatchmakingService;
 module.exports.getPlayerTolerance = getPlayerTolerance;
 module.exports.getEligibleRatingDelta = getEligibleRatingDelta;
+module.exports.calculateEloTolerance = calculateEloTolerance;
+module.exports.EXPANSION_THRESHOLDS_SEC = EXPANSION_THRESHOLDS_SEC;
 module.exports.MATCHMAKING_CONFIG = Object.freeze({
 	MAX_RATING_GAP,
+});
+module.exports.SBMM_CONFIG = Object.freeze({
+	BASE_TOLERANCE: SBMM_BASE_TOLERANCE,
+	MAX_TOLERANCE: SBMM_MAX_TOLERANCE,
+	TOLERANCE_STEP: SBMM_STEP,
+	EXPANSION_THRESHOLDS_SEC,
 });

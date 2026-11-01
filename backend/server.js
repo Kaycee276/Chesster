@@ -3,6 +3,7 @@ const { validateEnv } = require("./config/envValidator");
 validateEnv();
 
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const helmet = require("helmet");
 const http = require("http");
@@ -30,10 +31,19 @@ const {
   verifySocketToken,
   resolvePlayerColor,
   authorizeMove,
+  handleDisconnect,
+  handleReconnect,
+  reconcileGameState,
 } = require("./socket/moveAuthority");
+const gameController = require("./controllers/gameController");
 const { createRateLimiter } = require("./middleware/rateLimiter");
 const { sanitizeInput } = require("./middleware/sanitizeInput");
-const { moderateMessage, checkSlowMode } = require("./services/chatService");
+const {
+  moderateMessage,
+  checkSlowMode,
+  enforceChatRateLimit,
+  clearChatRateLimit,
+} = require("./services/chatService");
 const { JWT_SECRET } = require("./middleware/authMiddleware");
 const { createSocketRateLimiter } = require("./middleware/socketRateLimiter");
 const { csrfProtection, generateSignedToken, setCsrfCookie } = require("./middleware/csrfMiddleware");
@@ -44,12 +54,14 @@ const {
   LeaveGameSchema,
   SpectatorReactionSchema,
   ReconnectGameSchema,
+  ReconcileStateSchema,
   RequestRematchSchema,
   SendChatSchema,
   SpectatorMessageSchema,
 } = require("./validators/socketSchemas");
 const swaggerUi = require("swagger-ui-express");
-const swaggerDocument = require("./docs/swagger.json");
+const YAML = require("js-yaml");
+const swaggerDocument = YAML.load(path.join(__dirname, "docs/openapi.yaml"));
 
 const app = express();
 const server = http.createServer(app);
@@ -123,7 +135,11 @@ app.get("/api/csrf-token", (req, res) => {
 });
 
 // Swagger API documentation (Issue #152)
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+const swaggerOptions = {
+	customSiteTitle: swaggerDocument?.info?.title || "Chesster Platform REST API",
+};
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOptions));
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOptions));
 
 // Security middleware: strip/reject malicious input before it reaches any route
 // handler, and rate-limit the API surface to blunt brute-forcing and DoS.
@@ -291,6 +307,10 @@ io.on("connection", (socket) => {
         presence[boundColor].socketId = socket.id;
         broadcastPresence(gameCode, boundColor, "online");
 
+        // Start application-level heartbeat monitoring to detect dead mobile connections
+        // (Issue #490: heartbeat ping-pong validation)
+        timerService.startHeartbeat(socket, gameCode, boundColor);
+
         if (wasReconnecting) {
           socket.to(gameCode).emit("player-reconnected", { gameCode, color: boundColor });
         }
@@ -349,6 +369,10 @@ io.on("connection", (socket) => {
       const moverColor = game.current_turn;
       const updated = await gameModel.makeMove(gameCode, from, to, promotion);
       metricsRoutes.observeMoveLatency(moveStartedAt);
+      // Invalidate the reconcile/reconnect snapshot cache so a client that
+      // reconciles immediately after this move sees it, not a stale snapshot
+      // (Issue #434).
+      gameController.invalidateGameStateSnapshot(gameCode);
 
       let clock = null;
       if (updated.status === "active") {
@@ -370,6 +394,7 @@ io.on("connection", (socket) => {
   socket.on("leave-game", validateSocketPayload(LeaveGameSchema, (gameCode) => {
     const code = typeof gameCode === "string" ? gameCode : gameCode?.gameCode || gameCode?.gameId;
     if (code) {
+      timerService.stopHeartbeat(socket, code);
       socket.leave(code);
       // Broadcast updated spectator count after leave
       broadcastSpectatorCount(code);
@@ -394,7 +419,23 @@ io.on("connection", (socket) => {
     });
   }));
 
+  /**
+   * Heartbeat pong handler (Issue #490).
+   * Client responds to ping_heartbeat with pong_heartbeat, including the
+   * timestamp echoed back. This resets the missed heartbeat counter and
+   * confirms the connection is alive (not suspended by mobile OS).
+   */
+  socket.on("pong_heartbeat", ({ timestamp } = {}) => {
+    const { gameCode, playerColor } = socket.data || {};
+    if (!gameCode || !playerColor) return;
+
+    // Record successful pong response; resets miss counter
+    timerService.recordHeartbeatAck(socket, gameCode, { timestamp });
+  });
+
   socket.on("disconnect", async () => {
+    // Release this socket's chat rate limiter buckets (Issue #464).
+    clearChatRateLimit(socket.id);
     metricsRoutes.setConnectedClients(io.engine.clientsCount);
     metricsRoutes.markGameDisconnected(socket.data?.gameCode);
     const { gameCode, playerColor } = socket.data || {};
@@ -406,18 +447,16 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // Stop heartbeat monitoring when socket disconnects
+    timerService.stopHeartbeat(socket, gameCode);
+
     const presence = getPresenceEntry(gameCode);
     // Ignore stale disconnects from a socket that already got replaced by a
     // fresher reconnect (e.g. rapid refresh / duplicate tabs).
     if (presence[playerColor].socketId !== socket.id) return;
 
-    try {
-      const gameModel = require("./models/gameModel");
-      const game = await gameModel.getGame(gameCode);
-      if (!game || game.status !== "active") return;
-    } catch (e) {
-      return;
-    }
+    const { shouldStartGrace } = await handleDisconnect({ gameModel }, gameCode, playerColor);
+    if (!shouldStartGrace) return;
 
     presence[playerColor].socketId = null;
     broadcastPresence(gameCode, playerColor, "reconnecting");
@@ -573,6 +612,53 @@ io.on("connection", (socket) => {
     }
   }));
 
+  // Versioned state-reconciliation protocol (Issue #434): a reconnecting
+  // client reports the highest move index it has already applied, and the
+  // server returns only the moves it missed plus a freshly computed
+  // authoritative clock, instead of re-sending the full game state on every
+  // reconnect. Must be called on a socket already bound to a player color via
+  // `join-game` (or `reconnect_game`), which performs the JWT-authenticated
+  // color binding this handler relies on.
+  socket.on("reconcile_state", validateSocketPayload(ReconcileStateSchema, async (payload, ack) => {
+    const sendAck = (error, data) => {
+      if (typeof ack === "function") ack({ error, data });
+    };
+    const { gameId, lastKnownMoveIndex } = payload;
+
+    const boundColor = socket.data.playerColor;
+    if (!boundColor || socket.data.gameCode !== gameId || !socket.data.address) {
+      return sendAck("not-a-player");
+    }
+
+    try {
+      // Re-derive seat ownership and cancel any pending auto-forfeit grace
+      // timer from live game state (not just the socket's cached binding),
+      // before any further await lets the timer race against firing.
+      const reconnect = await handleReconnect(
+        { gameModel, timerService },
+        gameId,
+        socket.data.address,
+      );
+      if (!reconnect.ok) {
+        return sendAck(reconnect.message || "not-a-player");
+      }
+
+      const reconciled = await reconcileGameState(
+        { gameController, timerService, chessEngine },
+        gameId,
+        lastKnownMoveIndex,
+        reconnect.playerColor,
+      );
+      if (!reconciled) return sendAck("game-not-found");
+
+      socket.emit("STATE_RECONCILED", reconciled);
+      sendAck(null, { success: true });
+    } catch (err) {
+      logger.error("reconcile_state handler error", { error: err.message, stack: err.stack });
+      sendAck(err.message || "Reconciliation failed");
+    }
+  }));
+
   // Relay a rematch challenge to the opponent (Issue #254). No persisted
   // state — purely a transient notification between the two live sockets.
   socket.on("request-rematch", validateSocketPayload(RequestRematchSchema, ({ gameCode, playerColor }) => {
@@ -584,6 +670,9 @@ io.on("connection", (socket) => {
     const code = gameCode || gameId;
     if (!code || !playerColor || !message) return;
     if (!["white", "black"].includes(playerColor)) return;
+
+    // At most 5 messages per rolling 10s window per socket and room (Issue #464).
+    if (!enforceChatRateLimit(socket, code)) return;
 
     const moderation = moderateMessage(message);
     if (!moderation.accepted) return;
@@ -660,11 +749,14 @@ app.set("io", io);
 timerService.init(io);
 // Stop the auth challenge sweep timer on shutdown so the event loop exits cleanly.
 const authService = require("./services/authService");
+const botService = require("./services/botService");
 if (require.main === module) {
 	for (const signal of ["SIGTERM", "SIGINT"]) {
-		process.on(signal, () => {
+		process.on(signal, async () => {
 			try {
 				authService.stop();
+				// Terminate bot workers and kill their Stockfish processes so none are orphaned.
+				await botService.shutdown();
 			} finally {
 				process.exit(0);
 			}

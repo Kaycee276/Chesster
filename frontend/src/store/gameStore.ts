@@ -7,6 +7,7 @@ import type { ChatMessage } from "../api/socket";
 import { useToastStore } from "./toastStore";
 import { soundService } from "../services/soundService";
 import type { GameState, MoveRecord } from "../types/game";
+import type { PieceSetKey } from "./themeStore";
 
 // ── Module-level local countdown timer ────────────────────────────────────────
 let _timerInterval: ReturnType<typeof setInterval> | null = null;
@@ -19,20 +20,18 @@ function startLocalTimer() {
   _timerInterval = setInterval(() => {
     useGameStore.setState((s) => {
       if (s.status !== "active") return s;
-      
+
       const newSecondsLeft = Math.max(0, s.secondsLeft - 1);
-      
+
       // Play low-time tick sound: active player with < 10 seconds remaining
       // Threshold is < 10s (not <=) so tick starts exactly when 10s is reached on next interval
-      const isActivePlayerLowTime = 
-        s.playerColor === s.currentTurn && 
-        newSecondsLeft > 0 && 
-        newSecondsLeft < 10;
-      
+      const isActivePlayerLowTime =
+        s.playerColor === s.currentTurn && newSecondsLeft > 0 && newSecondsLeft < 10;
+
       if (isActivePlayerLowTime && soundService.isEnabled()) {
         soundService.lowTimeTick();
       }
-      
+
       return { secondsLeft: newSecondsLeft };
     });
   }, 1000);
@@ -48,6 +47,13 @@ function stopLocalTimer() {
 interface GameStore {
   gameCode: string | null;
   playerColor: "white" | "black" | null;
+  // Network connection state (Issue #401)
+  pingMs: number;
+  socketStatus: "connected" | "reconnecting" | "disconnected";
+  reconnectAttempts: number;
+  setPingMs: (ms: number) => void;
+  setSocketStatus: (status: "connected" | "reconnecting" | "disconnected") => void;
+  setReconnectAttempts: (attempts: number) => void;
   playerAddress: string | null;
   board: string[][];
   currentTurn: "white" | "black";
@@ -67,6 +73,11 @@ interface GameStore {
     piece: string;
   } | null;
   selectedSquare: [number, number] | null;
+  // Premove queue (#473): speculative move entered during opponent's turn.
+  // Squares use board indices to match ChessBoard; promotion is "q"|"r"|"b"|"n".
+  queuedPremove: { from: [number, number]; to: [number, number]; promotion?: string } | null;
+  setQueuedPremove: (premove: { from: [number, number]; to: [number, number]; promotion?: string } | null) => void;
+  clearPremove: () => void;
   // Move history + board playback rewind
   moveHistory: MoveRecord[];
   viewingIndex: number | null;
@@ -81,7 +92,15 @@ interface GameStore {
   chatMessages: ChatMessage[];
   unreadCount: number;
   chatOpen: boolean;
+  // Spectator count and list
+  spectatorCount: number;
+  spectatorList: Array<{ address: string; username?: string | null }>;
+  setSpectatorData: (count: number, list?: Array<{ address: string; username?: string | null }>) => void;
+  isOpponentMuted: boolean;
+  toggleOpponentMute: () => void;
   // Blindfold mode for training calculation skills
+  blindfoldMode: "none" | "white" | "black" | "all";
+  setBlindfoldMode: (mode: "none" | "white" | "black" | "all") => void;
   isBlindfoldMode: boolean;
   toggleBlindfoldMode: () => void;
   // Streamer mode for broadcasting matches securely
@@ -90,36 +109,33 @@ interface GameStore {
   // Haptic feedback for touch and interactions (#439)
   isHapticsEnabled: boolean;
   toggleHaptics: () => void;
+  // Move confirmation for high-stakes games (Issue #493)
+  isMoveConfirmationEnabled: boolean;
+  toggleMoveConfirmation: () => void;
+  // Piece set preference for rendering (Issue #495)
+  pieceSet: PieceSetKey | "classic";
+  setPieceSet: (set: PieceSetKey | "classic") => void;
+  masterVolume: number;
+  setMasterVolume: (volume: number) => void;
   // Settings modal visibility
   isSettingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
-  // Spectator count and list
-  spectatorCount: number;
-  spectatorList: Array<{ address: string; username?: string | null }>;
-  setSpectatorData: (count: number, list: Array<{ address: string; username?: string | null }>) => void;
 
   createGame: (
     walletAddress: string,
     wagerAmount?: string,
     timeControlSeconds?: number,
-    timeIncrementSeconds?: number,
+    timeIncrementSeconds?: number
   ) => Promise<void>;
-  joinGame: (
-    code: string,
-    color: "white" | "black",
-    walletAddress: string,
-  ) => Promise<void>;
+  joinGame: (code: string, color: "white" | "black", walletAddress: string) => Promise<void>;
   rejoinGame: (code: string) => Promise<void>;
   fetchGameState: () => Promise<void>;
-  makeMove: (
-    from: [number, number],
-    to: [number, number],
-    promotion?: string,
-  ) => Promise<void>;
+  makeMove: (from: [number, number], to: [number, number], promotion?: string) => Promise<void>;
   selectSquare: (pos: [number, number] | null) => void;
   loadMoveHistory: () => Promise<void>;
   setViewingIndex: (index: number | null) => void;
   updateGameState: (data: GameState) => void;
+  tryExecutePremove: () => Promise<boolean>;
   resignGame: () => Promise<void>;
   offerDraw: () => Promise<void>;
   acceptDraw: () => Promise<void>;
@@ -151,6 +167,9 @@ export const useGameStore = create<GameStore>()(
       capturedBlack: [],
       lastMove: null,
       selectedSquare: null,
+      queuedPremove: null,
+      setQueuedPremove: (premove) => set({ queuedPremove: premove }),
+      clearPremove: () => set({ queuedPremove: null, selectedSquare: null }),
       moveHistory: [],
       viewingIndex: null,
       wagerAmount: null,
@@ -162,30 +181,60 @@ export const useGameStore = create<GameStore>()(
       chatMessages: [],
       unreadCount: 0,
       chatOpen: false,
+      spectatorCount: 0,
+      spectatorList: [],
+      isOpponentMuted: false,
+      // Network state (Issue #401)
+      pingMs: 0,
+      socketStatus: "disconnected",
+      reconnectAttempts: 0,
+      blindfoldMode: "none" as "none" | "white" | "black" | "all",
       isBlindfoldMode: false,
       isStreamerMode: false,
       isHapticsEnabled: true,
+      isMoveConfirmationEnabled: false,
+      pieceSet: "classic" as "classic" | "neo" | "wood",
+      masterVolume: soundService.getVolume(),
       isSettingsOpen: false,
-      spectatorCount: 0,
-      spectatorList: [],
 
+      setBlindfoldMode: (mode: "none" | "white" | "black" | "all") =>
+        set({ blindfoldMode: mode, isBlindfoldMode: mode !== "none" }),
       toggleBlindfoldMode: () =>
-        set((s) => ({ isBlindfoldMode: !s.isBlindfoldMode })),
+        set((s) => {
+          const isActive = s.blindfoldMode !== "none" || s.isBlindfoldMode;
+          const next = isActive ? "none" : "all";
+          return { blindfoldMode: next, isBlindfoldMode: !isActive };
+        }),
       toggleStreamerMode: () =>
         set((s) => ({ isStreamerMode: !s.isStreamerMode })),
+      toggleOpponentMute: () =>
+        set((s) => ({ isOpponentMuted: !s.isOpponentMuted })),
+      setSpectatorData: (count, list) =>
+        set({ spectatorCount: Math.max(0, count), spectatorList: Array.isArray(list) ? list : [] }),
       toggleHaptics: () =>
         set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
+      toggleMoveConfirmation: () =>
+        set((s) => ({ isMoveConfirmationEnabled: !s.isMoveConfirmationEnabled })),
+      setPieceSet: (set_value: PieceSetKey | "classic") =>
+        set({ pieceSet: set_value }),
+      setMasterVolume: (volume: number) => {
+        const normalized = Math.min(1, Math.max(0, volume));
+        soundService.setMasterVolume(normalized);
+        set({ masterVolume: normalized });
+      },
       setSettingsOpen: (open: boolean) =>
         set({ isSettingsOpen: open }),
 
-      setSpectatorData: (count: number, list: Array<{ address: string; username?: string | null }>) =>
-        set({ spectatorCount: Math.max(0, count), spectatorList: list || [] }),
+      // Network state setters (Issue #401)
+      setPingMs: (ms: number) => set({ pingMs: ms }),
+      setSocketStatus: (status) => set({ socketStatus: status }),
+      setReconnectAttempts: (attempts: number) => set({ reconnectAttempts: attempts }),
 
       createGame: async (
         walletAddress: string,
         wagerAmount?: string,
         timeControlSeconds?: number,
-        timeIncrementSeconds?: number,
+        timeIncrementSeconds?: number
       ) => {
         const data = await api.createGame(
           "chess",
@@ -193,7 +242,7 @@ export const useGameStore = create<GameStore>()(
           wagerAmount,
           timeControlSeconds,
           undefined,
-          timeIncrementSeconds,
+          timeIncrementSeconds
         );
         if (data.success) {
           await get().joinGame(data.data.game_code, "white", walletAddress);
@@ -202,11 +251,7 @@ export const useGameStore = create<GameStore>()(
         }
       },
 
-      joinGame: async (
-        code: string,
-        color: "white" | "black",
-        walletAddress: string,
-      ) => {
+      joinGame: async (code: string, color: "white" | "black", walletAddress: string) => {
         const data = await api.joinGame(code, color, walletAddress);
         if (data.success) {
           set({
@@ -225,8 +270,7 @@ export const useGameStore = create<GameStore>()(
           socketService.onChatMessage((msg) => {
             get().addChatMessage(msg);
           });
-          socketService.onSpectatorCountUpdate((event) => {
-            // Validate payload: count must be non-negative integer
+          socketService.onSpectatorCountUpdate?.((event) => {
             if (typeof event?.count === "number" && event.count >= 0) {
               const list = Array.isArray(event.list) ? event.list : [];
               get().setSpectatorData(event.count, list);
@@ -255,8 +299,7 @@ export const useGameStore = create<GameStore>()(
           // elapsed time — gives an accurate timer even after page reload.
           if (data.data.status === "active" && data.data.game_started_at) {
             const elapsed = Math.floor(
-              (Date.now() - new Date(data.data.game_started_at).getTime()) /
-                1000,
+              (Date.now() - new Date(data.data.game_started_at).getTime()) / 1000
             );
             secondsLeft = Math.max(0, tcs - elapsed);
           }
@@ -291,8 +334,7 @@ export const useGameStore = create<GameStore>()(
           socketService.onChatMessage((msg) => {
             get().addChatMessage(msg);
           });
-          socketService.onSpectatorCountUpdate((event) => {
-            // Validate payload: count must be non-negative integer
+          socketService.onSpectatorCountUpdate?.((event) => {
             if (typeof event?.count === "number" && event.count >= 0) {
               const list = Array.isArray(event.list) ? event.list : [];
               get().setSpectatorData(event.count, list);
@@ -318,8 +360,7 @@ export const useGameStore = create<GameStore>()(
         if (data.success) {
           const tcs = data.data.time_control_seconds ?? 600;
           const nextStatus = data.data.status;
-          const isTransitionToActive =
-            nextStatus === "active" && prevStatus === "waiting";
+          const isTransitionToActive = nextStatus === "active" && prevStatus === "waiting";
 
           // Single source of truth for the timer: game_started_at (set once
           // when both players join). Both clients compute the same secondsLeft
@@ -327,8 +368,7 @@ export const useGameStore = create<GameStore>()(
           let secondsLeft = get().secondsLeft;
           if (nextStatus === "active" && data.data.game_started_at) {
             const elapsed = Math.floor(
-              (Date.now() - new Date(data.data.game_started_at).getTime()) /
-                1000,
+              (Date.now() - new Date(data.data.game_started_at).getTime()) / 1000
             );
             secondsLeft = Math.max(0, tcs - elapsed);
           }
@@ -355,10 +395,7 @@ export const useGameStore = create<GameStore>()(
             escrowResolveTx: data.data.escrow_resolve_tx ?? null,
           });
 
-          if (
-            data.data.move_count != null &&
-            get().moveHistory.length < data.data.move_count
-          ) {
+          if (data.data.move_count != null && get().moveHistory.length < data.data.move_count) {
             get().loadMoveHistory();
           }
 
@@ -372,11 +409,7 @@ export const useGameStore = create<GameStore>()(
         }
       },
 
-      makeMove: async (
-        from: [number, number],
-        to: [number, number],
-        promotion?: string,
-      ) => {
+      makeMove: async (from: [number, number], to: [number, number], promotion?: string) => {
         const { gameCode } = get();
         if (!gameCode) return;
 
@@ -413,7 +446,7 @@ export const useGameStore = create<GameStore>()(
         let secondsLeft = get().secondsLeft;
         if (data.status === "active" && data.game_started_at) {
           const elapsed = Math.floor(
-            (Date.now() - new Date(data.game_started_at).getTime()) / 1000,
+            (Date.now() - new Date(data.game_started_at).getTime()) / 1000
           );
           secondsLeft = Math.max(0, tcs - elapsed);
         }
@@ -438,19 +471,52 @@ export const useGameStore = create<GameStore>()(
           escrowJoinTx: data.escrow_join_tx ?? null,
           escrowResolveTx: data.escrow_resolve_tx ?? null,
         });
-        if (
-          data.move_count != null &&
-          get().moveHistory.length < data.move_count
-        ) {
+        if (data.move_count != null && get().moveHistory.length < data.move_count) {
           get().loadMoveHistory();
         }
         if (data.status !== "active") {
           stopLocalTimer();
+          // A finished game invalidates any queued premove.
+          if (get().queuedPremove) set({ queuedPremove: null });
+          return;
+        }
+        // Opponent move arrived: auto-execute a legal queued premove (#473).
+        const { queuedPremove, playerColor, currentTurn, status } = get();
+        if (queuedPremove && playerColor && currentTurn === playerColor && status === "active") {
+          void get().tryExecutePremove();
         }
       },
 
-      selectSquare: (pos: [number, number] | null) =>
-        set({ selectedSquare: pos }),
+      tryExecutePremove: async () => {
+        const { queuedPremove, board, playerColor, status } = get();
+        if (!queuedPremove || !playerColor || status !== "active") return false;
+        if (get().currentTurn !== playerColor) return false;
+        // Validate against the fresh position; cancel cleanly if illegal.
+        const { getPossibleMoves } = await import("../utils/chessUtils");
+        const legal = getPossibleMoves(board, queuedPremove.from, playerColor).some(
+          ([r, c]) => r === queuedPremove.to[0] && c === queuedPremove.to[1]
+        );
+        if (!legal) {
+          set({ queuedPremove: null, selectedSquare: null });
+          try {
+            soundService.lowTime();
+          } catch { /* ignore audio failures */ }
+          return false;
+        }
+        const premove = queuedPremove;
+        set({ queuedPremove: null });
+        try {
+          await get().makeMove(premove.from, premove.to, premove.promotion);
+          return true;
+        } catch {
+          try {
+            soundService.lowTime();
+          } catch { /* ignore */ }
+          return false;
+        }
+      },
+
+      selectSquare: (pos: [number, number] | null) => set({ selectedSquare: pos }),
 
       loadMoveHistory: async () => {
         const { gameCode } = get();
@@ -468,8 +534,7 @@ export const useGameStore = create<GameStore>()(
         }
       },
 
-      setViewingIndex: (index: number | null) =>
-        set({ viewingIndex: index, selectedSquare: null }),
+      setViewingIndex: (index: number | null) => set({ viewingIndex: index, selectedSquare: null }),
 
       resignGame: async () => {
         const { gameCode, playerColor } = get();
@@ -489,11 +554,7 @@ export const useGameStore = create<GameStore>()(
       offerDraw: async () => {
         const { gameCode, playerColor, playerAddress } = get();
         if (!gameCode || !playerColor) return;
-        const data = await api.offerDraw(
-          gameCode,
-          playerColor,
-          playerAddress ?? undefined,
-        );
+        const data = await api.offerDraw(gameCode, playerColor, playerAddress ?? undefined);
         if (data.success) {
           set({
             status: data.data.status,
@@ -524,9 +585,9 @@ export const useGameStore = create<GameStore>()(
           socketService.leaveGame(gameCode);
           socketService.offGameUpdate();
           socketService.offChatMessage();
-          socketService.offSpectatorCountUpdate();
           socketService.disconnect();
         }
+        socketService.offSpectatorCountUpdate?.();
         set({
           gameCode: null,
           playerColor: null,
@@ -537,6 +598,7 @@ export const useGameStore = create<GameStore>()(
           secondsLeft: 600,
           timeControlSeconds: 600,
           selectedSquare: null,
+          queuedPremove: null,
           moveHistory: [],
           viewingIndex: null,
           wagerAmount: null,
@@ -548,6 +610,7 @@ export const useGameStore = create<GameStore>()(
           chatMessages: [],
           unreadCount: 0,
           chatOpen: false,
+          isOpponentMuted: false,
           spectatorCount: 0,
           spectatorList: [],
         });
@@ -573,10 +636,14 @@ export const useGameStore = create<GameStore>()(
       },
 
       addChatMessage: (msg: ChatMessage) => {
-        set((s) => ({
-          chatMessages: [...s.chatMessages, msg],
-          unreadCount: s.chatOpen ? 0 : s.unreadCount + 1,
-        }));
+        set((s) => {
+          const mutedOpponent =
+            s.isOpponentMuted && s.playerColor !== null && msg.playerColor !== s.playerColor;
+          return {
+            chatMessages: [...s.chatMessages, msg],
+            unreadCount: s.chatOpen ? 0 : mutedOpponent ? s.unreadCount : s.unreadCount + 1,
+          };
+        });
       },
 
       setChatOpen: (open: boolean) => {
@@ -588,12 +655,15 @@ export const useGameStore = create<GameStore>()(
       partialize: (state) => ({
         gameCode: state.gameCode,
         playerColor: state.playerColor,
+        blindfoldMode: state.blindfoldMode,
         isBlindfoldMode: state.isBlindfoldMode,
         isStreamerMode: state.isStreamerMode,
         isHapticsEnabled: state.isHapticsEnabled,
+        isMoveConfirmationEnabled: state.isMoveConfirmationEnabled,
+        pieceSet: state.pieceSet,
       }),
-    },
-  ),
+    }
+  )
 );
 
 // Hook to manage game notifications (toasts) triggered by state changes
@@ -730,17 +800,14 @@ export const useSoundEffects = () => {
     if (moveKey === prevMoveKeyRef.current) return;
     prevMoveKeyRef.current = moveKey;
 
-    const totalCaptured =
-      (capturedWhite?.length ?? 0) + (capturedBlack?.length ?? 0);
+    const totalCaptured = (capturedWhite?.length ?? 0) + (capturedBlack?.length ?? 0);
     const wasCapture = totalCaptured > prevCapturedRef.current;
     prevCapturedRef.current = totalCaptured;
 
     const isCastle =
-      lastMove.piece.toLowerCase() === "k" &&
-      Math.abs(lastMove.to[1] - lastMove.from[1]) === 2;
+      lastMove.piece.toLowerCase() === "k" && Math.abs(lastMove.to[1] - lastMove.from[1]) === 2;
     const isPromotion =
-      lastMove.piece.toLowerCase() === "p" &&
-      (lastMove.to[0] === 0 || lastMove.to[0] === 7);
+      lastMove.piece.toLowerCase() === "p" && (lastMove.to[0] === 0 || lastMove.to[0] === 7);
 
     if (isPromotion) soundService.promote();
     else if (isCastle) soundService.castle();

@@ -77,6 +77,15 @@ const ReconnectGameSchema = z.object({
   token: z.string().min(1).max(2000),
 });
 
+// State reconciliation payload (Issue #434): a reconnecting client reports the
+// highest move index it has already applied so the server can return only the
+// moves it missed, instead of re-sending the full move history every time.
+const ReconcileStateSchema = z.object({
+  gameId: z.string().min(1).max(100),
+  lastKnownMoveIndex: z.number().int().min(-1).max(1_000_000).optional().default(-1),
+  clientTimestamp: z.number().optional(),
+});
+
 // Rematch request payload
 const RequestRematchSchema = z.object({
   gameCode: z.string().min(1).max(100),
@@ -152,6 +161,7 @@ module.exports = {
   DrawOfferPayload,
   JoinRoomPayload,
   ReconnectGameSchema,
+  ReconcileStateSchema,
   RequestRematchSchema,
   LeaveGameSchema,
   handleSocketEvent,

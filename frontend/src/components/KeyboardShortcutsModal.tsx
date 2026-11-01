@@ -5,13 +5,11 @@ import { useFocusTrap } from "../hooks/useFocusTrap";
 interface KeyboardShortcutsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  triggerElement?: HTMLElement | null;
 }
 
 export default function KeyboardShortcutsModal({
   isOpen,
   onClose,
-  triggerElement,
 }: KeyboardShortcutsModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
 

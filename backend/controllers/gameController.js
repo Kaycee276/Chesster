@@ -7,10 +7,18 @@ const replayService = require("../services/replayService");
 // Comment line sent periodically so proxies don't drop an idle replay stream.
 const REPLAY_HEARTBEAT_MS = 15000;
 const auditService = require("../services/auditService");
-const chessEngine = require("../services/chessEngine");
 const leaderboardService = require("../services/leaderboardService");
+const pgnService = require("../services/pgnService");
 
 const AUDIT_FORMATS = new Set(["json", "csv"]);
+
+// How long a game-state snapshot (game + moves) used for reconnect/state
+// reconciliation (Issue #434) may be served from cache before refetching.
+// Kept intentionally short: it only exists to collapse duplicate Supabase
+// round trips when a flaky connection emits several reconcile/reconnect
+// attempts within the same instant, not to serve long-lived stale data. The
+// live clock is always computed fresh by timerService and is never cached.
+const GAME_STATE_SNAPSHOT_TTL_MS = 500;
 
 class GameController {
 	constructor() {
@@ -19,6 +27,40 @@ class GameController {
 				this[key] = this[key].bind(this);
 			}
 		}
+		// gameCode -> { snapshot: { game, moves }, expiresAt }
+		this._gameStateSnapshotCache = new Map();
+	}
+
+	/**
+	 * Builds (or returns a short-lived cached) snapshot of a game's
+	 * authoritative state used for reconnect/state-reconciliation (Issue #434):
+	 * the current game row and its full move list. See `invalidateGameStateSnapshot`.
+	 *
+	 * @param {string} gameCode
+	 * @returns {Promise<{game: object, moves: object[]}|null>}
+	 */
+	async getGameStateSnapshot(gameCode) {
+		const cached = this._gameStateSnapshotCache.get(gameCode);
+		if (cached && cached.expiresAt > Date.now()) {
+			return cached.snapshot;
+		}
+
+		const game = await gameModel.getGame(gameCode);
+		if (!game) return null;
+
+		const moves = await gameModel.getMoves(gameCode);
+		const snapshot = { game, moves };
+
+		this._gameStateSnapshotCache.set(gameCode, {
+			snapshot,
+			expiresAt: Date.now() + GAME_STATE_SNAPSHOT_TTL_MS,
+		});
+		return snapshot;
+	}
+
+	/** Drops any cached snapshot so the next reconcile/reconnect reads fresh state. */
+	invalidateGameStateSnapshot(gameCode) {
+		this._gameStateSnapshotCache.delete(gameCode);
 	}
 
 	publishGameEnded(game, endReason) {
@@ -179,24 +221,39 @@ class GameController {
 			const game = await gameModel.getGame(gameCode);
 			if (!game) return res.status(404).json({ success: false, error: "Game not found" });
 			const moves = await gameModel.getMoves(gameCode);
-			const pgn = chessEngine.generateRichPgn(moves.map((move) => ({
-				...move,
-				from: move.from || move.from_position,
-				to: move.to || move.to_position,
-			})), {
-				white: game.player_white_address || "?",
-				black: game.player_black_address || "?",
-				result: game.winner === "draw" ? "1/2-1/2" : game.winner === "white" ? "1-0" : game.winner === "black" ? "0-1" : "*",
-				termination: game.end_reason || "normal",
-				timeControl: game.time_control_seconds ? String(game.time_control_seconds) : "-",
-				initialClockSeconds: game.time_control_seconds || null,
-				createdAt: game.created_at,
-			});
+			// Annotated export with per-move [%clk] / [%eval] comments (Issue #463).
+			const ratings = await replayService.fetchPlayerRatings(game);
+			const pgn = replayService.formatPgn(game, moves, { ratings });
 			res.set({
 				"Content-Type": "application/x-chess-pgn",
 				"Content-Disposition": `attachment; filename=game-${game.game_code || game.id}.pgn`,
 			});
 			return res.send(pgn);
+		} catch (error) {
+			return res.status(500).json({ success: false, error: error.message });
+		}
+	}
+
+	/**
+	 * POST /api/games/import-pgn — bulk import of historical matches or
+	 * tournament archives (Issue #436). Streams the uploaded PGN text through
+	 * `pgnService` so multi-game, multi-megabyte archives are parsed and
+	 * validated incrementally rather than blocking the event loop, and
+	 * batch-inserts valid games 50 at a time. Malformed games are skipped and
+	 * reported individually instead of failing the whole import.
+	 */
+	async importPgnHandler(req, res) {
+		try {
+			const pgnText = typeof req.body === "string" ? req.body : req.body?.pgn;
+			if (!pgnText || !pgnText.trim()) {
+				return res.status(400).json({ success: false, error: "Request body must contain PGN text" });
+			}
+
+			const summary = await pgnService.importPgn(pgnText, {
+				persistBatch: (batch) => gameModel.batchImportGames(batch),
+			});
+
+			return res.json({ success: true, data: summary });
 		} catch (error) {
 			return res.status(500).json({ success: false, error: error.message });
 		}
@@ -408,13 +465,13 @@ class GameController {
 			});
 
 			if (format === "csv") {
-				res.attachment(`${filename}.csv`);
+				res.setHeader("Content-Disposition", `attachment; filename="${filename}.csv"`);
 				res.type("text/csv; charset=utf-8");
 				return res.send(auditService.toCsv(audit));
 			}
 
 			if (["1", "true"].includes(String(req.query.download).toLowerCase())) {
-				res.attachment(`${filename}.json`);
+				res.setHeader("Content-Disposition", `attachment; filename="${filename}.json"`);
 			}
 			res.json({ success: true, data: audit });
 		} catch (error) {
@@ -597,6 +654,9 @@ class GameController {
 				limit: limit ? parseInt(limit, 10) : 50,
 				offset: offset ? parseInt(offset, 10) : 0,
 			});
+			const cacheStatus = leaderboard && leaderboard._cacheHit ? "HIT" : "MISS";
+			res.setHeader("X-Cache", cacheStatus);
+			res.setHeader("Cache-Control", "public, max-age=30, stale-while-revalidate=60");
 			res.json({ success: true, data: leaderboard });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });

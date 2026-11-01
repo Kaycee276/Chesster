@@ -1,6 +1,31 @@
 const logger = require("../utils/logger");
 
 /**
+ * Optimistic locking failure: a conditional `WHERE version = $currentVersion`
+ * update matched 0 rows because another worker already incremented it (#472).
+ */
+class OptimisticLockError extends Error {
+	constructor(message = "Optimistic lock conflict: record was modified concurrently") {
+		super(message);
+		this.name = "OptimisticLockError";
+		this.code = "OPTIMISTIC_LOCK";
+	}
+}
+
+function isOptimisticLockError(error) {
+	if (!error) return false;
+	if (error instanceof OptimisticLockError) return true;
+	if (String(error.code || "") === "OPTIMISTIC_LOCK") return true;
+	if (error.name === "OptimisticLockError") return true;
+	const message = String(error.message || "").toLowerCase();
+	return (
+		message.includes("optimistic lock") ||
+		message.includes("version mismatch") ||
+		message.includes("concurrent modification")
+	);
+}
+
+/**
  * Transient error detection:
  * - PostgreSQL error 40P01: deadlock detected
  * - PostgreSQL error 40001: serialization failure
@@ -9,6 +34,8 @@ const logger = require("../utils/logger");
  */
 function isTransientConflictError(error) {
 	if (!error) return false;
+	// Optimistic-lock collisions are retryable by definition (#472).
+	if (isOptimisticLockError(error)) return true;
 	const code = String(error.code || error.sqlState || "");
 	if (code === "40P01" || code === "40001" || code === "P2034") {
 		return true;
@@ -25,6 +52,11 @@ function isTransientConflictError(error) {
 	);
 }
 
+function getJitteredDelay(attempt, baseDelay = 50, maxDelay = 1000) {
+	const backoff = Math.min(maxDelay, baseDelay * Math.pow(2, attempt));
+	return Math.floor(Math.random() * backoff);
+}
+
 /**
  * Executes a database transaction callback with automated exponential backoff
  * and randomized full jitter on transient deadlock or write conflict errors.
@@ -37,6 +69,7 @@ function isTransientConflictError(error) {
 async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, baseDelay = 100) {
 	let maxRetries = 5;
 	let baseDelayMs = 100;
+	let maxDelayMs = 1000;
 	let context = "tournament-transaction";
 	let onRetry = null;
 	let sleepFn = null;
@@ -44,6 +77,7 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 	if (typeof optionsOrMaxRetries === "object" && optionsOrMaxRetries !== null) {
 		maxRetries = optionsOrMaxRetries.maxRetries ?? 5;
 		baseDelayMs = optionsOrMaxRetries.baseDelayMs ?? optionsOrMaxRetries.baseDelay ?? 100;
+		maxDelayMs = optionsOrMaxRetries.maxDelayMs ?? optionsOrMaxRetries.maxDelay ?? 1000;
 		context = optionsOrMaxRetries.context ?? "tournament-transaction";
 		onRetry = optionsOrMaxRetries.onRetry ?? null;
 		sleepFn = optionsOrMaxRetries.sleepFn ?? null;
@@ -71,9 +105,8 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 				throw error;
 			}
 
-			// Full jitter backoff formula: sleep(Math.random() * (baseDelayMs * 2 ** attempt))
-			const maxWindow = baseDelayMs * Math.pow(2, attempt);
-			const delay = Math.floor(Math.random() * maxWindow);
+			// Full jitter backoff formula bounded by maxDelay
+			const delay = getJitteredDelay(attempt, baseDelayMs, maxDelayMs);
 
 			logger.warn(
 				`[TransactionRetry] Transient conflict (${error.code || error.message}) during ${context} on attempt ${attempt}/${maxRetries}. Retrying in ${delay}ms...`,
@@ -100,6 +133,9 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 }
 
 module.exports = {
+	getJitteredDelay,
 	executeWithRetry,
 	isTransientConflictError,
+	isOptimisticLockError,
+	OptimisticLockError,
 };

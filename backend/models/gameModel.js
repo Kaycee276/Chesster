@@ -51,6 +51,22 @@ function assertValidStellarAddress(address) {
 	return address;
 }
 
+// Soft-delete filter helper (#471): excludes rows where deleted_at is set.
+// Guards on typeof query.is so unit-test mocks without `.is` keep working.
+function applyNotDeleted(query) {
+	if (query && typeof query.is === "function") {
+		return query.is("deleted_at", null);
+	}
+	return query;
+}
+
+function applyNotArchived(query) {
+	if (query && typeof query.eq === "function") {
+		return query.eq("is_archived", false);
+	}
+	return query;
+}
+
 class GameModel {
 	async _creditReferralRake(dbGame, winner, onChain) {
 		if (!dbGame?.id || winner === "draw") return;
@@ -75,7 +91,7 @@ class GameModel {
 	_scheduleAntiCheatAnalysis(game) {
 		if (!game?.id) return;
 		const antiCheatService = require("../services/antiCheatService");
-		antiCheatService.analyzeGame(game.id).catch((error) => {
+		antiCheatService.inspectGameSession(game.id).catch((error) => {
 			console.error(`[AntiCheat] analysis failed for ${game.game_code}:`, error.message);
 		});
 	}
@@ -83,10 +99,17 @@ class GameModel {
 	async recordCheatAnalysis(gameId, analysis) {
 		const white = analysis.white;
 		const black = analysis.black;
+		// Move time entropy telemetry flags (Issue #461), tagged by player.
+		const antiCheatFlags = [white, black].flatMap((player) => (player.antiCheatFlags || []).map((flag) => ({
+			...flag,
+			color: player.color,
+			playerAddress: player.playerAddress || null,
+		})));
 		const { error } = await supabase.from("games").update({
 			white_cheat_suspicion: white.score,
 			black_cheat_suspicion: black.score,
 			cheat_flagged: white.flagged || black.flagged,
+			anti_cheat_flags: antiCheatFlags,
 			anti_cheat_analyzed_at: new Date().toISOString(),
 		}).eq("id", gameId);
 		if (error) throw error;
@@ -100,10 +123,33 @@ class GameModel {
 				reasons: player.reasons,
 			}));
 		if (flags.length > 0) {
-			const { error: flagError } = await supabase
-				.from("player_flags")
-				.upsert(flags, { onConflict: "game_id,player_address", ignoreDuplicates: true });
-			if (flagError) throw flagError;
+			const alerts = flags.map((flag) => {
+				const player = [white, black].find((item) => item.playerAddress === flag.player_address);
+				return {
+					game_id: gameId,
+					player_address: flag.player_address,
+					suspicion_score: player?.suspicionScore ?? Math.round(flag.anomaly_score * 100),
+					reasons: flag.reasons,
+				};
+			});
+			for (const flag of flags) {
+				await queryWithRetry(
+					`INSERT INTO player_flags (game_id, player_address, anomaly_score, reasons)
+					 VALUES ($1, $2, $3, $4::jsonb)
+					 ON CONFLICT (game_id, player_address) DO NOTHING`,
+					[gameId, flag.player_address, flag.anomaly_score, JSON.stringify(flag.reasons)],
+					{ isReadOnly: false },
+				);
+			}
+			for (const alert of alerts) {
+				await queryWithRetry(
+					`INSERT INTO anti_cheat_alerts (game_id, player_address, suspicion_score, reasons)
+					 VALUES ($1, $2, $3, $4::jsonb)
+					 ON CONFLICT (game_id, player_address) DO NOTHING`,
+					[gameId, alert.player_address, alert.suspicion_score, JSON.stringify(alert.reasons)],
+					{ isReadOnly: false },
+				);
+			}
 		}
 	}
 
@@ -172,11 +218,12 @@ class GameModel {
 	}
 
 	async joinGame(gameCode, playerColor, playerAddress = null) {
-		const { data: game, error: fetchError } = await supabase
+		let joinQuery = supabase
 			.from("games")
 			.select("*")
-			.eq("game_code", gameCode)
-			.single();
+			.eq("game_code", gameCode);
+		joinQuery = applyNotDeleted(joinQuery);
+		const { data: game, error: fetchError } = await joinQuery.single();
 
 		if (fetchError) throw fetchError;
 		if (!game) throw new Error("Game not found");
@@ -229,11 +276,12 @@ class GameModel {
 	}
 
 	async getGame(gameCode) {
-		const { data: rawData, error } = await supabase
+		let gameQuery = supabase
 			.from("games")
 			.select("*")
-			.eq("game_code", gameCode)
-			.single();
+			.eq("game_code", gameCode);
+		gameQuery = applyNotDeleted(gameQuery);
+		const { data: rawData, error } = await gameQuery.single();
 
 		if (error) throw error;
 		let data = rawData;
@@ -288,12 +336,14 @@ class GameModel {
 	async getPendingGames() {
 		const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
-		const { data, error } = await supabase
+		let pendingQuery = supabase
 			.from("games")
 			.select("game_code, created_at, wager_amount, time_control_seconds, player_white_address")
 			.eq("status", "waiting")
 			.order("created_at", { ascending: false })
 			.limit(30);
+		pendingQuery = applyNotDeleted(pendingQuery);
+		const { data, error } = await pendingQuery;
 
 		if (error) throw error;
 
@@ -959,6 +1009,9 @@ class GameModel {
 				{ count: "exact" }
 			);
 
+		// Soft-delete filter (#471): hide deleted games by default.
+		query = applyNotDeleted(query);
+
 		if (playerAddress) {
 			// Reject any value that is not a well-formed Stellar address before it
 			// is interpolated into the PostgREST `.or()` filter string, preventing
@@ -1143,12 +1196,15 @@ class GameModel {
 	 */
 	async claimExpiredWaitingLobbies(thresholdIso, batchSize = 100) {
 		// Phase 1: find candidates (read-only; fast index scan on status+created_at)
-		const { data: candidates, error: fetchError } = await supabase
+		// Soft-deleted rows are never claimed (#471).
+		let candidateQuery = supabase
 			.from("games")
 			.select("id, game_code, wager_amount, escrow_status, escrow_refund_status")
 			.eq("status", "waiting")
 			.lt("created_at", thresholdIso)
 			.limit(batchSize);
+		candidateQuery = applyNotDeleted(candidateQuery);
+		const { data: candidates, error: fetchError } = await candidateQuery;
 
 		if (fetchError) throw fetchError;
 		if (!candidates?.length) return [];
@@ -1188,13 +1244,15 @@ class GameModel {
 	 * @returns {Promise<Array>}
 	 */
 	async getPendingLobbyRefunds(batchSize = 100) {
-		const { data, error } = await supabase
+		let refundQuery = supabase
 			.from("games")
 			.select("id, game_code, wager_amount, escrow_status, escrow_refund_status")
 			.eq("status", "expired")
 			.eq("escrow_status", "pending")
 			.in("escrow_refund_status", ["none", "failed", "pending"])
 			.limit(batchSize);
+		refundQuery = applyNotDeleted(refundQuery);
+		const { data, error } = await refundQuery;
 
 		if (error) throw error;
 		return data || [];
@@ -1217,6 +1275,81 @@ class GameModel {
 		if (error) throw error;
 	}
 
+	/**
+	 * Soft-delete + retention helpers (#471).
+	 * deleted_at covers `deletedAt`, is_archived covers `isArchived`.
+	 */
+
+	// Active (non-deleted, non-archived) games for lobbies / matchmaking.
+	async findActiveGames({ status = null, limit = 30 } = {}) {
+		let query = supabase
+			.from("games")
+			.select("id, game_code, status, created_at, updated_at, is_archived")
+			.order("created_at", { ascending: false })
+			.limit(limit);
+		query = applyNotDeleted(query);
+		if (typeof query.eq === "function") query = query.eq("is_archived", false);
+		if (status) query = query.eq("status", status);
+		const { data, error } = await query;
+		if (error) throw error;
+		return (data || []).filter((g) => !g.is_archived);
+	}
+
+	// Single-game lookup that hides soft-deleted rows by default (#471).
+	async getGameByCode(gameCode, { includeDeleted = false } = {}) {
+		let query = supabase.from("games").select("*").eq("game_code", gameCode);
+		if (!includeDeleted) query = applyNotDeleted(query);
+		const { data, error } = await query.single();
+		if (error) throw error;
+		if (data && data.deleted_at && !includeDeleted) throw new Error("Game not found");
+		return data;
+	}
+
+	// Soft-delete a game without losing auditability.
+	async softDeleteGame(gameCode) {
+		const { data, error } = await supabase
+			.from("games")
+			.update({ deleted_at: new Date().toISOString() })
+			.eq("game_code", gameCode)
+			.select()
+			.single();
+		if (error) throw error;
+		return data;
+	}
+
+	/**
+	 * Weekly retention archival (#471): mark completed games older than
+	 * `ageDays` (default 90) as archived. Active matches and soft-deleted
+	 * rows are never touched; dispute exclusion (open player_flags) is
+	 * enforced by the caller via `excludedGameIds` (cronService resolves
+	 * open disputes and passes them in).
+	 */
+	async archiveStaleCompletedGames(cutoffIso, { excludedGameIds = [] } = {}) {
+		let query = supabase
+			.from("games")
+			.select("id, game_code, status, updated_at")
+			.in("status", ["finished", "completed"])
+			.lt("updated_at", cutoffIso)
+			.limit(1000);
+		query = applyNotDeleted(query);
+		if (typeof query.eq === "function") query = query.eq("is_archived", false);
+		const { data: candidates, error } = await query;
+		if (error) throw error;
+		const excluded = new Set(excludedGameIds || []);
+		const eligible = (candidates || []).filter((g) => !excluded.has(g.id) && !g.is_archived);
+		if (eligible.length === 0) return { archived: 0, ids: [] };
+		const ids = eligible.map((g) => g.id);
+		const nowIso = new Date().toISOString();
+		const { data: updated, error: updateError } = await supabase
+			.from("games")
+			.update({ is_archived: true, archival_status: "archived", archived_at: nowIso })
+			.in("id", ids)
+			.in("status", ["finished", "completed"])
+			.select("id");
+		if (updateError) throw updateError;
+		return { archived: (updated || []).length, ids };
+	}
+
 	generateGameCode() {
 		return Math.random().toString(36).substring(2, 8).toUpperCase();
 	}
@@ -1232,6 +1365,42 @@ class GameModel {
 			p_tx_hash: txHash,
 			p_reason: reason,
 		});
+		if (error) throw error;
+		return data;
+	}
+
+	/**
+	 * Bulk-inserts validated, already-played PGN games (Issue #436) as
+	 * finished/archived records. Each entry is a validated game from
+	 * `pgnService` (headers, final board, moves, result). Generates a unique
+	 * game_code per row the same way `createGame` does.
+	 */
+	async batchImportGames(games) {
+		if (!games || games.length === 0) return [];
+
+		const rows = games.map((game) => {
+			const resultTag = game.result;
+			const winner = resultTag === "1-0" ? "white" : resultTag === "0-1" ? "black" : null;
+			const isDraw = resultTag === "1/2-1/2";
+
+			return {
+				game_code: this.generateGameCode(),
+				game_type: "chess",
+				variant: "standard",
+				board_state: game.finalBoard,
+				current_turn: game.nextTurn,
+				status: "finished",
+				winner,
+				is_draw: isDraw,
+				move_count: game.moves.length,
+				move_history: game.moves,
+				end_reason: "imported",
+				is_archived: true,
+				archival_status: "archived",
+			};
+		});
+
+		const { data, error } = await supabase.from("games").insert(rows).select("id, game_code");
 		if (error) throw error;
 		return data;
 	}

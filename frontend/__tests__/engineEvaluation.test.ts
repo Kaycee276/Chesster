@@ -8,6 +8,9 @@ import {
 	parseUciInfo,
 	toEngineFen,
 	toWhitePerspective,
+	uciMoveToAlgebraic,
+	formatPrincipalVariation,
+	getBestMoveForDisplay,
 } from "../src/utils/engineEvaluation";
 import { INITIAL_BOARD } from "../src/utils/chessUtils";
 
@@ -167,5 +170,95 @@ describe("toEngineFen", () => {
 		expect(toEngineFen(unknownPiece, "white")).toBeNull();
 
 		expect(toEngineFen(INITIAL_BOARD.slice(0, 7), "white")).toBeNull();
+	});
+});
+
+describe("uciMoveToAlgebraic", () => {
+	it("converts simple moves", () => {
+		expect(uciMoveToAlgebraic("e2e4")).toBe("e2-e4");
+		expect(uciMoveToAlgebraic("g1f3")).toBe("g1-f3");
+	});
+
+	it("converts pawn promotions", () => {
+		expect(uciMoveToAlgebraic("e7e8q")).toBe("e8=Q");
+		expect(uciMoveToAlgebraic("a7a8r")).toBe("a8=R");
+		expect(uciMoveToAlgebraic("h7h8b")).toBe("h8=B");
+		expect(uciMoveToAlgebraic("c7c8n")).toBe("c8=N");
+	});
+
+	it("returns null for invalid moves", () => {
+		expect(uciMoveToAlgebraic("")).toBeNull();
+		expect(uciMoveToAlgebraic("e2")).toBeNull();
+		expect(uciMoveToAlgebraic("xyz")).toBeNull();
+	});
+});
+
+describe("formatPrincipalVariation", () => {
+	it("formats a simple PV", () => {
+		expect(formatPrincipalVariation(["e2e4", "e7e5"])).toBe("e2-e4 e7-e5");
+	});
+
+	it("adds ellipsis when more moves remain", () => {
+		expect(formatPrincipalVariation(["e2e4", "e7e5", "g1f3"])).toBe("e2-e4 ...");
+	});
+
+	it("returns null for empty or undefined PV", () => {
+		expect(formatPrincipalVariation(undefined)).toBeNull();
+		expect(formatPrincipalVariation([])).toBeNull();
+	});
+
+	it("skips invalid moves and returns null if all fail", () => {
+		expect(formatPrincipalVariation(["invalid"])).toBeNull();
+	});
+});
+
+describe("getBestMoveForDisplay", () => {
+	it("prefers the PV when available", () => {
+		const eval1 = {
+			fen: "8/8/8/8/8/8/8/K6k w - - 0 1",
+			depth: 10,
+			scoreCp: 50,
+			mate: null,
+			bestMove: "a1a2",
+			final: false,
+			pv: ["e2e4", "e7e5"],
+		};
+		expect(getBestMoveForDisplay(eval1)).toBe("e2-e4 ...");
+	});
+
+	it("falls back to bestMove when PV is unavailable", () => {
+		const eval2 = {
+			fen: "8/8/8/8/8/8/8/K6k w - - 0 1",
+			depth: 10,
+			scoreCp: 50,
+			mate: null,
+			bestMove: "e2e4",
+			final: false,
+		};
+		expect(getBestMoveForDisplay(eval2)).toBe("e2-e4");
+	});
+
+	it("returns null when neither PV nor bestMove is available", () => {
+		const eval3 = {
+			fen: "8/8/8/8/8/8/8/K6k w - - 0 1",
+			depth: 10,
+			scoreCp: 50,
+			mate: null,
+			bestMove: null,
+			final: false,
+		};
+		expect(getBestMoveForDisplay(eval3)).toBeNull();
+	});
+
+	it("handles invalid best moves gracefully", () => {
+		const eval4 = {
+			fen: "8/8/8/8/8/8/8/K6k w - - 0 1",
+			depth: 10,
+			scoreCp: 50,
+			mate: null,
+			bestMove: "invalid",
+			final: false,
+		};
+		expect(getBestMoveForDisplay(eval4)).toBeNull();
 	});
 });

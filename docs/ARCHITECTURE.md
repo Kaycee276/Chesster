@@ -60,13 +60,15 @@ stateDiagram-v2
   Pending --> Refunded: cancel_pending_match or claim_refund
   Active --> Resolved: resolve_match or forfeit_match
   Active --> Refunded: agreed draw or timeout refund
+  Active --> EmergencyRefunded: emergency_refund after 72h coordinator inactivity
   Active --> Disputed: raise_dispute
   Disputed --> Resolved: resolve_dispute after timelock
   Resolved --> [*]
   Refunded --> [*]
+  EmergencyRefunded --> [*]
 ```
 
-`Pending`, `Active`, `Resolved`, and `Refunded` are stored `MatchStatus` values. A dispute is stored separately and temporarily blocks ordinary settlement until its timelock has elapsed and the coordinator resolves it.
+`Pending`, `Active`, `Resolved`, `Refunded`, and `EmergencyRefunded` are stored `MatchStatus` values. A dispute is stored separately and temporarily blocks ordinary settlement until its timelock has elapsed and the coordinator resolves it. `EmergencyRefunded` is a player-triggered escape hatch: either participant may split the locked wager evenly if an `Active` match sees no coordinator resolution for 72 hours, protecting funds from coordinator infrastructure failure. For contract storage layout, the full error code catalog, and local Soroban sandbox setup, see the [Soroban integration guide](./SOROBAN_INTEGRATION.md).
 
 ## Trust boundaries
 

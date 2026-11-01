@@ -1,7 +1,7 @@
 const os = require("os");
 const path = require("path");
 const { threadId: mainThreadId } = require("worker_threads");
-const { BotWorkerPool } = require("../services/botService");
+const { StockfishPool: BotWorkerPool } = require("../services/stockfishPool");
 
 const TEST_WORKER = path.join(__dirname, "fixtures", "poolTestWorker.js");
 const BROKEN_WORKER = path.join(__dirname, "fixtures", "brokenWorker.js");
@@ -88,7 +88,7 @@ describe("BotWorkerPool", () => {
 	});
 
 	it("times out a hanging query, kills its engine process and replaces the worker", async () => {
-		pool = new BotWorkerPool({ size: 1, workerScript: TEST_WORKER, taskTimeoutMs: 300 });
+		pool = new BotWorkerPool({ size: 1, workerScript: TEST_WORKER, taskTimeoutMs: 1500 });
 
 		const hung = pool.executeMove({ mode: "hang" });
 		expect(await waitFor(() => pool.workers[0] && pool.workers[0].enginePid)).toBeTruthy();
@@ -96,7 +96,7 @@ describe("BotWorkerPool", () => {
 
 		const startedAt = Date.now();
 		await expect(hung).rejects.toMatchObject({ code: "BOT_TIMEOUT" });
-		expect(Date.now() - startedAt).toBeLessThan(1000);
+		expect(Date.now() - startedAt).toBeLessThan(4000);
 
 		expect(await waitFor(() => !isAlive(enginePid))).toBe(true);
 

@@ -7,7 +7,7 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../config/supabase");
 const redisConfig = require("../config/redis");
-const { checkDbHealth } = require("../services/dbHealthService");
+const { checkDbHealth, getPoolMetrics } = require("../services/dbHealthService");
 const logger = require("../utils/logger");
 const { Keypair, rpc, Networks } = require("@stellar/stellar-sdk");
 
@@ -245,6 +245,15 @@ router.get(["/health/detailed", "/detailed"], async (req, res) => {
 router.get("/health/db", async (req, res) => {
 	const health = await checkDbHealth();
 	res.status(health.status === "healthy" ? 200 : 503).json(health);
+});
+
+/** GET /api/health/db/pool - in-process PostgreSQL pool counters. */
+router.get("/health/db/pool", (req, res, next) => {
+	try {
+		res.json(getPoolMetrics());
+	} catch (error) {
+		next(error);
+	}
 });
 
 /**

@@ -18,6 +18,7 @@ vi.mock("../hooks/useMoveAccuracyAnalysis", () => ({
 		progress: "idle",
 		evaluated: 0,
 		total: 0,
+		evaluations: [],
 		result: null,
 	}),
 }));

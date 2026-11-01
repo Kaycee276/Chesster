@@ -34,6 +34,8 @@ export default defineConfig({
 			workbox: {
 				// Precache the built app shell and static assets.
 				globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff,woff2}"],
+				globIgnores: ["**/stats.html"],
+				maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
 				// Runtime-cache chessboard piece/image assets so the board renders
 				// offline and on flaky connections.
 				runtimeCaching: [

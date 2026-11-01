@@ -23,10 +23,9 @@ function useApplyThemeOnMount() {
 }
 
 const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> = [
-  { key: "wood", name: "Wood", description: "Classic wooden piece sounds" },
-  { key: "plastic", name: "Plastic", description: "Modern plastic piece sounds" },
-  { key: "arcade", name: "Arcade", description: "Retro arcade synth sounds" },
-  { key: "retro", name: "Retro 8-bit", description: "Classic chiptune sounds" },
+  { key: "classic-wood", name: "Classic Wood", description: "Warm mellow woody tones" },
+  { key: "modern-digital", name: "Modern Digital", description: "Crisp synthesized digital sounds" },
+  { key: "lofi-soft", name: "Low-Fi Soft", description: "Muted subtle organic tones" },
 ];
 
 export default function ThemeSelector({ hideFloating = false }: { hideFloating?: boolean } = {}) {
@@ -63,7 +62,7 @@ export default function ThemeSelector({ hideFloating = false }: { hideFloating?:
     // Temporarily play the sound with the target pack
     const originalPack = soundService.getSoundPack();
     soundService.setSoundPack(pack);
-    soundService.move();
+    soundService.previewSound("move");
     // Restore the previous pack after a brief delay
     setTimeout(() => {
       soundService.setSoundPack(originalPack);

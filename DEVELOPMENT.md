@@ -6,6 +6,9 @@ This document outlines the local development setup, CI verification checks, and 
 
 ## 🛠️ Local Setup & CI Checks
 
+For the complete local Soroban Testnet, Friendbot, contract deployment, and
+Freighter walkthrough, see [`docs/STELLAR_TESTNET_SETUP.md`](docs/STELLAR_TESTNET_SETUP.md).
+
 ### 1. Node.js Version
 
 This project requires **Node.js 20.18.0** or higher. The `.nvmrc` file at the repository root specifies the exact version used in CI.
@@ -44,6 +47,7 @@ npm install
   npm install
   npm run dev
   ```
+  Interactive API documentation is available at `http://localhost:3001/api/docs` and is generated from `backend/docs/openapi.yaml`.
 - **Smart Contracts**:
   ```bash
   cd contracts/soroban

@@ -1,6 +1,7 @@
 const { Keypair } = require("@stellar/stellar-sdk");
 const tournamentModel = require("../models/tournamentModel");
 const tournamentService = require("../services/tournamentService");
+const replayService = require("../services/replayService");
 
 /** Tournament statuses that still accept new registrations. */
 const REGISTRATION_OPEN_STATUSES = ["open"];
@@ -56,6 +57,36 @@ class TournamentController {
 					participants,
 				},
 			});
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/** GET /api/tournaments/:id/pgn */
+	async downloadTournamentPgn(req, res, next) {
+		try {
+			const { id } = req.validated?.params || req.params;
+			const tournament = await tournamentModel.getTournamentById(id);
+			if (!tournament) return res.status(404).json({ success: false, error: "Tournament not found" });
+			const pgn = await replayService.generateTournamentPgnArchive(id);
+			res.setHeader("Content-Type", "application/x-chess-pgn; charset=utf-8");
+			res.setHeader("Content-Disposition", `attachment; filename="tournament-${id}.pgn"`);
+			return res.send(pgn);
+		} catch (error) {
+			next(error);
+		}
+	}
+
+	/** GET /api/tournaments/:id/export/csv */
+	async exportTournamentCsv(req, res, next) {
+		try {
+			const { id } = req.validated?.params || req.params;
+			const tournament = await tournamentModel.getTournamentById(id);
+			if (!tournament) return res.status(404).json({ success: false, error: "Tournament not found" });
+			const csv = await tournamentService.generateTournamentCsv(id);
+			res.setHeader("Content-Type", "text/csv");
+			res.setHeader("Content-Disposition", `attachment; filename="tournament-${id}-report.csv"`);
+			return res.send(csv);
 		} catch (error) {
 			next(error);
 		}

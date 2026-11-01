@@ -91,6 +91,17 @@ describe("resolveSan", () => {
 		});
 	});
 
+	it("accepts zero notation and check suffixes without changing resolution", () => {
+		const board = INITIAL_BOARD.map((row) => [...row]);
+		board[7][5] = ".";
+		board[7][6] = ".";
+
+		expect(resolveSan(board, "0-0+", "white")).toEqual({
+			from: [7, 4],
+			to: [7, 6],
+		});
+	});
+
 	it("uses disambiguation when two pieces reach the same square", () => {
 		const board = INITIAL_BOARD.map((row) => [...row]);
 		// Rooks on a1 and h1 with a clear back rank: both reach d1 after the

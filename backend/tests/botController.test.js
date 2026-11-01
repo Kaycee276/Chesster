@@ -1,7 +1,10 @@
 const express = require("express");
 const request = require("supertest");
 
-jest.mock("../services/botService", () => ({ getBestMove: jest.fn() }));
+jest.mock("../services/botService", () => ({
+	getBestMove: jest.fn(),
+	isValidBotLevel: jest.requireActual("../services/botService").isValidBotLevel,
+}));
 jest.mock("../models/gameModel", () => ({ getGame: jest.fn(), makeMove: jest.fn() }));
 
 const botService = require("../services/botService");
@@ -71,5 +74,35 @@ describe("bot routes worker-pool error handling", () => {
 		const res = await request(buildApp()).post("/api/games/ABC123/bot-move").send({});
 
 		expect(res.status).toBe(400);
+	});
+});
+
+describe("bot routes level (1-8) selection", () => {
+	const board = [["."]];
+
+	beforeEach(() => jest.clearAllMocks());
+
+	it("passes a valid level to the bot service, taking precedence over difficulty", async () => {
+		botService.getBestMove.mockResolvedValue({ from: [6, 4], to: [4, 4], promotion: null });
+
+		const res = await request(buildApp()).post("/api/bot/move").send({ board, turn: "white", level: 3, difficulty: "master" });
+
+		expect(res.status).toBe(200);
+		expect(botService.getBestMove).toHaveBeenCalledWith(board, "white", null, { level: 3 }, 0);
+	});
+
+	it.each([0, 9, 2.5, "4", null])("rejects level %p with 400 without querying the engine", async (level) => {
+		const res = await request(buildApp()).post("/api/bot/move").send({ board, turn: "white", level });
+
+		expect(res.status).toBe(400);
+		expect(res.body.error).toMatch(/level must be an integer from 1 to 8/);
+		expect(botService.getBestMove).not.toHaveBeenCalled();
+	});
+
+	it("validates level on the stateful route before loading the game", async () => {
+		const res = await request(buildApp()).post("/api/games/ABC123/bot-move").send({ level: 12 });
+
+		expect(res.status).toBe(400);
+		expect(gameModel.getGame).not.toHaveBeenCalled();
 	});
 });

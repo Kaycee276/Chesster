@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import KeyboardShortcutsModal from "../../src/components/KeyboardShortcutsModal";
 
@@ -95,7 +95,7 @@ describe("KeyboardShortcutsModal", () => {
 
   it("traps focus within the modal", async () => {
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <>
         <button>Outside button</button>
         <KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />
@@ -186,7 +186,7 @@ describe("KeyboardShortcutsModal", () => {
   });
 
   it("has scrollable content when tall", () => {
-    const { container } = render(
+    render(
       <KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />
     );
 
@@ -196,12 +196,11 @@ describe("KeyboardShortcutsModal", () => {
   });
 
   it("modal content does not overflow viewport", () => {
-    const { container } = render(
+    render(
       <KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />
     );
 
     const modal = screen.getByRole("dialog");
-    const style = window.getComputedStyle(modal);
 
     // Modal should have max-height constraint
     expect(modal.className).toContain("max-h");

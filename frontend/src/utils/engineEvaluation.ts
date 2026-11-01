@@ -149,6 +149,9 @@ export function formatEvaluation(scoreCp: number, mate: number | null = null): s
 		if (mate === 0) return scoreCp > 0 ? "1-0" : "0-1";
 		return `${mate < 0 ? "-" : ""}M${Math.abs(mate)}`;
 	}
+	if (Math.abs(scoreCp) >= MATE_SCORE_CP) {
+		return scoreCp < 0 ? "-M" : "+M";
+	}
 	const pawns = (scoreCp / 100).toFixed(1);
 	return scoreCp > 0 ? `+${pawns}` : pawns === "-0.0" ? "0.0" : pawns;
 }
@@ -194,4 +197,53 @@ export function toEngineFen(board: string[][], turn: "white" | "black"): string 
 
 	const [placement, side, , enPassant, halfmove, fullmove] = boardToFen(board, turn).split(" ");
 	return [placement, side, inferCastlingRights(board), enPassant, halfmove, fullmove].join(" ");
+}
+
+/**
+ * Converts a UCI move (e.g. "e2e4") to algebraic notation for display.
+ * Handles promotions: "e7e8q" becomes "e8=Q".
+ * Returns null if the move string is invalid.
+ */
+export function uciMoveToAlgebraic(uciMove: string): string | null {
+	if (!uciMove) return null;
+	const match = uciMove.match(/^([a-h][1-8])([a-h][1-8])([qrbnQRBN])?$/);
+	if (!match) return null;
+	const [, from, to, promotion] = match;
+	if (promotion) {
+		return `${to}=${promotion.toUpperCase()}`;
+	}
+	return `${from}-${to}`;
+}
+
+/**
+ * Formats a principal variation (sequence of moves in UCI notation) as a
+ * comma-separated list of algebraic notation moves. Used for tooltip display.
+ * Returns null if the PV is empty or all moves fail to convert.
+ */
+export function formatPrincipalVariation(pv: string[] | undefined): string | null {
+	if (!pv || pv.length === 0) return null;
+	const algebraic = pv
+		.map((move) => uciMoveToAlgebraic(move))
+		.filter((m): m is string => m !== null);
+	if (algebraic.length === 0) return null;
+	if (algebraic.length > 2) {
+		return `${algebraic[0]} ...`;
+	}
+	return algebraic.join(" ");
+}
+
+/**
+ * Extracts the best move suggestion for tooltip display from an evaluation.
+ * Prefers the first move of the principal variation if available, otherwise
+ * uses the stored bestMove. Returns null if neither is available.
+ */
+export function getBestMoveForDisplay(evaluation: EngineEvaluation): string | null {
+	if (evaluation.pv && evaluation.pv.length > 0) {
+		const first = uciMoveToAlgebraic(evaluation.pv[0]);
+		return first ? `${first}${evaluation.pv.length > 1 ? " ..." : ""}` : null;
+	}
+	if (evaluation.bestMove) {
+		return uciMoveToAlgebraic(evaluation.bestMove);
+	}
+	return null;
 }

@@ -219,6 +219,30 @@ router.get('/games/:gameCode/pgn', gameController.exportPgn);
 
 /**
  * @openapi
+ * /api/games/import-pgn:
+ *   post:
+ *     summary: Bulk import historical games or tournament archives from PGN text
+ *     tags: [Games]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         text/plain:
+ *           schema:
+ *             type: string
+ *     responses:
+ *       200:
+ *         description: Per-game import summary (imported/skipped counts and per-game errors)
+ *       400:
+ *         description: Missing or empty PGN body
+ */
+router.post(
+	'/games/import-pgn',
+	express.text({ type: () => true, limit: '20mb' }),
+	gameController.importPgnHandler,
+);
+
+/**
+ * @openapi
  * /api/games/{gameCode}/resign:
  *   post:
  *     summary: Resign an active game

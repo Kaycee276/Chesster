@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import GameTimer from "../src/components/TurnTimer";
+import { formatTime } from "../src/utils/timeControl";
 
 function calculateIsLowTime(secondsLeft: number, totalSeconds: number, isCurrentTurn: boolean): boolean {
 	return isCurrentTurn && (secondsLeft <= 20 || secondsLeft <= totalSeconds * 0.1);
@@ -80,33 +81,22 @@ describe("GameTimer (TurnTimer) - Low Time Warning", () => {
 	});
 
 	describe("Time formatting logic", () => {
-		it("should format time as MM:SS", () => {
-			const minutes = Math.floor(300 / 60);
-			const seconds = 300 % 60;
-			const formatted = `${minutes}:${String(seconds).padStart(2, "0")}`;
-			expect(formatted).toBe("5:00");
+		it("formats tenths below ten seconds", () => {
+			expect(formatTime(8_450)).toBe("0:08.4");
+			expect(formatTime(9_999)).toBe("0:09.9");
 		});
 
-		it("should handle single digit seconds with leading zero", () => {
-			const minutes = Math.floor(65 / 60);
-			const seconds = 65 % 60;
-			const formatted = `${minutes}:${String(seconds).padStart(2, "0")}`;
-			expect(formatted).toBe("1:05");
+		it("preserves standard formatting at and above ten seconds", () => {
+			expect(formatTime(10_000)).toBe("0:10");
+			expect(formatTime(65_000)).toBe("1:05");
 		});
 
 		it("should clamp negative seconds to 0:00", () => {
-			const safe = Math.max(0, -5);
-			const minutes = Math.floor(safe / 60);
-			const seconds = safe % 60;
-			const formatted = `${minutes}:${String(seconds).padStart(2, "0")}`;
-			expect(formatted).toBe("0:00");
+			expect(formatTime(-5)).toBe("0:00.0");
 		});
 
 		it("should format hour-long games correctly", () => {
-			const minutes = Math.floor(3600 / 60);
-			const seconds = 3600 % 60;
-			const formatted = `${minutes}:${String(seconds).padStart(2, "0")}`;
-			expect(formatted).toBe("60:00");
+			expect(formatTime(3_600_000)).toBe("60:00");
 		});
 	});
 

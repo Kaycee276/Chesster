@@ -152,13 +152,19 @@ All active development happens on the `dev` branch. The `master` / `main` branch
 
 ---
 
-## 🙋‍♂️ How to Claim an Issue
+## 🙋‍♂️ How to Claim an Issue & Strict PR Policy
 
-To prevent duplicate work:
+> [!IMPORTANT]
+> **Strict Maintainer Policy**:
+> - All pull requests must resolve issues that were **created by the repository maintainer (@Kaycee276)** and **formally assigned to you directly by @Kaycee276**.
+> - **Self-assignments are strictly prohibited.** Any PR submitted for an issue that was self-assigned, assigned without maintainer authorization, or not created by `@Kaycee276` will be **automatically closed**.
+> - PRs opened without an authorized, assigned issue will be automatically closed.
 
-1. Leave a comment on the issue asking to be assigned (e.g., _"I'd like to work on this issue! Please assign me."_).
-2. Wait for a maintainer to assign the issue to you before you start coding.
-3. If an assigned contributor is inactive for more than **5 days**, the issue may be reassigned.
+To claim an issue:
+1. Browse open issues created by `@Kaycee276`.
+2. Leave a comment on the issue asking to be assigned (e.g., _"I'd like to work on this issue! Please assign me."_).
+3. **Wait for @Kaycee276 to formally assign you** on GitHub before starting work or opening a PR.
+4. If an assigned contributor is inactive for more than **5 days**, the issue may be reassigned.
 
 ---
 

@@ -1,0 +1,35 @@
+name: "Assignment Guard"
+
+on:
+  issues:
+    types:
+      - assigned
+
+permissions:
+  issues: write
+
+jobs:
+  guard-assignment:
+    name: Guard Issue Assignment
+    runs-on: ubuntu-latest
+    if: github.event.sender.login != 'Kaycee276'
+    steps:
+      - name: Revert Unauthorized Assignment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ACTOR_LOGIN: ${{ github.event.sender.login }}
+          ASSIGNEE_LOGIN: ${{ github.event.assignee.login }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Unauthorized assignment detected by @${ACTOR_LOGIN} on issue #${ISSUE_NUMBER} (assignee: @${ASSIGNEE_LOGIN})."
+          
+          # Remove the unauthorized assignee
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --remove-assignee "$ASSIGNEE_LOGIN"
+          
+          # Post explanatory maintainer comment
+          COMMENT_BODY="⚠️ @${ASSIGNEE_LOGIN} Self-assignment is not permitted in Chesster. Issues can only be assigned directly by @Kaycee276.
+
+          Please leave a comment on this issue requesting assignment and wait for maintainer approval before starting work."
+
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "$COMMENT_BODY"

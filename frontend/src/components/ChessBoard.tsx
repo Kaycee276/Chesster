@@ -34,7 +34,7 @@ import {
   Moon,
   Laptop,
 } from "lucide-react";
-import { BOARD_THEMES, PIECE_SETS, useThemeStore } from "../store/themeStore";
+import { BOARD_THEMES, PIECE_SETS, useThemeStore, type PieceSetKey } from "../store/themeStore";
 
 const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> = [
   { key: "wood", name: "Wood", description: "Classic wooden piece sounds" },
@@ -54,6 +54,7 @@ function tokenLabel(addr: string | null | undefined): string {
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import type { AnnotationArrow, AnnotationColor, SquareHighlight } from "../types/chess";
+import { BoardAnnotations } from "./BoardAnnotations";
 import {
   getPossibleMoves,
   getCapturedPieces,
@@ -72,19 +73,79 @@ import TurnTimer from "./TurnTimer";
 import ChatPanel from "./ChatPanel";
 import MoveInputBar from "./MoveInputBar";
 
-const PIECE_SYMBOLS: Record<string, string> = {
-  K: "♔",
-  Q: "♕",
-  R: "♖",
-  B: "♗",
-  N: "♘",
-  P: "♙",
-  k: "♚",
-  q: "♛",
-  r: "♜",
-  b: "♝",
-  n: "♞",
-  p: "♟",
+
+// Piece set configurations for different visual styles
+const PIECE_SET_SYMBOLS: Record<PieceSetKey | "classic", Record<string, string>> = {
+  classic: {
+    K: "♔",
+    Q: "♕",
+    R: "♖",
+    B: "♗",
+    N: "♘",
+    P: "♙",
+    k: "♚",
+    q: "♛",
+    r: "♜",
+    b: "♝",
+    n: "♞",
+    p: "♟",
+  },
+  standard: {
+    K: "♔",
+    Q: "♕",
+    R: "♖",
+    B: "♗",
+    N: "♘",
+    P: "♙",
+    k: "♚",
+    q: "♛",
+    r: "♜",
+    b: "♝",
+    n: "♞",
+    p: "♟",
+  },
+  neo: {
+    K: "♔",
+    Q: "♕",
+    R: "♖",
+    B: "♗",
+    N: "♘",
+    P: "♙",
+    k: "♚",
+    q: "♛",
+    r: "♜",
+    b: "♝",
+    n: "♞",
+    p: "♟",
+  },
+  wood: {
+    K: "♔",
+    Q: "♕",
+    R: "♖",
+    B: "♗",
+    N: "♘",
+    P: "♙",
+    k: "♚",
+    q: "♛",
+    r: "♜",
+    b: "♝",
+    n: "♞",
+    p: "♟",
+  },
+  pixel: {
+    K: "♔",
+    Q: "♕",
+    R: "♖",
+    B: "♗",
+    N: "♘",
+    P: "♙",
+    k: "♚",
+    q: "♛",
+    r: "♜",
+    b: "♝",
+    n: "♞",
+    p: "♟",
+  },
 };
 
 const WHITE_PIECE_STYLE: React.CSSProperties = {
@@ -99,15 +160,6 @@ const BLACK_PIECE_STYLE: React.CSSProperties = {
   color: "#111111",
   textShadow: "-1.5px -1.5px 0 #fff, 1.5px -1.5px 0 #fff, -1.5px 1.5px 0 #fff, 1.5px 1.5px 0 #fff",
   WebkitTextStroke: "0.5px #fff",
-};
-
-// ── Board annotation colors (#252) ─────────────────────────────────────────────
-// Right-click plain = blue, Shift = green, Alt = red, Ctrl/Cmd = yellow.
-const ANNOTATION_COLORS: Record<AnnotationColor, string> = {
-  blue: "#3689e6",
-  green: "#22ac38",
-  red: "#e0403c",
-  yellow: "#e6c729",
 };
 
 function colorFromModifiers(e: {
@@ -280,8 +332,9 @@ function PlayerAvatar({ color }: { color: "white" | "black" }) {
   );
 }
 
-function CapturedIcons({ captured }: { captured: string[] }) {
+function CapturedIcons({ captured, pieceSet }: { captured: string[]; pieceSet: PieceSetKey | "classic" }) {
   if (captured.length === 0) return null;
+  const symbols = PIECE_SET_SYMBOLS[pieceSet];
   return (
     <div className="flex overflow-hidden shrink-0" style={{ maxWidth: "6rem" }}>
       {captured.map((p, i) => (
@@ -293,7 +346,7 @@ function CapturedIcons({ captured }: { captured: string[] }) {
             ...(p === p.toUpperCase() ? WHITE_PIECE_STYLE : BLACK_PIECE_STYLE),
           }}
         >
-          {PIECE_SYMBOLS[p]}
+          {symbols[p]}
         </span>
       ))}
     </div>
@@ -334,6 +387,7 @@ function ChessBoardInner() {
     viewingIndex,
     setViewingIndex,
     loadMoveHistory,
+    blindfoldMode,
     isBlindfoldMode,
     isStreamerMode,
   } = useGameStore();
@@ -345,6 +399,11 @@ function ChessBoardInner() {
   const [promotionMove, setPromotionMove] = useState<{
     from: [number, number];
     to: [number, number];
+  } | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    from: [number, number];
+    to: [number, number];
+    promotion?: string;
   } | null>(null);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [showResultModal, setShowResultModal] = useState(false);
@@ -365,21 +424,33 @@ function ChessBoardInner() {
   const [mobileTab, setMobileTab] = useState<"moves" | "chat" | "settings" | null>(null);
 
   const unreadCount = useGameStore((s) => s.unreadCount);
+  const queuedPremove = useGameStore((s) => s.queuedPremove);
+  const setQueuedPremove = useGameStore((s) => s.setQueuedPremove);
+  const clearPremove = useGameStore((s) => s.clearPremove);
   const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
   const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
   const isHapticsEnabled = useGameStore((s) => s.isHapticsEnabled);
   const toggleHaptics = useGameStore((s) => s.toggleHaptics);
   const spectatorCount = useGameStore((s) => s.spectatorCount);
   const spectatorList = useGameStore((s) => s.spectatorList);
+  const isMoveConfirmationEnabled = useGameStore((s) => s.isMoveConfirmationEnabled);
 
   const safeHaptic = (type: "pickup" | "drop" | "error") => {
     if (isHapticsEnabled) triggerHaptic(type);
   };
 
+  const shouldHidePiece = (piece: string) => {
+    if (blindfoldMode === "all") return true;
+    if (blindfoldMode === "white" && piece === piece.toUpperCase()) return true;
+    if (blindfoldMode === "black" && piece === piece.toLowerCase()) return true;
+    if (isBlindfoldMode) return true;
+    return false;
+  };
+
   const boardTheme = useThemeStore((s) => s.boardTheme);
   const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
-  const pieceSet = useThemeStore((s) => s.pieceSet);
-  const setPieceSet = useThemeStore((s) => s.setPieceSet);
+  const pieceSet = useGameStore((s) => s.pieceSet) || "classic";
+  const setPieceSet = useGameStore((s) => s.setPieceSet);
   const colorMode = useThemeStore((s) => s.colorMode);
   const setColorMode = useThemeStore((s) => s.setColorMode);
   const [soundPack, setSoundPack] = useState<SoundPack>(() => {
@@ -810,6 +881,48 @@ function ChessBoardInner() {
       return;
     }
 
+    // If move confirmation is enabled, show the confirmation overlay instead of immediately committing
+    if (isMoveConfirmationEnabled && !pendingConfirmation) {
+      setPendingConfirmation({ from, to, promotion });
+      return;
+    }
+
+    clearAnnotations();
+    setIsMoving(true);
+    const toastId = addToast("Moving...", "loading");
+    try {
+      await makeMove(from, to, promotion);
+      safeHaptic("drop");
+      setPendingConfirmation(null);
+    } catch (error: unknown) {
+      safeHaptic("error");
+      addToast(friendlyError(error), "error");
+      selectSquare(null);
+    } finally {
+      removeToast(toastId);
+      setIsMoving(false);
+    }
+  };
+
+  const queuePremove = (from: [number, number], to: [number, number]) => {
+    // Speculative premove (#473): only the player's own piece may be queued.
+    const piece = board[from[0]][from[1]];
+    if (piece === "." || !isPlayerPiece(piece)) {
+      safeHaptic("error");
+      return;
+    }
+    const isPromotion = piece.toLowerCase() === "p" && (to[0] === 0 || to[0] === 7);
+    setQueuedPremove({ from, to, promotion: isPromotion ? "q" : undefined });
+    selectSquare(null);
+    safeHaptic("drop");
+  };
+
+  const confirmPendingMove = async () => {
+    if (!pendingConfirmation) return;
+    const { from, to, promotion } = pendingConfirmation;
+    setPendingConfirmation(null);
+    clearAnnotations();
+    
     setIsMoving(true);
     const toastId = addToast("Moving...", "loading");
     try {
@@ -825,13 +938,44 @@ function ChessBoardInner() {
     }
   };
 
+  const cancelPendingMove = () => {
+    setPendingConfirmation(null);
+    selectSquare(null);
+    safeHaptic("error");
+  };
+
   const handleSquareClick = async (row: number, col: number) => {
     // A plain left-click always clears any drawn arrows/highlights (#252).
     clearAnnotations();
 
-    if (status !== "active" || currentTurn !== playerColor || isMoving) return;
+    if (status !== "active" || isMoving) return;
     if (viewingIndex !== null) return;
     if (dragPiece) return; // a drag is in progress — its pointerup handles the drop
+
+    // Premove flow (#473): opponent's turn — queue a speculative move.
+    if (currentTurn !== playerColor) {
+      if (!playerColor) return;
+      if (!selectedSquare) {
+        const piece = board[row][col];
+        if (piece === "." || !isPlayerPiece(piece)) return;
+        selectSquare([row, col]);
+        safeHaptic("pickup");
+      } else {
+        if (selectedSquare[0] === row && selectedSquare[1] === col) {
+          selectSquare(null);
+          clearPremove();
+          return;
+        }
+        const clickedPiece = board[row][col];
+        if (clickedPiece !== "." && isPlayerPiece(clickedPiece)) {
+          selectSquare([row, col]);
+          safeHaptic("pickup");
+          return;
+        }
+        queuePremove(selectedSquare, [row, col]);
+      }
+      return;
+    }
 
     if (!selectedSquare) {
       const piece = board[row][col];
@@ -901,7 +1045,9 @@ function ChessBoardInner() {
 
   const handlePiecePointerDown = (e: React.PointerEvent, row: number, col: number) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
-    if (status !== "active" || currentTurn !== playerColor || isMoving) return;
+    // Premove (#473): allow picking up own pieces during the opponent's turn.
+    if (status !== "active" || isMoving) return;
+    if (!playerColor) return;
     if (viewingIndex !== null) return;
     const piece = board[row][col];
     if (piece === "." || !isPlayerPiece(piece)) return;
@@ -972,6 +1118,12 @@ function ChessBoardInner() {
       return;
     }
 
+    // Opponent's turn → queue as premove instead of moving now (#473).
+    if (currentTurn !== playerColor) {
+      queuePremove(from, [toRow, toCol]);
+      return;
+    }
+
     if (!isPossibleMove(toRow, toCol)) {
       safeHaptic("error");
       return;
@@ -982,7 +1134,9 @@ function ChessBoardInner() {
 
   // ── Native mobile touch event handlers with -30px offset (#439) ─────────
   const handleTouchStart = (e: React.TouchEvent, row: number, col: number) => {
-    if (status !== "active" || currentTurn !== playerColor || isMoving) return;
+    // Premove (#473): allow touch-drag during the opponent's turn.
+    if (status !== "active" || isMoving) return;
+    if (!playerColor) return;
     if (viewingIndex !== null) return;
     const piece = board[row][col];
     if (piece === "." || !isPlayerPiece(piece)) return;
@@ -1030,6 +1184,12 @@ function ChessBoardInner() {
     if (targetPiece !== "." && isPlayerPiece(targetPiece)) {
       selectSquare([toRow, toCol]);
       safeHaptic("pickup");
+      return;
+    }
+
+    // Opponent's turn → queue as premove (#473).
+    if (currentTurn !== playerColor) {
+      queuePremove(from, [toRow, toCol]);
       return;
     }
 
@@ -1148,6 +1308,8 @@ function ChessBoardInner() {
   const handleSquareMouseDown = (e: React.MouseEvent, row: number, col: number) => {
     if (e.button !== 2) return; // only the right mouse button draws annotations
     e.preventDefault();
+    // Right-click cancels a queued premove (#473) in addition to annotations.
+    if (queuedPremove) clearPremove();
     rightDragRef.current = { row, col, color: colorFromModifiers(e) };
   };
 
@@ -1164,15 +1326,6 @@ function ChessBoardInner() {
     } else {
       toggleArrow(start.row, start.col, row, col, start.color);
     }
-  };
-
-  // Square center in on-screen pixels, respecting the board's flip state,
-  // for positioning the SVG annotation overlay.
-  const squareCenterPx = (row: number, col: number) => {
-    const rowIndex = playerColor === "black" ? 7 - row : row;
-    const colIndex = playerColor === "black" ? 7 - col : col;
-    const squareSize = boardPx / 8;
-    return { x: colIndex * squareSize + squareSize / 2, y: rowIndex * squareSize + squareSize / 2 };
   };
 
   const displayBoard =
@@ -1681,7 +1834,7 @@ function ChessBoardInner() {
           </button>
 
           {/* Peek button - only show when blindfold mode is active */}
-          {isBlindfoldMode && (
+          {(isBlindfoldMode || (blindfoldMode && blindfoldMode !== "none")) && (
             <button
               onClick={handlePeekClick}
               disabled={isPeeking}
@@ -1792,12 +1945,30 @@ function ChessBoardInner() {
               />
               <CapturedIcons
                 captured={opponentColor === "white" ? capturedByWhite : capturedByBlack}
+                pieceSet={pieceSet}
               />
             </div>
             {status === "active" && isMyTurn && (
               <span className="text-xs text-(--text-tertiary) italic shrink-0">thinking…</span>
             )}
           </div>
+
+          {/* ── Premove banner (#473) ── */}
+          {queuedPremove && status === "active" && currentTurn !== playerColor && (
+            <div
+              data-testid="premove-banner"
+              className="shrink-0 flex items-center gap-2 px-3 h-8 rounded-xl bg-orange-500/10 border border-orange-400/30 text-orange-300 text-xs font-semibold"
+              style={{ width: boardPx > 0 ? `${boardPx}px` : "100%", maxWidth: "100%" }}
+            >
+              <span className="truncate">Premove queued — fires on your turn</span>
+              <button
+                onClick={clearPremove}
+                className="ml-auto px-2 py-0.5 rounded-lg bg-orange-500/20 hover:bg-orange-500/40 text-orange-200 text-[11px] font-bold transition-colors shrink-0"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
 
           {/* ── Board (fills remaining height) ── */}
           <div
@@ -1885,10 +2056,21 @@ function ChessBoardInner() {
                     const isCursor =
                       cursor !== null && cursor[0] === actualRow && cursor[1] === actualCol;
 
+                    // Premove highlight (#473): distinct orange/cyan markers.
+                    const isPremoveSource =
+                      queuedPremove !== null &&
+                      queuedPremove.from[0] === actualRow &&
+                      queuedPremove.from[1] === actualCol;
+                    const isPremoveDest =
+                      queuedPremove !== null &&
+                      queuedPremove.to[0] === actualRow &&
+                      queuedPremove.to[1] === actualCol;
+
                     return (
                       <div
                         key={`${rowIndex}-${colIndex}`}
                         data-testid={`square-${actualRow}-${actualCol}`}
+                        data-premove={isPremoveSource ? "source" : isPremoveDest ? "dest" : undefined}
                         role="gridcell"
                         tabIndex={0}
                         aria-label={squareAriaLabel(piece, actualRow, actualCol)}
@@ -1899,7 +2081,11 @@ function ChessBoardInner() {
                           isKingInCheck ? "square-check bg-red-500/80" : ""
                         } ${isLastMoveSquare ? "square-last-move bg-yellow-300/45" : ""} ${
                           highlight ? " outline-2 outline-yellow-300/60 -outline-offset-2" : ""
-                        } ${isCursor ? "outline-2 outline-sky-400 -outline-offset-2" : ""}`}
+                        } ${isCursor ? "outline-2 outline-sky-400 -outline-offset-2" : ""} ${
+                          isPremoveSource ? "premove-source outline-2 outline-orange-400 -outline-offset-2" : ""
+                        } ${
+                          isPremoveDest ? "premove-dest outline-2 outline-cyan-300 -outline-offset-2" : ""
+                        }`}
                         style={
                           isCaptureSquare
                             ? { animation: "captureFlash 0.4s ease-out forwards" }
@@ -1987,7 +2173,7 @@ function ChessBoardInner() {
                         {/* Piece */}
                         {piece !== "." && (
                           <>
-                            {isBlindfoldMode && !isPeeking ? (
+                            {shouldHidePiece(piece) && !isPeeking ? (
                               // Blindfold mode: render subtle dot instead of piece
                               <div
                                 className="absolute rounded-full bg-black/40 dark:bg-white/30 pointer-events-none"
@@ -2017,7 +2203,7 @@ function ChessBoardInner() {
                                   } as React.CSSProperties
                                 }
                               >
-                                {PIECE_SYMBOLS[piece]}
+                                {PIECE_SET_SYMBOLS[pieceSet][piece]}
                               </span>
                             )}
                           </>
@@ -2026,74 +2212,13 @@ function ChessBoardInner() {
                     );
                   })
                 )}
-                {/* Right-click annotation overlay: arrows & square highlights (#252) */}
-                {(arrows.length > 0 || highlights.length > 0) && (
-                  <svg
-                    className="absolute inset-0 pointer-events-none"
-                    width={boardPx}
-                    height={boardPx}
-                    style={{ zIndex: 5 }}
-                  >
-                    <defs>
-                      {(Object.keys(ANNOTATION_COLORS) as AnnotationColor[]).map((color) => (
-                        <marker
-                          key={color}
-                          id={`board-arrowhead-${color}`}
-                          markerWidth="4"
-                          markerHeight="4"
-                          refX="2"
-                          refY="2"
-                          orient="auto-start-reverse"
-                          markerUnits="strokeWidth"
-                        >
-                          <path d="M0,0 L4,2 L0,4 Z" fill={ANNOTATION_COLORS[color]} />
-                        </marker>
-                      ))}
-                    </defs>
-                    {highlights.map((h, i) => {
-                      const c = squareCenterPx(h.row, h.col);
-                      const squareSize = boardPx / 8;
-                      return (
-                        <circle
-                          key={`h-${i}`}
-                          cx={c.x}
-                          cy={c.y}
-                          r={squareSize * 0.44}
-                          fill="none"
-                          stroke={ANNOTATION_COLORS[h.color]}
-                          strokeWidth={squareSize * 0.08}
-                          opacity={0.85}
-                        />
-                      );
-                    })}
-                    {arrows.map((a, i) => {
-                      const from = squareCenterPx(a.from[0], a.from[1]);
-                      const to = squareCenterPx(a.to[0], a.to[1]);
-                      const squareSize = boardPx / 8;
-                      // Pull the line end back so the arrowhead doesn't sit under the piece.
-                      const dx = to.x - from.x;
-                      const dy = to.y - from.y;
-                      const len = Math.hypot(dx, dy) || 1;
-                      const shorten = squareSize * 0.4;
-                      const endX = to.x - (dx / len) * shorten;
-                      const endY = to.y - (dy / len) * shorten;
-                      return (
-                        <line
-                          key={`a-${i}`}
-                          x1={from.x}
-                          y1={from.y}
-                          x2={endX}
-                          y2={endY}
-                          stroke={ANNOTATION_COLORS[a.color]}
-                          strokeWidth={squareSize * 0.14}
-                          strokeLinecap="round"
-                          opacity={0.85}
-                          markerEnd={`url(#board-arrowhead-${a.color})`}
-                        />
-                      );
-                    })}
-                  </svg>
-                )}
+                {/* Right-click annotation overlay: arrows & square highlights (#252, #536) */}
+                <BoardAnnotations
+                  boardPx={boardPx}
+                  playerColor={playerColor}
+                  highlights={highlights}
+                  arrows={arrows}
+                />
               </div>
             )}
             {/* Dragged ghost piece follows the pointer, elevated above the board (#253, #439) */}
@@ -2118,9 +2243,36 @@ function ChessBoardInner() {
                   } as React.CSSProperties
                 }
               >
-                {PIECE_SYMBOLS[dragPiece.piece]}
+                {PIECE_SET_SYMBOLS[pieceSet][dragPiece.piece]}
               </span>
             )}
+
+          {/* Move Confirmation Overlay (#493) */}
+          {pendingConfirmation && (
+            <div
+              className="absolute inset-0 flex items-center justify-center pointer-events-none"
+              style={{ zIndex: 20 }}
+            >
+              <div className="flex gap-2 pointer-events-auto">
+                <button
+                  onClick={confirmPendingMove}
+                  className="bg-emerald-600 hover:bg-emerald-700 p-2 rounded-full text-white shadow-lg transition-colors flex items-center justify-center"
+                  title="Confirm move"
+                  aria-label="Confirm move"
+                >
+                  <Check size={20} />
+                </button>
+                <button
+                  onClick={cancelPendingMove}
+                  className="bg-rose-600 hover:bg-rose-700 p-2 rounded-full text-white shadow-lg transition-colors flex items-center justify-center"
+                  title="Cancel move"
+                  aria-label="Cancel move"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+          )}
           </div>
 
           {/* Player Bar */}
@@ -2143,6 +2295,7 @@ function ChessBoardInner() {
               />
               <CapturedIcons
                 captured={playerColor === "white" ? capturedByWhite : capturedByBlack}
+                pieceSet={pieceSet}
               />
             </div>
             <div className="flex items-center gap-2 shrink-0">

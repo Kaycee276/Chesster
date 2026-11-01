@@ -1,6 +1,7 @@
 const supabase = require("../config/supabase");
 const notificationService = require("./notificationService");
 const archivalService = require("./archivalService");
+const analyticsService = require("./analyticsService");
 const { refreshTorExitList } = require("../middlewares/proxyDetection");
 const eloService = require("./eloService");
 
@@ -24,6 +25,8 @@ class CronService {
 		this.torRefreshIntervalMs = 24 * 60 * 60 * 1000; // 24 hours
 		this.archivalIntervalMs = 7 * 24 * 60 * 60 * 1000;
 		this.archivalAgeDays = 90;
+		this.lastHourlyAggregationAt = 0;
+		this.hourlyAggregationIntervalMs = 60 * 60 * 1000; // 1 hour
 		this.cronHandle = null;
 		this.archivalHandle = null;
 	}
@@ -49,14 +52,35 @@ class CronService {
 
 	async archiveCompletedGames() {
 		const cutoffDate = new Date(Date.now() - this.archivalAgeDays * 24 * 60 * 60 * 1000);
+		// Retention soft-mark (#471): flag stale completed games as archived
+		// without touching active matches or open disputes.
+		let marked = 0;
+		try {
+			let excludedGameIds = [];
+			try {
+				if (this.db && typeof this.db.from === "function") {
+					const flagRes = await this.db.from("player_flags").select("game_id").eq("status", "pending").limit(1000);
+					excludedGameIds = (flagRes?.data || []).map((f) => f.game_id).filter(Boolean);
+				}
+			} catch (_) {
+				// Dispute lookup is best-effort; archival still excludes active statuses.
+			}
+			if (this.game && typeof this.game.archiveStaleCompletedGames === "function") {
+				const res = await this.game.archiveStaleCompletedGames(cutoffDate.toISOString(), { excludedGameIds });
+				marked = res?.archived ?? 0;
+			}
+		} catch (error) {
+			console.error("[CronService] Retention marking failed:", error.message);
+		}
 		try {
 			if (this.archival && typeof this.archival.archiveOldGames === "function") {
-				return await this.archival.archiveOldGames(cutoffDate);
+				const result = await this.archival.archiveOldGames(cutoffDate);
+				return { ...result, marked };
 			}
-			return { success: true, archived: 0 };
+			return { success: true, archived: 0, marked };
 		} catch (error) {
 			console.error("[CronService] Game archival failed:", error.message);
-			return { success: false, error: error.message };
+			return { success: false, error: error.message, marked };
 		}
 	}
 
@@ -258,6 +282,23 @@ class CronService {
 		return data || [];
 	}
 
+	async aggregateHourlyMetrics(now = new Date()) {
+		try {
+			// Compute the previous hour boundary (e.g., if it's 14:37, aggregate 14:00-15:00 from hour 13:00)
+			// We aggregate the hour that just ended, which is more reliable for backfill operations.
+			const hourStart = new Date(now);
+			hourStart.setUTCMinutes(0, 0, 0);
+			const targetHour = new Date(hourStart.getTime() - 60 * 60 * 1000); // Previous hour
+
+			const result = await analyticsService.aggregateHourlyMetrics(targetHour);
+			console.log(`[CronService] Hourly metrics aggregation completed: ${result.bucketStart}`);
+			return { success: true, ...result };
+		} catch (error) {
+			console.error("[CronService] Hourly metrics aggregation failed:", error.message);
+			return { success: false, error: error.message };
+		}
+	}
+
 	async runScheduledTasks(now = new Date()) {
 		const tasks = [
 			this.dispatchTournamentReminders(15, now),
@@ -272,6 +313,10 @@ class CronService {
 		if (now.getTime() - this.lastTorRefreshAt >= this.torRefreshIntervalMs) {
 			this.lastTorRefreshAt = now.getTime();
 			tasks.push(this.refreshTorNodes());
+		}
+		if (now.getTime() - this.lastHourlyAggregationAt >= this.hourlyAggregationIntervalMs) {
+			this.lastHourlyAggregationAt = now.getTime();
+			tasks.push(this.aggregateHourlyMetrics(now));
 		}
 		return Promise.allSettled(tasks);
 	}

@@ -671,6 +671,12 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "cancellation_proposed_at"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
                         "symbol": "cancellation_proposed_by"
                       },
                       "val": "void"
@@ -805,6 +811,12 @@
                 "durability": "persistent",
                 "val": {
                   "map": [
+                    {
+                      "key": {
+                        "symbol": "cancellation_proposed_at"
+                      },
+                      "val": "void"
+                    },
                     {
                       "key": {
                         "symbol": "cancellation_proposed_by"
@@ -943,6 +955,12 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "cancellation_proposed_at"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
                         "symbol": "cancellation_proposed_by"
                       },
                       "val": "void"
@@ -1077,6 +1095,12 @@
                 "durability": "persistent",
                 "val": {
                   "map": [
+                    {
+                      "key": {
+                        "symbol": "cancellation_proposed_at"
+                      },
+                      "val": "void"
+                    },
                     {
                       "key": {
                         "symbol": "cancellation_proposed_by"
@@ -1215,6 +1239,12 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "cancellation_proposed_at"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
                         "symbol": "cancellation_proposed_by"
                       },
                       "val": "void"
@@ -1318,6 +1348,51 @@
                       "val": "void"
                     }
                   ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          518400
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "AssetDecimals"
+                },
+                {
+                  "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "AssetDecimals"
+                    },
+                    {
+                      "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "u32": 7
                 }
               }
             },
@@ -1542,6 +1617,18 @@
                               "address": "CCABDO7UZXYE4W6GVSEGSNNZTKSLFQGKXXQTH6OX7M7GKZ4Z6CUJNGZN"
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "Initialized"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "bool": true
                         }
                       },
                       {

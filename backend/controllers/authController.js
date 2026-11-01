@@ -1,6 +1,8 @@
 const authService = require("../services/authService");
 const sessionService = require("../services/sessionService");
 const userModel = require("../models/userModel");
+const { getIpSubnetFromRequest } = require("../utils/ipUtils");
+const jwt = require("jsonwebtoken");
 
 class AuthController {
 	/**
@@ -20,6 +22,8 @@ class AuthController {
 	/**
 	 * POST /api/auth/login { address, signature }
 	 * Verifies the signed challenge and issues a JWT for profile routes.
+	 * On successful login, rotates the session token: old tokens are invalidated,
+	 * and the new token is bound to the client's IP subnet.
 	 */
 	async login(req, res) {
 		try {
@@ -29,7 +33,23 @@ class AuthController {
 			authService.verifySignature(address, signature);
 			const user = await userModel.findOrCreateByAddress(address);
 			if (user?.is_deleted) throw new Error("Account has been deleted");
-			const token = authService.issueToken(address);
+
+			// Get client IP subnet for binding
+			const ipSubnet = getIpSubnetFromRequest(req);
+
+			// Issue new token with IP binding
+			const token = authService.issueToken(address, ipSubnet);
+
+			// Decode token to get JTI and TTL
+			const decoded = jwt.decode(token);
+			const jti = decoded?.jti;
+			const expiresAt = decoded?.exp;
+			const ttlSeconds = expiresAt ? Math.ceil(expiresAt - Date.now() / 1000) : 604800; // Default 7 days
+
+			// Rotate session: blacklist old JTI and store new one with IP binding
+			if (jti && ttlSeconds > 0) {
+				await sessionService.rotateSession(address, jti, ipSubnet, ttlSeconds);
+			}
 
 			res.json({ success: true, data: { token, user } });
 		} catch (error) {

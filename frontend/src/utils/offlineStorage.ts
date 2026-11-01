@@ -7,8 +7,8 @@ const DB_NAME = "chesster-offline";
 const DB_VERSION = 1;
 const REPLAYS_STORE = "replays";
 const PUZZLES_STORE = "puzzles";
-const MAX_REPLAYS = 10;
-const MAX_PUZZLES = 5;
+export const MAX_REPLAYS = 10;
+export const MAX_PUZZLES = 5;
 
 export interface ReplayMetadata {
   gameCode: string;
@@ -38,10 +38,16 @@ export interface OfflineStorageResult<T> {
   error?: string;
 }
 
+let currentDb: IDBDatabase | null = null;
+
 /**
  * Open or create the Chesster offline database.
  */
-async function openChessterDB(): Promise<IDBDatabase> {
+export async function openChessterDB(): Promise<IDBDatabase> {
+  if (currentDb) {
+    return currentDb;
+  }
+
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
 
@@ -50,7 +56,15 @@ async function openChessterDB(): Promise<IDBDatabase> {
     };
 
     request.onsuccess = () => {
-      resolve(request.result);
+      const db = request.result;
+      currentDb = db;
+      db.onversionchange = () => {
+        db.close();
+        if (currentDb === db) {
+          currentDb = null;
+        }
+      };
+      resolve(db);
     };
 
     request.onupgradeneeded = (event) => {
@@ -70,6 +84,16 @@ async function openChessterDB(): Promise<IDBDatabase> {
 }
 
 /**
+ * Explicitly close the Chesster database connection.
+ */
+export function closeChessterDB(): void {
+  if (currentDb) {
+    currentDb.close();
+    currentDb = null;
+  }
+}
+
+/**
  * Save a game replay to offline storage.
  * If storage quota is exceeded, evict oldest replays and retry once.
  */
@@ -85,8 +109,20 @@ export async function saveGameToOfflineCache(
       const putRequest = store.put(replay);
 
       putRequest.onsuccess = () => {
-        tx.oncomplete = () => {
-          resolve({ success: true });
+        const getAllRequest = store.getAll();
+        getAllRequest.onsuccess = () => {
+          const allReplays = getAllRequest.result as ReplayMetadata[];
+          if (allReplays.length > MAX_REPLAYS) {
+            const sorted = allReplays.sort((a, b) => a.savedAt - b.savedAt);
+            const toDelete = sorted.slice(0, allReplays.length - MAX_REPLAYS);
+            for (const r of toDelete) {
+              store.delete(r.gameCode);
+            }
+          }
+          resolve({ success: true, error: undefined });
+        };
+        getAllRequest.onerror = () => {
+          resolve({ success: true, error: undefined });
         };
       };
 
@@ -218,7 +254,7 @@ export async function savePuzzleToOfflineCache(
       putRequest.onsuccess = () => {
         // Check if we need to prune
         const getAllRequest = store.getAll();
-        getAllRequest.onsuccess = async () => {
+        getAllRequest.onsuccess = () => {
           const allPuzzles = getAllRequest.result as PuzzleData[];
           if (allPuzzles.length > MAX_PUZZLES) {
             const sorted = allPuzzles.sort((a, b) => a.savedAt - b.savedAt);
@@ -228,9 +264,10 @@ export async function savePuzzleToOfflineCache(
             }
           }
 
-          tx.oncomplete = () => {
-            resolve({ success: true });
-          };
+          resolve({ success: true, error: undefined });
+        };
+        getAllRequest.onerror = () => {
+          resolve({ success: true, error: undefined });
         };
       };
 
@@ -366,8 +403,7 @@ async function evictOldestReplays(count: number): Promise<boolean> {
           store.delete(replay.gameCode);
         }
 
-        tx.oncomplete = () => resolve(true);
-        tx.onerror = () => resolve(false);
+        resolve(true);
       };
 
       request.onerror = () => resolve(false);
@@ -396,8 +432,7 @@ async function evictOldestPuzzles(count: number): Promise<boolean> {
           store.delete(puzzle.id);
         }
 
-        tx.oncomplete = () => resolve(true);
-        tx.onerror = () => resolve(false);
+        resolve(true);
       };
 
       request.onerror = () => resolve(false);

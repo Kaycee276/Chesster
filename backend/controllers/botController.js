@@ -8,18 +8,30 @@ function statusForError(error, fallbackStatus) {
 	return BOT_ERROR_STATUS[error && error.code] || fallbackStatus;
 }
 
+/** `level` (1-8) takes precedence over the free-form `difficulty`; null means invalid input. */
+function difficultyFrom(body) {
+	if (body.level === undefined) return body.difficulty;
+	return botService.isValidBotLevel(body.level) ? { level: body.level } : null;
+}
+
+const INVALID_LEVEL = "level must be an integer from 1 to 8";
+
 class BotController {
 	/**
 	 * POST /api/bot/move
-	 * Stateless mode: body = { board, turn, lastMove?, difficulty?, moveCount? }
+	 * Stateless mode: body = { board, turn, lastMove?, level? (1-8), difficulty?, moveCount? }
 	 * Returns the engine's chosen move without touching the database — lets
 	 * a single-player client keep the board on its own side if it wants to.
 	 */
 	async getMove(req, res) {
 		try {
-			const { board, turn, lastMove, difficulty, moveCount } = req.body;
+			const { board, turn, lastMove, moveCount } = req.body;
 			if (!board || !turn) {
 				return res.status(400).json({ success: false, error: "board and turn are required" });
+			}
+			const difficulty = difficultyFrom(req.body);
+			if (difficulty === null) {
+				return res.status(400).json({ success: false, error: INVALID_LEVEL });
 			}
 
 			const move = await botService.getBestMove(board, turn, lastMove || null, difficulty, moveCount || 0);
@@ -42,7 +54,10 @@ class BotController {
 	async playBotMove(req, res) {
 		try {
 			const { gameCode } = req.params;
-			const { difficulty } = req.body || {};
+			const difficulty = difficultyFrom(req.body || {});
+			if (difficulty === null) {
+				return res.status(400).json({ success: false, error: INVALID_LEVEL });
+			}
 
 			const game = await gameModel.getGame(gameCode);
 			if (!game) return res.status(404).json({ success: false, error: "Game not found" });

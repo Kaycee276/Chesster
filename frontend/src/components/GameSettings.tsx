@@ -1,23 +1,35 @@
 import { useState, useRef } from "react";
-import { Settings } from "lucide-react";
+import { Settings, Volume2, Play } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
+import { BOARD_THEMES, useThemeStore } from "../store/themeStore";
+import { soundService, type SoundPack } from "../services/soundService";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 
 export default function GameSettings({ hideFloating = false }: { hideFloating?: boolean } = {}) {
   const isBlindfoldMode = useGameStore((s) => s.isBlindfoldMode);
   const toggleBlindfoldMode = useGameStore((s) => s.toggleBlindfoldMode);
+  const blindfoldMode = useGameStore((s) => s.blindfoldMode);
+  const setBlindfoldMode = useGameStore((s) => s.setBlindfoldMode);
   const isStreamerMode = useGameStore((s) => s.isStreamerMode);
   const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
   const isHapticsEnabled = useGameStore((s) => s.isHapticsEnabled);
   const toggleHaptics = useGameStore((s) => s.toggleHaptics);
+  const isMoveConfirmationEnabled = useGameStore((s) => s.isMoveConfirmationEnabled);
+  const toggleMoveConfirmation = useGameStore((s) => s.toggleMoveConfirmation);
+  const masterVolume = useGameStore((s) => s.masterVolume);
+  const setMasterVolume = useGameStore((s) => s.setMasterVolume);
+  const pieceSet = useGameStore((s) => s.pieceSet);
+  const setPieceSet = useGameStore((s) => s.setPieceSet);
+  const boardTheme = useThemeStore((s) => s.boardTheme);
+  const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
   const isSettingsOpen = useGameStore((s) => s.isSettingsOpen);
   const setSettingsOpen = useGameStore((s) => s.setSettingsOpen);
   const [localOpen, setLocalOpen] = useState(false);
+  const [soundPack, setSoundPack] = useState<SoundPack>(() => soundService.getSoundPack());
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  useFocusTrap(dialogRef, open);
-
   const open = isSettingsOpen || localOpen;
+  useFocusTrap(dialogRef, open);
   const setOpen = (val: boolean) => {
     setLocalOpen(val);
     setSettingsOpen(val);
@@ -86,7 +98,137 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
               </button>
             </div>
 
-            {/* Blindfold Mode Toggle */}
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <div className="flex items-center justify-between">
+                <label htmlFor="master-volume" className="flex items-center gap-2 text-sm font-semibold">
+                  <Volume2 size={16} /> Master volume
+                </label>
+                <output htmlFor="master-volume" className="text-xs text-(--text-tertiary)">
+                  {Math.round(masterVolume * 100)}%
+                </output>
+              </div>
+              <input
+                id="master-volume"
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={masterVolume}
+                onChange={(event) => {
+                  const volume = Number(event.target.value);
+                  setMasterVolume(volume);
+                  soundService.move();
+                }}
+                aria-label="Master volume"
+                className="w-full accent-(--accent-primary)"
+              />
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold">Sound Theme</span>
+                <span className="text-xs text-(--text-tertiary)">Piece audio pack</span>
+              </div>
+              <div className="grid grid-cols-1 gap-2">
+                {[
+                  { key: "classic-wood" as const, name: "Classic Wood", description: "Warm, resonant wooden board impacts" },
+                  { key: "modern-digital" as const, name: "Modern Digital", description: "Crisp, synthesized click and chime cues" },
+                  { key: "lofi-soft" as const, name: "Low-Fi Soft", description: "Muted, subtle organic taps" },
+                ].map((pack) => (
+                  <div
+                    key={pack.key}
+                    className={`flex items-center justify-between p-2 rounded-lg border text-xs transition-colors ${
+                      soundPack === pack.key
+                        ? "border-(--accent-primary) ring-2 ring-(--accent-primary)/40 bg-(--bg-tertiary)"
+                        : "border-(--border) hover:border-(--accent-primary)/60"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSoundPack(pack.key);
+                        soundService.setSoundPack(pack.key);
+                      }}
+                      className="flex flex-col text-left flex-1 cursor-pointer"
+                    >
+                      <span className="font-semibold text-xs text-(--text)">{pack.name}</span>
+                      <span className="text-[11px] text-(--text-tertiary)">{pack.description}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const original = soundService.getSoundPack();
+                        soundService.setSoundPack(pack.key);
+                        soundService.previewSound("move");
+                        setTimeout(() => soundService.setSoundPack(original), 200);
+                      }}
+                      className="p-1.5 rounded-md hover:bg-(--bg-secondary) text-(--text-secondary) hover:text-(--text) transition-colors cursor-pointer"
+                      title={`Preview ${pack.name} sound`}
+                      aria-label={`Preview ${pack.name} sound`}
+                    >
+                      <Play size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <span className="text-sm font-semibold">Board theme</span>
+              <div className="grid grid-cols-2 gap-2">
+                {BOARD_THEMES.map((theme) => (
+                  <button
+                    key={theme.key}
+                    type="button"
+                    onClick={() => setBoardTheme(theme.key)}
+                    aria-label={`Select ${theme.name} board theme`}
+                    aria-pressed={boardTheme === theme.key}
+                    className={`flex items-center gap-2 rounded-lg border p-2 text-left text-xs transition-colors ${
+                      boardTheme === theme.key
+                        ? "border-(--accent-primary) ring-2 ring-(--accent-primary)/40"
+                        : "border-(--border) hover:border-(--accent-primary)/60"
+                    }`}
+                  >
+                    <span className="grid h-7 w-7 grid-cols-2 grid-rows-2 overflow-hidden rounded-sm border border-black/20" aria-hidden="true">
+                      <span style={{ backgroundColor: theme.light }} />
+                      <span style={{ backgroundColor: theme.dark }} />
+                      <span style={{ backgroundColor: theme.dark }} />
+                      <span style={{ backgroundColor: theme.light }} />
+                    </span>
+                    <span>{theme.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <span className="text-sm font-semibold">Piece set</span>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { key: "classic" as const, name: "Classic", symbol: "♔" },
+                  { key: "neo" as const, name: "Neo", symbol: "♔" },
+                  { key: "wood" as const, name: "Wood", symbol: "♔" },
+                ].map((set) => (
+                  <button
+                    key={set.key}
+                    type="button"
+                    onClick={() => setPieceSet(set.key)}
+                    aria-label={`Select ${set.name} piece set`}
+                    aria-pressed={pieceSet === set.key}
+                    className={`flex flex-col items-center justify-center gap-1 rounded-lg border p-3 text-center text-xs transition-colors ${
+                      pieceSet === set.key
+                        ? "border-(--accent-primary) ring-2 ring-(--accent-primary)/40 bg-(--bg-tertiary)"
+                        : "border-(--border) hover:border-(--accent-primary)/60"
+                    }`}
+                  >
+                    <span className="text-2xl leading-none">{set.symbol}</span>
+                    <span className="font-semibold text-xs">{set.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Blindfold Mode Toggle & Options */}
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <div className="flex flex-col gap-1">
@@ -112,11 +254,40 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   />
                 </button>
               </div>
+
+              {/* Progressive Blindfold Radio Options */}
+              <div className="grid grid-cols-2 gap-2 pt-1" role="radiogroup" aria-label="Blindfold Mode Options">
+                {[
+                  { value: "none", label: "Visible (None)" },
+                  { value: "white", label: "Hide White" },
+                  { value: "black", label: "Hide Black" },
+                  { value: "all", label: "Hide All" },
+                ].map((opt) => (
+                  <label
+                    key={opt.value}
+                    className={`flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-colors ${
+                      blindfoldMode === opt.value
+                        ? "border-(--accent-primary) bg-(--accent-primary)/10 text-(--text)"
+                        : "border-(--border) hover:bg-(--bg-tertiary) text-(--text-secondary)"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="blindfoldMode"
+                      value={opt.value}
+                      checked={blindfoldMode === opt.value}
+                      onChange={() => setBlindfoldMode(opt.value as "none" | "white" | "black" | "all")}
+                      className="accent-(--accent-primary)"
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
             </div>
 
             <p className="text-xs text-(--text-secondary) leading-relaxed">
-              When enabled, pieces appear as dots. Use the peek button (eye icon) in the action bar
-              to reveal pieces for 2 seconds.
+              Configure partial blindfold (hide white or black pieces) or full blindfold.
+              When hidden, pieces appear as subtle markers. Use the peek button to reveal pieces.
             </p>
 
             {/* Streamer Mode Toggle */}
@@ -169,6 +340,34 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   <div
                     className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
                       isHapticsEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Move Confirmation Toggle (#493) */}
+            <div className="flex flex-col gap-3 pt-3 border-t border-(--border)">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Move Confirmation</label>
+                  <p className="text-xs text-(--text-tertiary)">
+                    Require confirmation before committing moves in high-stakes games
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleMoveConfirmation}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    isMoveConfirmationEnabled ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={isMoveConfirmationEnabled}
+                  aria-label="Toggle move confirmation"
+                >
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      isMoveConfirmationEnabled ? "translate-x-5" : "translate-x-0.5"
                     }`}
                   />
                 </button>

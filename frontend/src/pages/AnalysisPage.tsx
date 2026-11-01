@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge, FileUp } from "lucide-react";
 import MoveNavigator from "../components/MoveNavigator";
+import EvaluationGraph from "../components/EvaluationGraph";
 import PromotionModal from "../components/PromotionModal";
+import MoveBadge from "../components/analysis/MoveBadge";
 import { useToastStore } from "../store/toastStore";
 import { api } from "../api/gameApi";
 import type { MoveRecord } from "../types/game";
@@ -22,7 +24,12 @@ import {
   saveAnalysisPreferences,
   type AnalysisPreferences,
 } from "../utils/analysisPreferences";
-import { toEngineFen, formatEvaluation, type EngineEvaluation } from "../utils/engineEvaluation";
+import {
+  toEngineFen,
+  formatEvaluation,
+  getBestMoveForDisplay,
+  type EngineEvaluation,
+} from "../utils/engineEvaluation";
 import { useStockfishEvaluation } from "../hooks/useStockfishEvaluation";
 
 const PIECE_SYMBOLS: Record<string, string> = {
@@ -128,19 +135,40 @@ export default function AnalysisPage() {
   const qualityBadge = (moveIndex: number) => {
     const classification = classificationFor(moveIndex);
     if (!classification) return null;
-    const meta = MOVE_QUALITY_META[classification.quality];
-    const cp = Math.round(classification.cpl);
+
+    // For the tooltip, we need the evaluations before and after this move.
+    // We use a simple heuristic: if the live evaluation matches the position
+    // after this move, we can extract the before-eval from the move history.
+    // Otherwise, we'll get partial data when variations are available.
+    const evalBefore: number | null = null;
+    let evalAfter: number | null = null;
+    let bestLine: string | null = null;
+
+    // Try to get evaluation data from variations if the current move is the
+    // one being displayed. This is the best we can do without storing full
+    // evaluation history (that's a future optimization).
+    if (variations && variations.length > 0) {
+      // The first variation is the main line analysis for the current position
+      const mainVar = variations[0];
+      if (mainVar && mainVar.scoreCp !== undefined) {
+        evalAfter = mainVar.scoreCp;
+        bestLine = getBestMoveForDisplay(mainVar);
+      }
+    }
+
     return (
-      <span
-        className={`acc-badge ${meta.className}`}
-        title={`${meta.label}${cp > 0 ? ` (−${cp} cp)` : ""}`}
-      >
-        {meta.glyph}
-      </span>
+      <MoveBadge
+        quality={classification.quality}
+        cpl={Math.round(classification.cpl)}
+        evalBefore={evalBefore}
+        evalAfter={evalAfter}
+        bestLine={bestLine}
+        isBest={classification.quality === "best"}
+      />
     );
   };
 
-  const QUALITY_ORDER: MoveQuality[] = ["best", "good", "inaccuracy", "mistake", "blunder"];
+  const QUALITY_ORDER: MoveQuality[] = ["brilliant", "best", "good", "inaccuracy", "mistake", "blunder"];
 
   const accuracyRow = (label: string, summary: AccuracySummary) => {
     if (summary.total === 0) return null;
@@ -204,10 +232,10 @@ export default function AnalysisPage() {
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         goToMove(currentIndex + 1);
-      } else if (e.key === "ArrowUp") {
+      } else if (e.key === "ArrowUp" || e.key === "Home") {
         e.preventDefault();
         goToMove(-1);
-      } else if (e.key === "ArrowDown") {
+      } else if (e.key === "ArrowDown" || e.key === "End") {
         e.preventDefault();
         goToMove(moves.length - 1);
       }
@@ -263,15 +291,13 @@ export default function AnalysisPage() {
     });
   };
 
-  const formattedVariations = useMemo(() => {
-    return variations
-      .filter((v): v is EngineEvaluation => Boolean(v && v.pv && v.pv.length > 0))
-      .map((v) => ({
-        multipv: v.multipv ?? 1,
-        scoreText: formatEvaluation(v.scoreCp, v.mate),
-        pv: v.pv ?? [],
-      }));
-  }, [variations]);
+  const formattedVariations = variations
+    .filter((v): v is EngineEvaluation => Boolean(v && v.pv && v.pv.length > 0))
+    .map((v) => ({
+      multipv: v.multipv ?? 1,
+      scoreText: formatEvaluation(v.scoreCp, v.mate),
+      pv: v.pv ?? [],
+    }));
 
   const isPlayerPieceOf = (piece: string, color: "white" | "black") =>
     piece !== "." &&
@@ -734,6 +760,14 @@ export default function AnalysisPage() {
             onMoveChange={goToMove}
             onTogglePlay={() => setIsPlaying((p) => !p)}
           />
+
+          {moves.length > 0 && (
+            <EvaluationGraph
+              evaluations={accuracy.evaluations}
+              currentMoveIndex={currentIndex}
+              onMoveChange={goToMove}
+            />
+          )}
 
           {/* Accuracy summary (#313) */}
           {moves.length > 0 && (

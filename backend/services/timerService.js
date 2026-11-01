@@ -30,6 +30,11 @@ const TIME_CONTROLS = {
 const DEFAULT_PRESET = "rapid";
 const RECONNECT_GRACE_SECONDS = 60;
 
+// Heartbeat configuration for detecting dead mobile connections
+let HEARTBEAT_INTERVAL_MS = Number(process.env.HEARTBEAT_INTERVAL_MS) || 15 * 1000; // Send ping every 15 seconds
+let HEARTBEAT_TIMEOUT_MS = Number(process.env.HEARTBEAT_TIMEOUT_MS) || 10 * 1000; // Wait 10 seconds for pong response
+let HEARTBEAT_MAX_MISSES = Number(process.env.HEARTBEAT_MAX_MISSES) || 2; // Disconnect after 2 consecutive missed pongs
+
 function resolveTimeControl({ preset, baseSeconds, incrementSeconds } = {}) {
 	if (preset && TIME_CONTROLS[preset]) {
 		return { preset, ...TIME_CONTROLS[preset] };
@@ -45,11 +50,31 @@ function resolveTimeControl({ preset, baseSeconds, incrementSeconds } = {}) {
 	return { preset: DEFAULT_PRESET, ...TIME_CONTROLS[DEFAULT_PRESET] };
 }
 
+const NS_PER_MS = 1_000_000n;
+
+/** Default monotonic clock source: nanoseconds since an arbitrary origin. */
+function monotonicNow() {
+	return process.hrtime.bigint();
+}
+
 class TimerService {
-	constructor() {
+	constructor({ hrNow = monotonicNow } = {}) {
 		this.io = null;
 
-		// gameCode -> { whiteMs, blackMs, incrementMs, turn, deadline, timeout }
+		// Monotonic clock source (bigint nanoseconds). Overridable so tests can
+		// simulate event-loop stalls deterministically.
+		this.hrNow = hrNow;
+
+		// gameCode -> {
+		//   whiteMs, blackMs - banked remaining time (for the active player:
+		//                      as of turnStartHr)
+		//   incrementMs, preset, turn,
+		//   turnStartHr      - process.hrtime.bigint() when the active turn
+		//                      began (null while paused)
+		//   paused,
+		//   deadline         - wall-clock flag-fall estimate (informational)
+		//   timeout
+		// }
 		this.clocks = new Map();
 
 		// legacy shared countdown (kept for callers that only pass a flat
@@ -59,6 +84,11 @@ class TimerService {
 		// `${gameCode}:${color}` -> { timeout, expiresAt }
 		this.player_disconnect_timers = new Map();
 		this.reconnectTimers = this.player_disconnect_timers;
+
+		// Heartbeat management: `${gameCode}:${socketId}` -> {
+		//   color, interval, pendingPing, missCount, lastHeartbeatAt
+		// }
+		this.heartbeats = new Map();
 	}
 
 	init(io) {
@@ -67,7 +97,44 @@ class TimerService {
 
 	// -------------------------------------------------------------------
 	// Per-player clocks (Fischer increment / time controls)
+	//
+	// Remaining time is never accumulated tick by tick. Each turn records a
+	// monotonic anchor (process.hrtime.bigint()) and the active player's
+	// remaining time is derived as
+	//   remainingMs = bankedMs - Number((now - turnStartHr) / 1_000_000n)
+	// so event-loop congestion, late timers or wall-clock adjustments can
+	// never make a clock run fast or slow.
 	// -------------------------------------------------------------------
+
+	/** Whole milliseconds elapsed on the active player's clock this turn. */
+	_elapsedMs(state) {
+		this._ensureMonotonicAnchor(state);
+		if (state.paused || state.turnStartHr === null) return 0;
+		const elapsedNs = this.hrNow() - state.turnStartHr;
+		return elapsedNs > 0n ? Number(elapsedNs / NS_PER_MS) : 0;
+	}
+
+	/**
+	 * Clock states built outside startClock() (older snapshots, tests) only
+	 * carry a wall-clock `deadline`. Convert them to a monotonic anchor once
+	 * so every later read uses hrtime.
+	 */
+	_ensureMonotonicAnchor(state) {
+		if (state.paused || typeof state.turnStartHr === "bigint") return;
+		if (Number.isFinite(state.deadline)) {
+			state[this._keyFor(state.turn)] = Math.max(0, state.deadline - Date.now());
+		}
+		state.turnStartHr = this.hrNow();
+	}
+
+	_keyFor(color) {
+		return color === "white" ? "whiteMs" : "blackMs";
+	}
+
+	_activeRemainingMs(state) {
+		const elapsed = this._elapsedMs(state);
+		return Math.max(0, this._remainingMsFor(state, state.turn) - elapsed);
+	}
 
 	/**
 	 * Start (or restart) a per-player clock for a game.
@@ -88,18 +155,26 @@ class TimerService {
 			incrementMs,
 			preset: tc.preset,
 			turn,
+			turnStartHr: this.hrNow(),
+			paused: false,
 			deadline: Date.now() + baseMs,
 			timeout: null,
 		};
 
 		this.clocks.set(gameCode, state);
 		this._scheduleFlagFall(gameCode);
+		this._emitTimerSync(gameCode);
 		return this.getClockState(gameCode);
 	}
 
 	/**
 	 * Call after a move is applied: stops the mover's clock (adding the
 	 * increment), and starts the opponent's clock ticking.
+	 *
+	 * If the mover's time had already run out when the move arrived (the
+	 * flag-fall timer was delayed by a congested event loop), no increment is
+	 * granted and the flag falls immediately, exactly as it would have on an
+	 * idle server.
 	 * @param {string} gameCode
 	 * @param {"white"|"black"} moverColor - the color that just moved
 	 */
@@ -107,14 +182,56 @@ class TimerService {
 		const state = this.clocks.get(gameCode);
 		if (!state) return null;
 
-		const elapsed = Date.now() - (state.deadline - this._remainingMsFor(state, moverColor));
-		const key = moverColor === "white" ? "whiteMs" : "blackMs";
+		const key = this._keyFor(moverColor);
+		const elapsed = moverColor === state.turn ? this._elapsedMs(state) : 0;
+		const remaining = state[key] - elapsed;
 
-		state[key] = Math.max(0, state[key] - elapsed) + state.incrementMs;
+		if (moverColor === state.turn && !state.paused && remaining <= 0) {
+			state[key] = 0;
+			state.turnStartHr = this.hrNow();
+			this._scheduleFlagFall(gameCode, 0);
+			return this.getClockState(gameCode);
+		}
+
+		state[key] = Math.max(0, remaining) + state.incrementMs;
 		state.turn = moverColor === "white" ? "black" : "white";
-		state.deadline = Date.now() + this._remainingMsFor(state, state.turn);
+		state.turnStartHr = state.paused ? null : this.hrNow();
 
 		this._scheduleFlagFall(gameCode);
+		this._emitTimerSync(gameCode);
+		return this.getClockState(gameCode);
+	}
+
+	/**
+	 * Freeze both clocks (e.g. an arbiter or server-initiated pause). The
+	 * active player's elapsed monotonic slice is banked so that resuming
+	 * continues from exactly the same remaining time.
+	 */
+	pauseClock(gameCode) {
+		const state = this.clocks.get(gameCode);
+		if (!state) return null;
+		if (!state.paused) {
+			state[this._keyFor(state.turn)] = this._activeRemainingMs(state);
+			state.paused = true;
+			state.turnStartHr = null;
+			if (state.timeout) clearTimeout(state.timeout);
+			state.timeout = null;
+			state.deadline = null;
+			this._emitTimerSync(gameCode);
+		}
+		return this.getClockState(gameCode);
+	}
+
+	/** Resume a paused clock; the active player's turn re-anchors to now. */
+	resumeClock(gameCode) {
+		const state = this.clocks.get(gameCode);
+		if (!state) return null;
+		if (state.paused) {
+			state.paused = false;
+			state.turnStartHr = this.hrNow();
+			this._scheduleFlagFall(gameCode);
+			this._emitTimerSync(gameCode);
+		}
 		return this.getClockState(gameCode);
 	}
 
@@ -127,8 +244,7 @@ class TimerService {
 		const state = this.clocks.get(gameCode);
 		if (!state) return null;
 
-		const now = Date.now();
-		const activeRemaining = Math.max(0, state.deadline - now);
+		const activeRemaining = this._activeRemainingMs(state);
 		const whiteMs = state.turn === "white" ? activeRemaining : state.whiteMs;
 		const blackMs = state.turn === "black" ? activeRemaining : state.blackMs;
 
@@ -138,6 +254,7 @@ class TimerService {
 			turn: state.turn,
 			preset: state.preset,
 			incrementMs: state.incrementMs,
+			paused: Boolean(state.paused),
 		};
 	}
 
@@ -151,33 +268,55 @@ class TimerService {
 	 *                         or null if no clock is running for this game
 	 */
 	getPreciseClocks(gameCode) {
-		const state = this.clocks.get(gameCode);
-		if (!state) return null;
+		return this.getClockState(gameCode);
+	}
 
-		const now = Date.now();
-		const activeRemaining = Math.max(0, state.deadline - now);
-		const whiteMs = state.turn === "white" ? activeRemaining : state.whiteMs;
-		const blackMs = state.turn === "black" ? activeRemaining : state.blackMs;
-
+	/**
+	 * Authoritative clock payload broadcast to the game room on every clock
+	 * transition: { whiteTimeMs, blackTimeMs, serverTimestamp }.
+	 */
+	getTimerSyncPayload(gameCode) {
+		const clock = this.getClockState(gameCode);
+		if (!clock) return null;
 		return {
-			whiteMs,
-			blackMs,
-			turn: state.turn,
-			incrementMs: state.incrementMs,
-			preset: state.preset,
+			gameCode,
+			whiteTimeMs: clock.whiteMs,
+			blackTimeMs: clock.blackMs,
+			turn: clock.turn,
+			paused: clock.paused,
+			serverTimestamp: Date.now(),
 		};
 	}
 
-	_scheduleFlagFall(gameCode) {
+	_emitTimerSync(gameCode, payload = this.getTimerSyncPayload(gameCode)) {
+		if (this.io && payload) this.io.to(gameCode).emit("timer_sync", payload);
+	}
+
+	_scheduleFlagFall(gameCode, delayMs) {
 		const state = this.clocks.get(gameCode);
 		if (!state) return;
+		if (state.timeout) clearTimeout(state.timeout);
+		state.timeout = null;
+		if (state.paused) return;
 
-		const remaining = this._remainingMsFor(state, state.turn);
+		const remaining = delayMs ?? this._activeRemainingMs(state);
 		state.deadline = Date.now() + remaining;
 
 		state.timeout = setTimeout(async () => {
+			if (this.clocks.get(gameCode) !== state) return;
+			// setTimeout may fire early (ms rounding) or late (congestion). The
+			// monotonic clock is the only authority on whether time is up.
+			const left = this._activeRemainingMs(state);
+			if (left > 0) {
+				this._scheduleFlagFall(gameCode, left);
+				return;
+			}
+
 			const loser = state.turn;
+			state[this._keyFor(loser)] = 0;
+			const finalSync = this.getTimerSyncPayload(gameCode);
 			this.clearClock(gameCode);
+			this._emitTimerSync(gameCode, finalSync);
 			try {
 				const gameModel = require("../models/gameModel");
 				const game = await gameModel.endByFlag(gameCode, loser);
@@ -211,31 +350,33 @@ class TimerService {
 	/**
 	 * @deprecated Prefer startClock() for per-player clocks. Retained so
 	 * any existing callers relying on the flat shared countdown keep working.
+	 * The interval only polls; remaining time is derived from a monotonic
+	 * anchor so bunched or skipped ticks cannot shorten or extend the game.
 	 */
 	startTimer(gameCode, totalSeconds) {
 		this.clearTimer(gameCode);
 
-		let secondsLeft = Math.max(0, totalSeconds);
+		const totalMs = Math.max(0, totalSeconds) * 1000;
+		const startedHr = this.hrNow();
+		const remainingMs = () => Math.max(0, totalMs - Number((this.hrNow() - startedHr) / NS_PER_MS));
 
 		const interval = setInterval(async () => {
-			secondsLeft = Math.max(0, secondsLeft - 1);
+			if (remainingMs() > 0) return;
 
-			if (secondsLeft <= 0) {
-				this.clearTimer(gameCode);
-				try {
-					const gameModel = require("../models/gameModel");
-					const game = await gameModel.endByTime(gameCode);
-					await require("../models/userModel").invalidateProfilesForGame(game);
-					if (this.io && game) {
-						this.io.to(gameCode).emit("game-update", game);
-					}
-				} catch (err) {
-					console.error(`[TimerService] endByTime failed for ${gameCode}:`, err.message);
+			this.clearTimer(gameCode);
+			try {
+				const gameModel = require("../models/gameModel");
+				const game = await gameModel.endByTime(gameCode);
+				await require("../models/userModel").invalidateProfilesForGame(game);
+				if (this.io && game) {
+					this.io.to(gameCode).emit("game-update", game);
 				}
+			} catch (err) {
+				console.error(`[TimerService] endByTime failed for ${gameCode}:`, err.message);
 			}
 		}, 1000);
 
-		this.timers.set(gameCode, { interval });
+		this.timers.set(gameCode, { interval, remainingMs });
 	}
 
 	clearTimer(gameCode) {
@@ -305,8 +446,144 @@ class TimerService {
 	isPendingForfeit(gameCode, color) {
 		return this.player_disconnect_timers.has(`${gameCode}:${color}`);
 	}
+
+	// -------------------------------------------------------------------
+	// Application-level heartbeat monitoring (detect dead mobile connections)
+	// -------------------------------------------------------------------
+
+	/**
+	 * Start active heartbeat monitoring for a connected player socket.
+	 * Emits ping_heartbeat every 15 seconds; expects pong_heartbeat response.
+	 * After 2 consecutive missed pongs, the socket should be forcibly disconnected.
+	 *
+	 * @param {object} socket - Socket.io socket instance
+	 * @param {string} gameCode
+	 * @param {"white"|"black"} playerColor
+	 */
+	startHeartbeat(socket, gameCode, playerColor) {
+		const key = `${gameCode}:${socket.id}`;
+		this.stopHeartbeat(socket, gameCode); // Clear any existing heartbeat
+
+		const state = {
+			color: playerColor,
+			gameCode,
+			missCount: 0,
+			lastHeartbeatAt: Date.now(),
+			pendingPing: null,
+			interval: null,
+		};
+
+		// Emit ping every HEARTBEAT_INTERVAL_MS (15s)
+		state.interval = setInterval(() => {
+			if (!this.heartbeats.has(key)) return; // Heart stopped
+
+			const clientTimestamp = Date.now();
+			state.pendingPing = clientTimestamp;
+
+			// Emit challenge to client; expect pong_heartbeat response within HEARTBEAT_TIMEOUT_MS
+			if (this.io && socket && socket.emit) {
+				socket.emit("ping_heartbeat", { timestamp: clientTimestamp });
+			}
+
+			// Schedule timeout: if no pong response within 10s, increment miss count
+			const timeoutHandle = setTimeout(() => {
+				const current = this.heartbeats.get(key);
+				if (!current) return; // Heartbeat was cancelled
+
+				// Increment consecutive miss counter
+				current.missCount++;
+
+				if (current.missCount >= HEARTBEAT_MAX_MISSES) {
+					// 2 consecutive misses = treat as dead connection; force disconnect
+					this.stopHeartbeat(socket, gameCode);
+					if (socket && socket.disconnect) {
+						socket.disconnect(true); // true = close transport
+					}
+				}
+			}, HEARTBEAT_TIMEOUT_MS);
+
+			// Store timeout so we can cancel it if pong arrives
+			state.pendingTimeout = timeoutHandle;
+		}, HEARTBEAT_INTERVAL_MS);
+
+		this.heartbeats.set(key, state);
+	}
+
+	/**
+	 * Record a successful pong_heartbeat response from the client.
+	 * Resets the miss counter and clears any pending timeout.
+	 *
+	 * @param {object} socket
+	 * @param {string} gameCode
+	 * @param {object} data - { timestamp } from client pong
+	 */
+	recordHeartbeatAck(socket, gameCode, data = {}) {
+		const key = `${gameCode}:${socket.id}`;
+		const state = this.heartbeats.get(key);
+		if (!state) return;
+
+		// Clear any pending timeout from the last ping
+		if (state.pendingTimeout) {
+			clearTimeout(state.pendingTimeout);
+			state.pendingTimeout = null;
+		}
+
+		// Reset miss counter on successful pong
+		state.missCount = 0;
+		state.lastHeartbeatAt = Date.now();
+		state.pendingPing = null;
+	}
+
+	/**
+	 * Stop heartbeat monitoring for a player socket.
+	 * Called when a player leaves/disconnects.
+	 *
+	 * @param {object} socket
+	 * @param {string} gameCode
+	 */
+	stopHeartbeat(socket, gameCode) {
+		const key = `${gameCode}:${socket.id}`;
+		const state = this.heartbeats.get(key);
+		if (!state) return;
+
+		if (state.interval) {
+			clearInterval(state.interval);
+		}
+		if (state.pendingTimeout) {
+			clearTimeout(state.pendingTimeout);
+		}
+
+		this.heartbeats.delete(key);
+	}
+
+	/**
+	 * Utility: Get heartbeat state for a socket (for testing).
+	 * @param {object} socket
+	 * @param {string} gameCode
+	 * @returns {object|null}
+	 */
+	getHeartbeatState(socket, gameCode) {
+		const key = `${gameCode}:${socket.id}`;
+		return this.heartbeats.get(key) || null;
+	}
+
+	setHeartbeatConfig({ intervalMs, timeoutMs, maxMisses } = {}) {
+		if (typeof intervalMs === "number") HEARTBEAT_INTERVAL_MS = intervalMs;
+		if (typeof timeoutMs === "number") HEARTBEAT_TIMEOUT_MS = timeoutMs;
+		if (typeof maxMisses === "number") HEARTBEAT_MAX_MISSES = maxMisses;
+	}
+
+	resetHeartbeatConfig() {
+		HEARTBEAT_INTERVAL_MS = Number(process.env.HEARTBEAT_INTERVAL_MS) || 15 * 1000;
+		HEARTBEAT_TIMEOUT_MS = Number(process.env.HEARTBEAT_TIMEOUT_MS) || 10 * 1000;
+		HEARTBEAT_MAX_MISSES = Number(process.env.HEARTBEAT_MAX_MISSES) || 2;
+	}
 }
 
 module.exports = new TimerService();
+module.exports.TimerService = TimerService;
 module.exports.TIME_CONTROLS = TIME_CONTROLS;
 module.exports.RECONNECT_GRACE_SECONDS = RECONNECT_GRACE_SECONDS;
+module.exports.HEARTBEAT_INTERVAL_MS = HEARTBEAT_INTERVAL_MS;
+module.exports.HEARTBEAT_TIMEOUT_MS = HEARTBEAT_TIMEOUT_MS;
+module.exports.HEARTBEAT_MAX_MISSES = HEARTBEAT_MAX_MISSES;
