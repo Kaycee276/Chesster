@@ -502,6 +502,18 @@ pub struct MatchCreatedEvent {
     pub wager_amount: i128,
 }
 
+/// Published immediately after the joining player's wager has been deposited.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchJoinedEvent {
+    /// The match nonce, shared with the existing match lifecycle topics.
+    pub match_id: u64,
+    pub token: Address,
+    pub player_black: Address,
+    pub wager_amount: i128,
+    pub joined_at: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Published after Player 2 joins and the full match pool is funded.
@@ -3552,6 +3564,16 @@ impl ChessterEscrow {
         }
 
         Self::deposit_wager(&env, &m.token, &player2, m.wager_amount);
+        env.events().publish(
+            (Symbol::new(&env, "match_joined"), m.nonce),
+            MatchJoinedEvent {
+                match_id: m.nonce,
+                token: m.token.clone(),
+                player_black: player2.clone(),
+                wager_amount: m.wager_amount,
+                joined_at: env.ledger().timestamp(),
+            },
+        );
 
         m.player2 = Some(player2.clone());
         m.status = MatchStatus::Active;
