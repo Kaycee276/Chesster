@@ -12,6 +12,7 @@ const jwt = require("jsonwebtoken");
 const gameRoutes = require("./routes/gameRoutes");
 const escrowRoutes = require("./routes/escrowRoutes");
 const authRoutes = require("./routes/authRoutes");
+const webhookRoutes = require("./routes/webhookRoutes");
 const botRoutes = require("./routes/botRoutes");
 const healthRoutes = require("./routes/healthRoutes");
 const referralRoutes = require("./routes/referralRoutes");
@@ -20,6 +21,7 @@ const tournamentRoutes = require("./routes/tournamentRoutes");
 const metricsRoutes = require("./routes/metricsRoutes");
 const chessEngine = require("./services/chessEngine");
 const timerService = require("./services/timerService");
+const sessionService = require("./services/sessionService");
 const cronService = require("./services/cronService");
 const eventConsumer = require("./workers/eventConsumer");
 const supabase = require("./config/supabase");
@@ -123,6 +125,17 @@ app.use(
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     credentials: true,
   }),
+);
+// Webhook ingress is server-to-server: it needs the raw body for HMAC verification
+// and cannot carry CSRF tokens, so it is mounted ahead of the JSON/CSRF middleware
+// and authenticated by signature instead (Issue #581).
+app.use(
+  "/api/webhooks",
+  createRateLimiter({
+    windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+    max: Number(process.env.RATE_LIMIT_MAX) || 300,
+  }),
+  webhookRoutes,
 );
 app.use(express.json());
 app.use(fetchMetadataPolicy);
@@ -275,11 +288,14 @@ io.on("connection", (socket) => {
         socket.data.address = claims.address;
 
         const presence = getPresenceEntry(gameCode);
-        const wasReconnecting = timerService.isPendingForfeit(gameCode, boundColor);
+        const wasReconnecting =
+          timerService.isPendingForfeit(gameCode, boundColor) ||
+          sessionService.getDisconnectionGraceStatus(gameCode, claims.address).active;
 
         // A same-color reconnect within the grace period cancels the pending
         // auto-forfeit and resumes the game/session normally.
         timerService.cancelReconnectGrace(gameCode, boundColor);
+        sessionService.cancelDisconnectionGrace(gameCode, claims.address);
 
         presence[boundColor].socketId = socket.id;
         broadcastPresence(gameCode, boundColor, "online");
@@ -420,7 +436,7 @@ io.on("connection", (socket) => {
     // fresher reconnect (e.g. rapid refresh / duplicate tabs).
     if (presence[playerColor].socketId !== socket.id) return;
 
-    const { shouldStartGrace } = await handleDisconnect({ gameModel }, gameCode, playerColor);
+    const { shouldStartGrace, game } = await handleDisconnect({ gameModel }, gameCode, playerColor);
     if (!shouldStartGrace) return;
 
     presence[playerColor].socketId = null;
@@ -429,8 +445,18 @@ io.on("connection", (socket) => {
     io.to(gameCode).emit('opponent_disconnected', { gameCode, color: playerColor, graceTimeSeconds: 60 });
 
     // Give the player a 60-second grace period to reconnect before the
-    // match is auto-forfeited on their behalf (see timerService).
-    timerService.startReconnectGrace(gameCode, playerColor);
+    // match is auto-forfeited on their behalf (Issue #580). On expiry the
+    // abandonment forfeit also settles escrow with the coordinator.
+    const playerAddress = playerColor === "white" ? game?.player_white_address : game?.player_black_address;
+    const opponentAddress = playerColor === "white" ? game?.player_black_address : game?.player_white_address;
+    if (playerAddress && opponentAddress) {
+      sessionService.startDisconnectionGrace(gameCode, playerAddress, opponentAddress, {
+        onTimeout: () => timerService.forfeitForAbandonment(gameCode, playerColor),
+      });
+    } else {
+      // Seat addresses unavailable (e.g. open lobby): fall back to the color-keyed timer.
+      timerService.startReconnectGrace(gameCode, playerColor);
+    }
   });
 
   socket.on("reconnect_game", validateSocketPayload(ReconnectGameSchema, async ({ gameId, walletAddress, token }, ack) => {
@@ -491,6 +517,7 @@ io.on("connection", (socket) => {
 
       // ── 4. Cancel the reconnect grace timer ────────────────────────
       timerService.cancelReconnectGrace(gameId, playerColor);
+      sessionService.cancelDisconnectionGrace(gameId, walletAddress);
 
       // ── 5. Rejoin the socket to the game room ─────────────────────
       socket.join(gameId);
@@ -600,7 +627,7 @@ io.on("connection", (socket) => {
       // timer from live game state (not just the socket's cached binding),
       // before any further await lets the timer race against firing.
       const reconnect = await handleReconnect(
-        { gameModel, timerService },
+        { gameModel, timerService, sessionService },
         gameId,
         socket.data.address,
       );
@@ -712,6 +739,7 @@ io.on("connection", (socket) => {
 
 app.set("io", io);
 timerService.init(io);
+sessionService.setIo(io);
 // Stop the auth challenge sweep timer on shutdown so the event loop exits cleanly.
 const authService = require("./services/authService");
 const botService = require("./services/botService");

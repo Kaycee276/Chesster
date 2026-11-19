@@ -224,6 +224,38 @@ function verifyWebhookSignature(
   return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
 }
 
+/**
+ * Verify the HMAC-SHA256 signature of an inbound (ingress) webhook (Issue #581).
+ *
+ * Senders compute `sha256=` + hex(HMAC_SHA256(secret, rawBody)) over the exact
+ * bytes of the request body and send it in the `x-chesster-signature` header.
+ * This is distinct from verifyWebhookSignature above, which validates the
+ * timestamped `t=...,v1=...` scheme used for replay-protected deliveries.
+ *
+ * The comparison is constant-time. Any missing or malformed input returns
+ * false rather than throwing.
+ *
+ * @param {Buffer|string} rawBody - Request body exactly as received.
+ * @param {string} signatureHeader - Value of the x-chesster-signature header.
+ * @param {string} secretKey - Shared webhook secret.
+ * @returns {boolean}
+ */
+function verifyIngressSignature(rawBody, signatureHeader, secretKey) {
+  if (typeof signatureHeader !== "string" || !signatureHeader) return false;
+  if (typeof secretKey !== "string" || !secretKey) return false;
+  if (typeof rawBody !== "string" && !Buffer.isBuffer(rawBody)) return false;
+
+  const expected = Buffer.from(
+    "sha256=" + crypto.createHmac("sha256", secretKey).update(rawBody).digest("hex"),
+    "utf8",
+  );
+  const provided = Buffer.from(signatureHeader, "utf8");
+
+  // timingSafeEqual throws on unequal lengths, so compare lengths first.
+  if (provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(provided, expected);
+}
+
 function _getTimeout() {
   return Number(process.env.WEBHOOK_TIMEOUT_MS) || 5000;
 }
@@ -795,3 +827,4 @@ module.exports.computeBackoffDelay = computeBackoffDelay;
 module.exports.isPrivateOrReservedIp = isPrivateOrReservedIp;
 module.exports.defaultDnsLookup = defaultDnsLookup;
 module.exports.verifyWebhookSignature = verifyWebhookSignature;
+module.exports.verifyIngressSignature = verifyIngressSignature;
