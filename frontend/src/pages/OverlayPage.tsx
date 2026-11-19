@@ -4,23 +4,16 @@ import { api } from "../api/gameApi";
 import { fetchPlayerProfile } from "../api/profileApi";
 import { socketService } from "../api/socket";
 import BroadcastChessBoard from "../components/BroadcastChessBoard";
+import BroadcastScoreboard, { type BroadcastGameOver } from "../components/BroadcastScoreboard";
 import EvaluationBar from "../components/EvaluationBar";
-import GameTimer from "../components/TurnTimer";
 import { useStockfishEvaluation } from "../hooks/useStockfishEvaluation";
 import { useGameStore } from "../store/gameStore";
 import type { GameState } from "../types/game";
+import { materialAdvantage as getMaterialAdvantage } from "../utils/chessUtils";
 import { toEngineFen } from "../utils/engineEvaluation";
 import { parseOverlayOptions } from "../utils/overlayOptions";
 
-function PlayerBadge({ label, address, active, secondsLeft, totalSeconds, showClock, wager }: {
-	label: string;
-	address?: string | null;
-	active: boolean;
-	secondsLeft: number;
-	totalSeconds: number;
-	showClock: boolean;
-	wager?: string | number | null;
-}) {
+function usePlayerProfile(address: string | null | undefined, label: string) {
 	const [name, setName] = useState(label);
 	const [rating, setRating] = useState<number | null>(null);
 
@@ -36,15 +29,7 @@ function PlayerBadge({ label, address, active, secondsLeft, totalSeconds, showCl
 		return () => controller.abort();
 	}, [address, label]);
 
-	return (
-		<div className={`flex min-w-0 items-center justify-between gap-3 rounded-xl border px-4 py-3 backdrop-blur-md ${active ? "border-cyan-300 bg-slate-950/90 shadow-[0_0_24px_rgba(34,211,238,.25)]" : "border-white/15 bg-slate-950/75"}`}>
-			<div className="min-w-0">
-				<div className="truncate font-semibold text-white">{name}</div>
-				<div className="text-xs text-white/70">{label}{rating !== null ? ` · ${rating}` : ""}{wager ? ` · ${wager} XLM` : ""}</div>
-			</div>
-			{showClock && <GameTimer secondsLeft={secondsLeft} totalSeconds={totalSeconds} isCurrentTurn={active} isClockRunning={active} />}
-		</div>
-	);
+	return { name: address ? name : label, rating: address ? rating : null };
 }
 
 export default function OverlayPage() {
@@ -63,6 +48,9 @@ export default function OverlayPage() {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [game, setGame] = useState<GameState | null>(null);
+	const whiteProfile = usePlayerProfile(game?.player_white_address, "White");
+	const blackProfile = usePlayerProfile(game?.player_black_address, "Black");
+	const material = useMemo(() => getMaterialAdvantage(board), [board]);
 	const fen = useMemo(() => board.length === 8 ? toEngineFen(board, currentTurn) : null, [board, currentTurn]);
 	const { evaluation } = useStockfishEvaluation(fen, { enabled: options.showEvaluation });
 
@@ -118,13 +106,26 @@ export default function OverlayPage() {
 	const whiteClock = currentTurn === "white" ? secondsLeft : game.white_time_left ?? totalSeconds;
 	const blackClock = currentTurn === "black" ? secondsLeft : game.black_time_left ?? totalSeconds;
 	const wager = wagerAmount ?? game.wager_amount;
+	const gameOver: BroadcastGameOver | null = game.status === "finished"
+		? {
+			result: game.end_reason ?? (game.winner === "draw" ? "draw" : "checkmate"),
+			winner: game.winner === "white" || game.winner === "black" ? game.winner : null,
+		}
+		: null;
 	return (
 		<main className={`flex min-h-screen w-full flex-col items-center justify-center gap-3 p-3 ${options.transparent ? "bg-transparent" : "bg-slate-950"}`}>
 			<div className="w-full max-w-4xl">
-				<div className="mb-3 grid grid-cols-2 gap-3">
-					<PlayerBadge label="White" address={game.player_white_address} active={currentTurn === "white"} secondsLeft={whiteClock} totalSeconds={totalSeconds} showClock={options.showClocks} wager={wager} />
-					<PlayerBadge label="Black" address={game.player_black_address} active={currentTurn === "black"} secondsLeft={blackClock} totalSeconds={totalSeconds} showClock={options.showClocks} wager={wager} />
-				</div>
+				<BroadcastScoreboard
+					whitePlayer={{ name: whiteProfile.name, rating: whiteProfile.rating, address: game.player_white_address, wager }}
+					blackPlayer={{ name: blackProfile.name, rating: blackProfile.rating, address: game.player_black_address, wager }}
+					currentTurn={currentTurn}
+					whiteSecondsLeft={whiteClock}
+					blackSecondsLeft={blackClock}
+					totalSeconds={totalSeconds}
+					showClocks={options.showClocks}
+					materialAdvantage={material.white - material.black}
+					gameOver={gameOver}
+				/>
 				<div className="mx-auto flex w-full max-w-[min(82vh,760px)] items-stretch gap-2">
 					{options.showEvaluation && <EvaluationBar scoreCp={evaluation?.scoreCp ?? 0} mate={evaluation?.mate ?? null} depth={evaluation?.depth} orientation={orientation} loading={!evaluation} />}
 					<div className="min-w-0 flex-1"><BroadcastChessBoard board={board} orientation={orientation} theme={options.theme} /></div>
