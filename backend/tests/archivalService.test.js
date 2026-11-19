@@ -86,3 +86,63 @@ describe("ArchivalService", () => {
     expect(repository.purge).not.toHaveBeenCalled();
   });
 });
+
+describe("ArchivalService monthly partition maintenance", () => {
+  function setup(existing = false) {
+    const client = {
+      query: jest.fn(async (sql) => ({ rows: sql.includes("pg_partitioned_table") || (existing && sql.includes("pg_inherits")) ? [{}] : [] })),
+      release: jest.fn(),
+    };
+    const db = { getPool: () => ({ connect: jest.fn().mockResolvedValue(client) }) };
+    const service = new ArchivalService({ db, now: () => new Date("2026-12-31T23:00:00Z") });
+    return { client, service };
+  }
+
+  test("creates current and upcoming months with UTC bounds and year rollover", async () => {
+    const { client, service } = setup();
+    await expect(service.ensureMonthlyPartitionsExist()).resolves.toEqual({ success: true, partitions: ["moves_2026_12", "moves_2027_01", "moves_2027_02"] });
+    const queries = client.query.mock.calls.map(([sql]) => sql);
+    expect(queries[0]).toBe("BEGIN");
+    expect(queries[1]).toContain("pg_advisory_xact_lock");
+    expect(queries.filter((sql) => sql.startsWith("CREATE TABLE"))).toHaveLength(3);
+    expect(queries.find((sql) => sql.includes("ATTACH PARTITION"))).toContain("FROM ('2026-12-01T00:00:00.000Z') TO ('2027-01-01T00:00:00.000Z')");
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining("DELETE FROM public.moves_default"), ["2026-12-01T00:00:00.000Z", "2027-01-01T00:00:00.000Z"]);
+    expect(queries.at(-1)).toBe("COMMIT");
+    expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
+  test("existing attached partitions are idempotent and require no DDL", async () => {
+    const { client, service } = setup(true);
+    await service.ensureMonthlyPartitionsExist(new Date("2026-11-01T00:30:00+01:00"));
+    expect(client.query).toHaveBeenCalledWith(expect.stringContaining("pg_inherits"), ["public.moves_2026_10"]);
+    expect(client.query.mock.calls.some(([sql]) => /CREATE TABLE|LOCK TABLE|DELETE FROM/.test(sql))).toBe(false);
+    expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects invalid dates before connecting", async () => {
+    const { client, service } = setup();
+    await expect(service.ensureMonthlyPartitionsExist(new Date("invalid"))).rejects.toThrow("valid partition reference");
+    await expect(service.ensureMonthlyPartitionsExist("2026-11-01")).rejects.toThrow("valid partition reference");
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
+  test("fails clearly on a database that has not been migrated", async () => {
+    const { client, service } = setup();
+    client.query.mockImplementation(async () => ({ rows: [] }));
+    await expect(service.ensureMonthlyPartitionsExist()).rejects.toThrow("migration 031");
+    expect(client.query).toHaveBeenLastCalledWith("ROLLBACK");
+    expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
+  test("rolls back and releases the connection if DDL fails", async () => {
+    const { client, service } = setup();
+    client.query.mockImplementation(async (sql) => {
+      if (sql.startsWith("CREATE TABLE")) throw new Error("permission denied");
+      return { rows: sql.includes("pg_partitioned_table") ? [{}] : [] };
+    });
+    await expect(service.ensureMonthlyPartitionsExist()).rejects.toThrow("permission denied");
+    expect(client.query).toHaveBeenLastCalledWith("ROLLBACK");
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.query.mock.calls.some(([sql]) => sql.includes("ATTACH PARTITION"))).toBe(false);
+  });
+});

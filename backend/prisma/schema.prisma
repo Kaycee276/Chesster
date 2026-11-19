@@ -95,7 +95,7 @@ model Game {
 }
 
 model Move {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   game_id           String   @db.Uuid
   move_number       Int
   player            String   @db.VarChar(10)
@@ -110,6 +110,8 @@ model Move {
 
   game Game @relation(fields: [game_id], references: [id], onDelete: Cascade)
 
+  // Monthly partitions are managed by SQL migration 031 and archivalService.
+  @@id([id, created_at])
   @@index([game_id, move_number], map: "idx_moves_game")
   @@map("moves")
 }

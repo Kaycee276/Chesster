@@ -29,6 +29,8 @@ class CronService {
 		this.hourlyAggregationIntervalMs = 60 * 60 * 1000; // 1 hour
 		this.cronHandle = null;
 		this.archivalHandle = null;
+		this.lastPartitionMonth = null;
+		this.partitionCheckPending = false;
 	}
 
 	get escrow() {
@@ -299,8 +301,26 @@ class CronService {
 		}
 	}
 
+	async ensureMovePartitions(now = new Date()) {
+		const month = `${now.getUTCFullYear()}-${now.getUTCMonth()}`;
+		if (this.lastPartitionMonth === month || this.partitionCheckPending) return;
+		this.partitionCheckPending = true;
+		try {
+			await this.archival.ensureMonthlyPartitionsExist(now);
+			this.lastPartitionMonth = month;
+		} catch (error) {
+			console.error("[CronService] Move partition maintenance failed:", error.message);
+			// Leave the month unset so the next minute retries after failure.
+		} finally {
+			this.partitionCheckPending = false;
+		}
+	}
+
 	async runScheduledTasks(now = new Date()) {
 		const tasks = [
+			// Runs at startup and at the first tick on the 1st of each UTC month.
+			// A restart after the 1st also catches up missed maintenance.
+			this.ensureMovePartitions(now),
 			this.dispatchTournamentReminders(15, now),
 			this.dispatchTournamentReminders(5, now),
 			this.dispatchWinnerAnnouncements(now),

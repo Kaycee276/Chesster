@@ -766,6 +766,7 @@ export default function AnalysisPage() {
               evaluations={accuracy.evaluations}
               currentMoveIndex={currentIndex}
               onMoveChange={goToMove}
+              moves={moves}
             />
           )}
 

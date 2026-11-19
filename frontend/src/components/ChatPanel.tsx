@@ -5,8 +5,14 @@ import { boardToFen, moveToAlgebraic } from "../utils/chessUtils";
 import { sanitizeChatMessage } from "../utils/sanitize";
 
 const MAX_CHARS = 50;
-const QUICK_PHRASES = ["Good luck!", "Nice move!", "Well played!", "Thanks!"];
-const EMOJI_REACTIONS = ["😀", "🔥", "👏", "🤝", "♟️", "🏆"];
+const QUICK_PRESETS = [
+	"Good luck, have fun! ♟️",
+	"Well played! 👏",
+	"Thank you for the game! 🤝",
+	"Rematch? ⚔️",
+];
+const EMOJI_REACTIONS = ["👍", "👏", "😮", "♟️", "🔥", "🤝"];
+const EMOJI_LABELS = ["Thumbs up", "Applause", "Surprise", "Chess pawn", "Fire", "Handshake"];
 
 interface ChatPanelProps {
 	inline?: boolean;
@@ -227,16 +233,31 @@ export default function ChatPanel({
 						<div ref={messagesEndRef} />
 					</div>
 
-					{/* Quick reactions */}
-					<div className="shrink-0 flex flex-wrap gap-1.5 px-2 py-2 border-t border-(--border) bg-(--bg)/50">
-						{QUICK_PHRASES.map((phrase) => (
+					{/* Quick chat keeps the draft intact and uses the existing socket dispatch. */}
+					<div role="group" aria-label="Quick chat presets" className="shrink-0 flex gap-1.5 overflow-x-auto px-2 py-2 border-t border-(--border) bg-(--bg)/50">
+						{QUICK_PRESETS.map((phrase) => (
 							<button
 								key={phrase}
 								type="button"
-								onClick={() => sendMessage(phrase)}
-								className="rounded-full border border-(--border) px-2 py-1 text-[10px] text-(--text-secondary) hover:border-(--accent-primary)/60 hover:text-(--text) transition-colors"
+								onClick={() => sendChatMessage(phrase)}
+								aria-label={`Send ${phrase}`}
+								className="shrink-0 whitespace-nowrap min-h-9 rounded-full border border-(--border) px-2.5 py-1 text-xs text-(--text-secondary) hover:border-(--accent-primary)/60 hover:text-(--text) focus-visible:outline-2 focus-visible:outline-(--accent-primary) focus-visible:outline-offset-2 transition-colors"
 							>
 								{phrase}
+							</button>
+						))}
+					</div>
+					<div role="group" aria-label="Emoji reactions" className="shrink-0 flex gap-1.5 overflow-x-auto px-2 pb-2">
+						{EMOJI_REACTIONS.map((emoji, index) => (
+							<button
+								key={emoji}
+								type="button"
+								onClick={() => sendChatMessage(emoji)}
+								aria-label={`Send ${EMOJI_LABELS[index]} reaction ${emoji}`}
+								title={EMOJI_LABELS[index]}
+								className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg hover:bg-(--bg-tertiary) focus-visible:outline-2 focus-visible:outline-(--accent-primary) focus-visible:outline-offset-2 transition-colors"
+							>
+								{emoji}
 							</button>
 						))}
 					</div>
@@ -245,11 +266,12 @@ export default function ChatPanel({
 					<div className="relative shrink-0 flex items-center gap-1.5 px-2 py-2 border-t border-(--border)">
 						{emojiOpen && (
 							<div className="absolute bottom-full left-2 mb-2 grid grid-cols-6 gap-1 rounded-xl border border-(--border) bg-(--bg-secondary) p-2 shadow-xl">
-								{EMOJI_REACTIONS.map((emoji) => (
+								{EMOJI_REACTIONS.map((emoji, index) => (
 									<button
 										key={emoji}
 										type="button"
 										onClick={() => appendEmoji(emoji)}
+										aria-label={`Add ${EMOJI_LABELS[index]} emoji ${emoji}`}
 										className="flex h-7 w-7 items-center justify-center rounded-lg text-sm hover:bg-(--bg-tertiary) transition-colors"
 									>
 										{emoji}
@@ -262,6 +284,8 @@ export default function ChatPanel({
 							onClick={() => setEmojiOpen((open) => !open)}
 							className="p-1.5 rounded-lg border border-(--border) text-(--text-tertiary) hover:text-(--text) hover:border-(--accent-primary)/60 transition-colors shrink-0"
 							title="Add emoji"
+							aria-label="Add emoji"
+							aria-expanded={emojiOpen}
 						>
 							<Smile size={12} />
 						</button>
@@ -272,6 +296,7 @@ export default function ChatPanel({
 							onChange={(e) => setInput(e.target.value.slice(0, MAX_CHARS))}
 							onKeyDown={handleKeyDown}
 							placeholder="Message…"
+							aria-label="Chat message"
 							maxLength={MAX_CHARS}
 							className="flex-1 min-w-0 bg-(--bg) border border-(--border) rounded-lg px-2.5 py-1.5 text-xs text-(--text) placeholder:text-(--text-tertiary) outline-none focus:border-(--accent-primary)/60 transition-colors"
 						/>
@@ -279,6 +304,8 @@ export default function ChatPanel({
 							{MAX_CHARS - input.length}
 						</span>
 						<button
+							type="button"
+							aria-label="Send message"
 							onClick={handleSend}
 							disabled={!input.trim()}
 							className="p-1.5 rounded-lg bg-(--accent-primary) hover:bg-(--accent-dark) text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"

@@ -223,7 +223,7 @@ class GameController {
 			const moves = await gameModel.getMoves(gameCode);
 			// Annotated export with per-move [%clk] / [%eval] comments (Issue #463).
 			const ratings = await replayService.fetchPlayerRatings(game);
-			const pgn = replayService.formatPgn(game, moves, { ratings });
+			const pgn = pgnService.generateGamePGN(game, moves, { ratings });
 			res.set({
 				"Content-Type": "application/x-chess-pgn",
 				"Content-Disposition": `attachment; filename=game-${game.game_code || game.id}.pgn`,

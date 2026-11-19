@@ -1,4 +1,5 @@
 const chessEngine = require("./chessEngine");
+const { getSevenTagRoster, escapePgnTag } = require("./pgnService");
 const { boardToFEN } = require("./botService");
 
 /**
@@ -183,14 +184,6 @@ function formatTimeControl(game = {}) {
 	return `${base}+${increment}`;
 }
 
-function pgnResult(game = {}) {
-	const winner = game.winner;
-	if (winner === "draw" || game.is_draw === true) return "1/2-1/2";
-	if (winner === "white" || (winner && winner === game.player_white_address)) return "1-0";
-	if (winner === "black" || (winner && winner === game.player_black_address)) return "0-1";
-	return "*";
-}
-
 /** Maps Chesster end reasons onto the PGN standard Termination values. */
 function pgnTermination(game = {}) {
 	if (game.status && game.status !== "finished" && game.status !== "completed") return "unterminated";
@@ -198,15 +191,6 @@ function pgnTermination(game = {}) {
 	if (["time", "timeout", "flag", "flag_fall", "time_forfeit"].includes(reason)) return "time forfeit";
 	if (["disconnect", "abandonment", "abandoned"].includes(reason)) return "abandoned";
 	return "normal";
-}
-
-function pgnDate(value) {
-	const ms = toMs(value);
-	return ms === null ? "????.??.??" : new Date(ms).toISOString().slice(0, 10).replaceAll("-", ".");
-}
-
-function escapeTag(value) {
-	return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 function isOwnPiece(piece, color) {
@@ -281,16 +265,11 @@ function formatPgn(game, moves = [], { ratings = {}, event, round } = {}) {
 	const ordered = [...moves].sort((a, b) => a.move_number - b.move_number);
 	const frames = buildReplayFrames(game, ordered);
 	const clockEnabled = Number(game.time_control_seconds) > 0;
-	const result = pgnResult(game);
+	const roster = getSevenTagRoster({ ...game, event: event ?? game.event, round: round ?? game.round });
+	const result = roster.Result;
 
 	const headers = [
-		["Event", event || "Chesster Game"],
-		["Site", "Chesster"],
-		["Date", pgnDate(game.game_started_at || game.created_at)],
-		["Round", round || "-"],
-		["White", game.player_white_address || "?"],
-		["Black", game.player_black_address || "?"],
-		["Result", result],
+		...Object.entries(roster),
 		["WhiteElo", Number.isFinite(ratings.white) ? ratings.white : "?"],
 		["BlackElo", Number.isFinite(ratings.black) ? ratings.black : "?"],
 		["TimeControl", formatTimeControl(game)],
@@ -330,7 +309,7 @@ function formatPgn(game, moves = [], { ratings = {}, event, round } = {}) {
 	});
 	tokens.push(result);
 
-	const tagText = headers.map(([name, value]) => `[${name} "${escapeTag(value)}"]`).join("\n");
+	const tagText = headers.map(([name, value]) => `[${name} "${escapePgnTag(value)}"]`).join("\n");
 	return `${tagText}\n\n${tokens.join(" ")}\n`;
 }
 

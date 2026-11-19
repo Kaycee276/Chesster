@@ -92,10 +92,63 @@ class SupabaseArchiveRepository {
 }
 
 class ArchivalService {
-  constructor({ repository, s3Client, now } = {}) {
+  constructor({ repository, s3Client, now, db = supabase } = {}) {
     this.repository = repository || new SupabaseArchiveRepository();
     this.s3Client = s3Client || null;
     this.now = now || (() => new Date());
+    this.db = db;
+  }
+
+  /** Provision current + two upcoming UTC months, including December rollover. */
+  async ensureMonthlyPartitionsExist(referenceDate = this.now()) {
+    if (!(referenceDate instanceof Date) || Number.isNaN(referenceDate.valueOf())) {
+      throw new Error("A valid partition reference date is required");
+    }
+    const client = await this.db.getPool().connect();
+    const partitions = [];
+    try {
+      await client.query("BEGIN");
+      // Serialize maintenance across backend instances on one transaction lock.
+      await client.query("SELECT pg_advisory_xact_lock(652, 1)");
+      const { rows } = await client.query(
+        "SELECT 1 FROM pg_partitioned_table WHERE partrelid = 'public.moves'::regclass",
+      );
+      if (!rows.length) throw new Error("Apply moves partition migration 031 before provisioning partitions");
+
+      for (let offset = 0; offset <= 2; offset += 1) {
+        const start = new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth() + offset, 1));
+        const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+        const name = `moves_${start.getUTCFullYear()}_${String(start.getUTCMonth() + 1).padStart(2, "0")}`;
+        const existing = await client.query(
+          "SELECT 1 FROM pg_inherits WHERE inhparent = 'public.moves'::regclass AND inhrelid = to_regclass($1)",
+          [`public.${name}`],
+        );
+        if (!existing.rows.length) {
+          // Lock writes while draining the fallback, then attach atomically.
+          // Bounds and identifiers come only from validated UTC dates.
+          await client.query("LOCK TABLE public.moves IN ACCESS EXCLUSIVE MODE");
+          await client.query(`CREATE TABLE public."${name}" (LIKE public.moves INCLUDING ALL)`);
+          await client.query(`ALTER TABLE public."${name}" ENABLE ROW LEVEL SECURITY`);
+          await client.query(
+            `WITH relocated AS (DELETE FROM public.moves_default WHERE created_at >= $1 AND created_at < $2 RETURNING *)
+             INSERT INTO public."${name}" SELECT * FROM relocated`,
+            [start.toISOString(), end.toISOString()],
+          );
+          await client.query(
+            `ALTER TABLE public.moves ATTACH PARTITION public."${name}"
+             FOR VALUES FROM ('${start.toISOString()}') TO ('${end.toISOString()}')`,
+          );
+        }
+        partitions.push(name);
+      }
+      await client.query("COMMIT");
+      return { success: true, partitions };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   getS3Client() {
