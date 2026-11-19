@@ -21,6 +21,7 @@ const tournamentRoutes = require("./routes/tournamentRoutes");
 const metricsRoutes = require("./routes/metricsRoutes");
 const chessEngine = require("./services/chessEngine");
 const timerService = require("./services/timerService");
+const antiCheatService = require("./services/antiCheatService");
 const sessionService = require("./services/sessionService");
 const cronService = require("./services/cronService");
 const eventConsumer = require("./workers/eventConsumer");
@@ -36,6 +37,10 @@ const {
   handleDisconnect,
   handleReconnect,
   reconcileGameState,
+  registerPremove,
+  checkMoveTiming,
+  recordMoveCompleted,
+  clearMoveTimingState,
 } = require("./socket/moveAuthority");
 const gameController = require("./controllers/gameController");
 const { createRateLimiter } = require("./middleware/rateLimiter");
@@ -337,7 +342,15 @@ io.on("connection", (socket) => {
   // was bound to a player color via an authenticated join and it is that
   // player's turn in an active game; otherwise it is rejected without touching
   // game state. This blocks socket injection and client-side move spoofing.
-  socket.on("make-move", async ({ gameCode, from, to, promotion } = {}) => {
+  // A player registers a premove while the opponent is still to move (#583).
+  // The server stamps the registration time so it cannot be backdated.
+  socket.on("register-premove", ({ gameCode } = {}) => {
+    const boundColor = socket.data.playerColor;
+    if (!gameCode || !boundColor || socket.data.gameCode !== gameCode) return;
+    registerPremove(gameCode, boundColor);
+  });
+
+  socket.on("make-move", async ({ gameCode, from, to, promotion, premove } = {}) => {
     const moveStartedAt = Date.now();
     if (!gameCode) return;
 
@@ -355,6 +368,21 @@ io.on("connection", (socket) => {
         return;
       }
 
+      // Burst / forged-premove gate (#583), after auth so spectators and
+      // out-of-turn senders never reach (or pollute) the timing telemetry.
+      const timing = checkMoveTiming(gameCode, boundColor, { isPremove: premove === true });
+      if (!timing.ok) {
+        antiCheatService.logMoveBurst({
+          gameCode,
+          walletAddress: socket.data.address,
+          ip: socket.handshake?.address,
+          deltaMs: timing.deltaMs,
+          reason: timing.code,
+        });
+        socket.emit("move-rejected", { gameCode, reason: timing.code, message: "Move submitted too quickly" });
+        return;
+      }
+
       const moverColor = game.current_turn;
       const updated = await gameModel.makeMove(gameCode, from, to, promotion);
       metricsRoutes.observeMoveLatency(moveStartedAt);
@@ -362,8 +390,10 @@ io.on("connection", (socket) => {
       // reconciles immediately after this move sees it, not a stale snapshot
       // (Issue #434).
       gameController.invalidateGameStateSnapshot(gameCode);
+      recordMoveCompleted(gameCode, moverColor);
 
       let clock = null;
+      if (updated.status !== "active") clearMoveTimingState(gameCode);
       if (updated.status === "active") {
         clock = timerService.applyMove(gameCode, moverColor);
       } else {
