@@ -544,6 +544,18 @@ pub struct MatchForfeitedEvent {
 pub struct MatchCancelledEvent {
     /// Identifier of the cancelled match.
     pub game_code: String,
+    /// Numeric match identifier (the match nonce) for compact indexer lookups.
+    pub match_id: u64,
+    /// Token in which the wager was escrowed and refunded.
+    pub token: Address,
+    /// Player who received the refund. One event is published per refunded player.
+    pub player: Address,
+    /// Amount returned to `player`.
+    pub refund_amount: i128,
+    /// Why the match was cancelled or refunded: `cancelled` (creator cancelled an
+    /// unjoined match), `mutual` (both players agreed), `timeout`, `expired`,
+    /// `abandoned`, or `tournament` (coordinator cancelled a tournament match).
+    pub reason: Symbol,
 }
 
 #[contracttype]
@@ -4061,16 +4073,7 @@ impl ChessterEscrow {
             env.storage().persistent().set(&DataKey::Metrics, &metrics);
             Self::bump_entry_ttl(&env, &DataKey::Metrics);
 
-            env.events().publish(
-                (
-                    Symbol::new(&env, "v1"),
-                    symbol_short!("cancelled"),
-                    game_code.clone(),
-                ),
-                MatchCancelledEvent {
-                    game_code: game_code.clone(),
-                },
-            );
+            Self::emit_match_cancelled(&env, &game_code, &m, Symbol::new(&env, "mutual"));
         }
 
         env.storage().persistent().set(&game_code, &m);
@@ -4128,12 +4131,7 @@ impl ChessterEscrow {
         env.storage().persistent().set(&game_code, &m);
         Self::bump_entry_ttl(&env, &game_code);
 
-        env.events().publish(
-            (symbol_short!("cancelled"), game_code.clone()),
-            MatchCancelledEvent {
-                game_code: game_code.clone(),
-            },
-        );
+        Self::emit_match_cancelled(&env, &game_code, &m, Symbol::new(&env, "cancelled"));
     }
 
     /// Requests a cooperative mutual draw for an active match (Issue #20).
@@ -4669,7 +4667,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::TimeoutNotReached);
         }
 
-        Self::execute_refund(&env, &game_code, &mut m);
+        Self::execute_refund(&env, &game_code, &mut m, Symbol::new(&env, "timeout"));
     }
 
     /// Auto-claims refund on an expired match by coordinator or participant (Issue #21).
@@ -4707,7 +4705,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::TimeoutNotReached);
         }
 
-        Self::execute_refund(&env, &game_code, &mut m);
+        Self::execute_refund(&env, &game_code, &mut m, Symbol::new(&env, "timeout"));
     }
 
     /// Coordinator batch auto-claims refunds for multiple expired matches (Issue #21).
@@ -4744,7 +4742,7 @@ impl ChessterEscrow {
                         }
                     }
 
-                    Self::execute_refund(&env, &game_code, &mut m);
+                    Self::execute_refund(&env, &game_code, &mut m, Symbol::new(&env, "timeout"));
                     count += 1;
                 }
             }
@@ -4786,7 +4784,7 @@ impl ChessterEscrow {
 
         for game_code in game_codes.iter() {
             let mut m = Self::load_match(&env, &game_code);
-            Self::execute_refund(&env, &game_code, &mut m);
+            Self::execute_refund(&env, &game_code, &mut m, Symbol::new(&env, "expired"));
         }
 
         let count = game_codes.len();
@@ -4824,7 +4822,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::TimeoutNotReached);
         }
 
-        Self::execute_refund(&env, &game_code, &mut m);
+        Self::execute_refund(&env, &game_code, &mut m, Symbol::new(&env, "timeout"));
     }
 
     /// Allows players or callers to claim refund when match duration expires without resolution (Issue #287).
@@ -4859,7 +4857,7 @@ impl ChessterEscrow {
         let player1 = m.player1.clone();
         let player2 = m.player2.clone();
 
-        Self::execute_refund(&env, &game_code, &mut m);
+        Self::execute_refund(&env, &game_code, &mut m, Symbol::new(&env, "abandoned"));
 
         env.events().publish(
             (
@@ -5205,7 +5203,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::UnauthorizedPlayer);
         }
 
-        Self::execute_refund(&env, &game_code, &mut m);
+        Self::execute_refund(&env, &game_code, &mut m, Symbol::new(&env, "mutual"));
 
         m.cancellation_proposed_by = None;
         m.cancellation_proposed_at = None;
@@ -5253,7 +5251,34 @@ impl ChessterEscrow {
         Self::bump_entry_ttl(&env, &game_code);
     }
 
-    fn execute_refund(env: &Env, game_code: &String, m: &mut Match) {
+    /// Publishes one `MatchCancelledEvent` per refunded player so indexers can
+    /// distinguish refunds from normal settlements and learn why they happened.
+    fn emit_match_cancelled(env: &Env, game_code: &String, m: &Match, reason: Symbol) {
+        let mut players: Vec<Address> = Vec::new(env);
+        players.push_back(m.player1.clone());
+        if let Some(p2) = m.player2.clone() {
+            players.push_back(p2);
+        }
+        for player in players.iter() {
+            env.events().publish(
+                (
+                    Symbol::new(env, "v1"),
+                    symbol_short!("cancelled"),
+                    game_code.clone(),
+                ),
+                MatchCancelledEvent {
+                    game_code: game_code.clone(),
+                    match_id: m.nonce,
+                    token: m.token.clone(),
+                    player,
+                    refund_amount: m.wager_amount,
+                    reason: reason.clone(),
+                },
+            );
+        }
+    }
+
+    fn execute_refund(env: &Env, game_code: &String, m: &mut Match, reason: Symbol) {
         let token_client = token::Client::new(env, &m.token);
 
         Self::assert_balance_invariant(env, &m.token);
@@ -5314,6 +5339,7 @@ impl ChessterEscrow {
                 game_code: game_code.clone(),
             },
         );
+        Self::emit_match_cancelled(env, game_code, m, reason);
     }
 
     /// Splits an Active match's remaining locked collateral evenly between both players and marks
@@ -5599,7 +5625,7 @@ impl ChessterEscrow {
             if m.status != MatchStatus::Pending && m.status != MatchStatus::Active {
                 panic_with_error!(&env, EscrowError::AlreadyResolvedOrRefunded);
             }
-            Self::execute_refund(&env, &game_code, &mut m);
+            Self::execute_refund(&env, &game_code, &mut m, Symbol::new(&env, "tournament"));
         }
 
         env.events().publish(
