@@ -6468,3 +6468,5 @@ impl ChessterEscrow {
 #[cfg(test)]
 mod error_tests;
 mod test;
+#[cfg(test)]
+mod extended_tests;

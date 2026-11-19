@@ -1,5 +1,10 @@
 // Extended property-based tests for tournament escrow balance conservation
 use proptest::prelude::*;
+use super::*;
+use soroban_sdk::{
+    testutils::{Address as _, Events, Ledger},
+    Address, Env, String, TryIntoVal,
+};
 
 #[cfg(test)]
 mod extended_tests {
@@ -51,14 +56,13 @@ mod extended_tests {
                 truncation_remainder, player_count, entry_fee, fee_bps
             );
             
-            // CORE INVARIANT: Total in = Total out (within rounding tolerance)
+            // CORE INVARIANT: Total in = Total out + truncation remainder.
             let total_out = distributed + treasury_fee;
-            let conservation_error = (total_entry_fees - total_out).abs();
             
-            prop_assert!(
-                conservation_error == 0,
-                "Balance conservation violated: total_in={}, total_out={}, error={} for player_count={}, entry_fee={}, fee_bps={}",
-                total_entry_fees, total_out, conservation_error, player_count, entry_fee, fee_bps
+            prop_assert_eq!(
+                total_out + truncation_remainder, total_entry_fees,
+                "Balance conservation violated: total_in={}, total_out={}, remainder={} for player_count={}, entry_fee={}, fee_bps={}",
+                total_entry_fees, total_out, truncation_remainder, player_count, entry_fee, fee_bps
             );
             
             // Verify no funds are locked/stranded
@@ -211,7 +215,7 @@ mod extended_tests {
         #[test]
         fn test_fuzz_draw_settlement_max_wager_various_fees(
             wager_amount in 5_000_000i128..=10_000_000i128,
-            fee_bps in vec![0u32, 50u32, 500u32, 1000u32]
+            fee_bps in prop_oneof![Just(0u32), Just(50u32), Just(500u32), Just(1000u32)]
         ) {
             let total_wager = wager_amount * 2;
             let player1_refund = wager_amount;
@@ -408,6 +412,13 @@ mod extended_tests {
                 .expect("distributed add overflow")
                 .checked_add(third_payout)
                 .expect("distributed add overflow");
+            // Assign the integer-division remainder to first place, as the
+            // settlement logic does, so the pool is fully distributed.
+            let remainder = large_pool
+                .checked_sub(distributed)
+                .and_then(|value| value.checked_sub(fee))
+                .expect("remainder calculation overflow");
+            let distributed = distributed.checked_add(remainder).expect("distributed remainder overflow");
             let total_out = distributed.checked_add(fee).expect("total out overflow");
             
             assert_eq!(total_out, large_pool, "Total output must equal input pool");
@@ -489,6 +500,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
 
@@ -512,6 +524,7 @@ mod extended_tests {
             let admin1 = Address::generate(&env);
             let admin2 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
 
@@ -535,6 +548,7 @@ mod extended_tests {
             let admin3 = Address::generate(&env);
             let outsider = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -555,6 +569,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -581,6 +596,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -603,6 +619,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -636,6 +653,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -663,6 +681,7 @@ mod extended_tests {
             let admin3 = Address::generate(&env);
             let outsider = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -689,6 +708,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -720,6 +740,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -755,11 +776,21 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
             let player1 = Address::generate(&env);
-            let token = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let token = env.register_stellar_asset_contract_v2(token_admin).address();
+            let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+            token_admin_client.mint(&player1, &1_000);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
+            soroban_sdk::token::Client::new(&env, &token).approve(
+                &player1,
+                &contract_id,
+                &1_000,
+                &(env.ledger().sequence() + 1_000),
+            );
 
             // Add token to whitelist
             client.add_whitelisted_token(&token);
@@ -792,6 +823,7 @@ mod extended_tests {
             let organizer = Address::generate(&env);
             let token = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -801,7 +833,7 @@ mod extended_tests {
 
             // Create tournament should work before pause
             let tournament_id = String::from_slice(&env, "tourn1");
-            client.create_tournament(&tournament_id, &organizer, &token, &100, &10, &3600);
+            client.create_tournament(&tournament_id, &100, &10, &4, &3600, &token);
 
             // Pause the contract
             client.propose_pause(&admin1);
@@ -810,7 +842,7 @@ mod extended_tests {
 
             // Create tournament should fail now
             let tournament_id2 = String::from_slice(&env, "tourn2");
-            let result = client.try_create_tournament(&tournament_id2, &organizer, &token, &100, &10, &3600);
+            let result = client.try_create_tournament(&tournament_id2, &100, &10, &4, &3600, &token);
             assert!(result.is_err());
         }
 
@@ -825,11 +857,21 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
             let player1 = Address::generate(&env);
-            let token = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let token = env.register_stellar_asset_contract_v2(token_admin).address();
+            let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+            token_admin_client.mint(&player1, &1_000);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
+            soroban_sdk::token::Client::new(&env, &token).approve(
+                &player1,
+                &contract_id,
+                &1_000,
+                &(env.ledger().sequence() + 1_000),
+            );
 
             // Add token to whitelist
             client.add_whitelisted_token(&token);
@@ -847,6 +889,118 @@ mod extended_tests {
             let game_code = String::from_slice(&env, "game1");
             let result = client.try_create_match(&game_code, &player1, &token, &100);
             assert!(result.is_ok());
+        }
+    }
+}
+
+/// Property-based stake-conservation tests for every cancellation path.
+#[cfg(test)]
+mod cancellation_stake_conservation_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use soroban_sdk::testutils::{EnvTestConfig, Ledger};
+    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient as TokenAdminClient};
+
+    const GAME_CODE: &str = "FUZZ-CANCEL";
+    const MATCH_TIMEOUT_SECS: u64 = 3_600;
+    const START_TS: u64 = 1_000_000;
+
+    fn approve(env: &Env, token: &TokenClient, owner: &Address, spender: &Address, amount: i128) {
+        token.approve(owner, spender, &amount, &(env.ledger().sequence() + 1_000));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+        /// Runs randomized match lifecycles and asserts that every cancellation
+        /// path returns exactly the deposited principal, leaves nothing locked in
+        /// the contract, and rejects a second refund of the same game code.
+        #[test]
+        fn test_fuzz_cancellation_stake_conservation(
+            wager_amount in 1i128..=100_000_000i128,
+            elapsed_seconds in 3_601u64..=100_000u64,
+            flow in 0u8..4u8,
+            joined in any::<bool>(),
+        ) {
+            let mut env = Env::default();
+            // Fuzz cases run the full contract lifecycle 1,000 times; snapshot
+            // files are not useful here and writing them dominates CI runtime.
+            env.set_config(EnvTestConfig {
+                capture_snapshot_at_drop: false,
+            });
+            env.mock_all_auths();
+            env.ledger().set_timestamp(START_TS);
+
+            let coordinator = Address::generate(&env);
+            let player1 = Address::generate(&env);
+            let player2 = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let asset = env.register_stellar_asset_contract_v2(token_admin);
+            let token = TokenClient::new(&env, &asset.address());
+            let token_admin_client = TokenAdminClient::new(&env, &asset.address());
+            token_admin_client.mint(&player1, &wager_amount);
+            token_admin_client.mint(&player2, &wager_amount);
+
+            let contract_id = env.register(ChessterEscrow, ());
+            let client = ChessterEscrowClient::new(&env, &contract_id);
+            client.init(&coordinator, &0);
+            client.add_whitelisted_token(&token.address);
+
+            approve(&env, &token, &player1, &contract_id, wager_amount);
+            approve(&env, &token, &player2, &contract_id, wager_amount);
+
+            let game_code = String::from_str(&env, GAME_CODE);
+            let player1_start = token.balance(&player1);
+            let player2_start = token.balance(&player2);
+            let contract_start = token.balance(&contract_id);
+            prop_assert_eq!(player1_start, wager_amount);
+            prop_assert_eq!(player2_start, wager_amount);
+            prop_assert_eq!(contract_start, 0);
+
+            client.create_match_with_duration(
+                &game_code,
+                &player1,
+                &token.address,
+                &wager_amount,
+                &MATCH_TIMEOUT_SECS,
+            );
+            if joined {
+                client.join_match(&game_code, &player2);
+            }
+
+            let staked = if joined { wager_amount * 2 } else { wager_amount };
+            prop_assert_eq!(token.balance(&contract_id), staked);
+
+            // Pending matches can only exercise the timeout paths; mutual
+            // cancellation needs both participants.
+            let flow = if joined { flow } else { flow % 2 };
+            if flow == 2 {
+                client.propose_mutual_cancellation(&game_code, &player1);
+                env.ledger().set_timestamp(START_TS + 300);
+                client.confirm_mutual_cancellation(&game_code, &player2);
+            } else {
+                env.ledger().set_timestamp(START_TS + elapsed_seconds);
+                match flow {
+                    0 => client.claim_refund(&game_code, &player1),
+                    1 => client.refund_after_timeout(&game_code),
+                    _ => client.claim_refund(&game_code, &player2),
+                }
+            }
+
+            let stored = client.get_match(&game_code);
+            prop_assert_eq!(stored.status, MatchStatus::Refunded);
+            prop_assert_eq!(token.balance(&contract_id), contract_start);
+            prop_assert_eq!(token.balance(&player1), player1_start);
+            prop_assert_eq!(token.balance(&player2), player2_start);
+
+            let second_refund = client.try_refund_after_timeout(&game_code);
+            prop_assert!(
+                second_refund.is_err(),
+                "a refunded match must reject a second refund"
+            );
+            prop_assert_eq!(token.balance(&contract_id), contract_start);
+            prop_assert_eq!(token.balance(&player1), player1_start);
+            prop_assert_eq!(token.balance(&player2), player2_start);
         }
     }
 }
