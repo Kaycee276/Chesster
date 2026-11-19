@@ -4,6 +4,7 @@ import GameLobby from "./components/GameLobby";
 import GamePage from "./pages/GamePage";
 import SpectatorPage from "./pages/SpectatorPage";
 import TournamentPage from "./pages/TournamentPage";
+import OfflineGameViewer from "./components/OfflineGameViewer";
 import PuzzlePage from "./pages/PuzzlePage";
 import GameSettings from "./components/GameSettings";
 import ReferralPage from "./pages/ReferralPage";
@@ -64,6 +65,7 @@ const App = () => {
 					path="/tournaments/:tournamentId/bracket"
 					element={<TournamentBracketPage />}
 				/>
+				<Route path="/offline-games" element={<OfflineGameViewer />} />
 				<Route path="/analysis" element={<AnalysisPage />} />
 				<Route path="/leaderboard" element={<LeaderboardPage />} />
 				<Route path="/status" element={<StatusPage />} />

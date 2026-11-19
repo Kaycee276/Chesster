@@ -6,6 +6,7 @@ const request = require("supertest");
 
 jest.mock("../models/puzzleModel", () => ({
 	getDailyPuzzle: jest.fn(),
+  getAdaptivePuzzle: jest.fn(),
 	getById: jest.fn(),
 }));
 jest.mock("../models/userModel", () => ({
@@ -46,6 +47,29 @@ describe("puzzle routes", () => {
 		});
 		expect(response.body.data.solution_moves).toBeUndefined();
 	});
+
+  test("GET /adaptive returns a rated playable line with promotion colors", async () => {
+    puzzleModel.getAdaptivePuzzle.mockResolvedValue({ id: "11111111-1111-4111-8111-111111111111",
+      fen: "test fen", side_to_move: "black", rating: 1520, solution_moves: ["a2a1q", "h7h8n"] });
+    const response = await request(buildApp()).get("/api/puzzles/adaptive?targetRating=1500&range=100");
+    expect(response.status).toBe(200);
+    expect(puzzleModel.getAdaptivePuzzle).toHaveBeenCalledWith(1500, 100, undefined);
+    expect(response.body.data).toMatchObject({ rating: 1520, sideToMove: "black", themes: [], solution: [
+      { from: [6, 0], to: [7, 0], promotion: "q" }, { from: [1, 7], to: [0, 7], promotion: "N" },
+    ] });
+  });
+
+  test.each(["", "?targetRating=abc", "?targetRating=1500&range=0", "?targetRating=1500&range=501", "?targetRating=1500&excludeId=bad"])("GET /adaptive rejects invalid parameters %s", async (query) => {
+    expect((await request(buildApp()).get(`/api/puzzles/adaptive${query}`)).status).toBe(400);
+    expect(puzzleModel.getAdaptivePuzzle).not.toHaveBeenCalled();
+  });
+
+  test("GET /adaptive reports an empty rating window and database errors", async () => {
+    puzzleModel.getAdaptivePuzzle.mockResolvedValueOnce(null);
+    expect((await request(buildApp()).get("/api/puzzles/adaptive?targetRating=1500")).status).toBe(404);
+    puzzleModel.getAdaptivePuzzle.mockRejectedValueOnce(new Error("database unavailable"));
+    expect((await request(buildApp()).get("/api/puzzles/adaptive?targetRating=1500")).status).toBe(500);
+  });
 
 	test("POST /:id/verify rewards an exact valid solution", async () => {
 		const id = "11111111-1111-4111-8111-111111111111";
