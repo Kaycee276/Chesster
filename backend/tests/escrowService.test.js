@@ -260,5 +260,86 @@ describe("Escrow Service", () => {
       );
     });
   });
+
+  describe("withRenewableLock (Issue #703)", () => {
+    let mockRedis;
+
+    beforeEach(() => {
+      mockRedis = {
+        set: jest.fn(),
+        expire: jest.fn(),
+        eval: jest.fn(),
+      };
+    });
+
+    it("acquires a lock and releases it after function completes", async () => {
+      mockRedis.set.mockResolvedValueOnce("OK");
+      mockRedis.eval.mockResolvedValueOnce(1);
+
+      const fn = jest.fn().mockResolvedValueOnce("result");
+      const result = await escrowService.withRenewableLock(mockRedis, "lock:test", "worker1", 30, fn);
+
+      expect(mockRedis.set).toHaveBeenCalledWith("lock:test", "worker1", "NX", "EX", 30);
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(result).toBe("result");
+      expect(mockRedis.eval).toHaveBeenCalled();
+    });
+
+    it("throws when lock acquisition fails", async () => {
+      mockRedis.set.mockResolvedValueOnce(null);
+
+      const fn = jest.fn();
+      await expect(escrowService.withRenewableLock(mockRedis, "lock:test", "worker1", 30, fn))
+        .rejects
+        .toThrow(/Failed to acquire lock/);
+      expect(fn).not.toHaveBeenCalled();
+    });
+
+    it("renews the lock periodically while function is running", async () => {
+      mockRedis.set.mockResolvedValueOnce("OK");
+      mockRedis.expire.mockResolvedValue(1);
+      mockRedis.eval.mockResolvedValueOnce(1);
+
+      let resolveFn;
+      const fn = jest.fn(() => new Promise(resolve => { resolveFn = resolve; }));
+
+      const promise = escrowService.withRenewableLock(mockRedis, "lock:test", "worker1", 30, fn);
+
+      await new Promise(r => setTimeout(r, 150));
+      resolveFn("done");
+
+      await promise;
+
+      expect(mockRedis.expire).toHaveBeenCalledWith("lock:test", 30);
+      expect(mockRedis.eval).toHaveBeenCalled();
+    });
+
+    it("clears renewal interval even if function throws", async () => {
+      mockRedis.set.mockResolvedValueOnce("OK");
+      mockRedis.expire.mockResolvedValue(1);
+      mockRedis.eval.mockResolvedValueOnce(1);
+
+      const error = new Error("function failed");
+      const fn = jest.fn().mockRejectedValueOnce(error);
+
+      await expect(escrowService.withRenewableLock(mockRedis, "lock:test", "worker1", 30, fn))
+        .rejects
+        .toThrow("function failed");
+
+      expect(mockRedis.eval).toHaveBeenCalled();
+    });
+
+    it("validates required parameters", async () => {
+      const fn = jest.fn();
+
+      await expect(escrowService.withRenewableLock(null, "lock", "worker", 30, fn))
+        .rejects
+        .toThrow("missing required arguments");
+
+      await expect(escrowService.withRenewableLock(mockRedis, null, "worker", 30, fn))
+        .rejects
+        .toThrow("missing required arguments");
+    });
+  });
 });
 

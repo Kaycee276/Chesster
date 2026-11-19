@@ -792,6 +792,81 @@ function resetUserSponsorship(userAddress) {
 	}
 }
 
+/**
+ * Wraps an async function with a renewable Redis lock (Issue #703).
+ * Acquires a lock before executing the function and extends the TTL periodically
+ * while the function is running. This prevents deadlocks when settlement takes longer
+ * than the initial TTL, which can happen during high Stellar network congestion.
+ *
+ * @param {object} redis - Redis client instance
+ * @param {string} lockKey - Redis key for the lock (e.g., "lock:escrow:match:ABC123")
+ * @param {string} workerId - Unique identifier for this worker/process
+ * @param {number} ttlSeconds - Lock TTL in seconds
+ * @param {function} fn - Async function to execute within the lock
+ * @returns {Promise<any>} Result of fn()
+ * @throws {Error} If lock acquisition fails or fn() throws
+ */
+async function withRenewableLock(redis, lockKey, workerId, ttlSeconds, fn) {
+	if (!redis || !lockKey || !workerId || !ttlSeconds || typeof fn !== 'function') {
+		throw new Error('withRenewableLock: missing required arguments');
+	}
+
+	const acquired = await redis.set(lockKey, workerId, 'NX', 'EX', ttlSeconds);
+	if (!acquired) {
+		throw new Error(`Failed to acquire lock: ${lockKey}`);
+	}
+
+	const renewalIntervalMs = Math.floor((ttlSeconds / 3) * 1000);
+	let renewalInterval = null;
+	let result;
+
+	try {
+		renewalInterval = setInterval(async () => {
+			try {
+				await redis.expire(lockKey, ttlSeconds);
+			} catch (err) {
+				console.error(`[Escrow] Lock renewal failed for ${lockKey}:`, err.message);
+				if (renewalInterval) {
+					clearInterval(renewalInterval);
+					renewalInterval = null;
+				}
+			}
+		}, renewalIntervalMs);
+
+		result = await fn();
+		return result;
+	} finally {
+		if (renewalInterval) {
+			clearInterval(renewalInterval);
+			renewalInterval = null;
+		}
+		await releaseLockSafe(redis, lockKey, workerId);
+	}
+}
+
+/**
+ * Safely releases a lock only if the current holder (workerId) matches.
+ * Uses a Lua script for atomicity.
+ *
+ * @param {object} redis - Redis client instance
+ * @param {string} lockKey - Redis key for the lock
+ * @param {string} workerId - Expected lock holder
+ */
+async function releaseLockSafe(redis, lockKey, workerId) {
+	const luaScript = `
+		if redis.call('GET', KEYS[1]) == ARGV[1] then
+			return redis.call('DEL', KEYS[1])
+		else
+			return 0
+		end
+	`;
+	try {
+		await redis.eval(luaScript, 1, lockKey, workerId);
+	} catch (err) {
+		console.error(`[Escrow] Safe lock release failed for ${lockKey}:`, err.message);
+	}
+}
+
 module.exports = {
 	init,
 	resolveMatch,
@@ -815,4 +890,6 @@ module.exports = {
 	getUserSponsorshipTotal,
 	getMatchAuditLogs,
 	resetUserSponsorship,
+	withRenewableLock,
+	releaseLockSafe,
 };

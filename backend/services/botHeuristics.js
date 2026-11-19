@@ -21,13 +21,80 @@ function coordsToSquare([row, col]) {
 
 const UCI_MOVE_PATTERN = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
 
-/** Return a deterministic, weighted opening-book response for a FEN position. */
-function getOpeningBookMove(fen, random = Math.random) {
+/**
+ * Zobrist hash table for board positions (Issue #704).
+ * Maps [piece][square] to a 64-bit hash to enable fast position lookups.
+ * Pieces: 0=empty, 1-6=white P,N,B,R,Q,K, 7-12=black p,n,b,r,q,k
+ */
+const zobristTable = Array(13).fill(null).map(() =>
+	Array(64).fill(null).map(() => Math.floor(Math.random() * 0xFFFFFFFF) * 0x100000000 + Math.floor(Math.random() * 0xFFFFFFFF))
+);
+
+const zobristBlackToMove = Math.floor(Math.random() * 0xFFFFFFFF) * 0x100000000 + Math.floor(Math.random() * 0xFFFFFFFF);
+
+/**
+ * Compute Zobrist hash for a board position (Issue #704).
+ * Hash is fast to compute and stable across repeated lookups for the same position.
+ * Returns a string representation of the hash for use as a key.
+ *
+ * @param {string[][]} board - 8x8 board array
+ * @param {string} turn - "white" or "black"
+ * @returns {string} Zobrist hash as hex string
+ */
+function computeZobristHash(board, turn) {
+	let hash = 0n;
+
+	for (let r = 0; r < 8; r++) {
+		for (let c = 0; c < 8; c++) {
+			const piece = board[r][c];
+			if (piece === ".") continue;
+
+			let pieceIndex = 0;
+			const isWhite = piece === piece.toUpperCase();
+			const lower = piece.toLowerCase();
+
+			switch (lower) {
+				case "p": pieceIndex = isWhite ? 1 : 7; break;
+				case "n": pieceIndex = isWhite ? 2 : 8; break;
+				case "b": pieceIndex = isWhite ? 3 : 9; break;
+				case "r": pieceIndex = isWhite ? 4 : 10; break;
+				case "q": pieceIndex = isWhite ? 5 : 11; break;
+				case "k": pieceIndex = isWhite ? 6 : 12; break;
+				default: continue;
+			}
+
+			const square = r * 8 + c;
+			hash ^= BigInt(zobristTable[pieceIndex][square]);
+		}
+	}
+
+	if (turn === "black") {
+		hash ^= BigInt(zobristBlackToMove);
+	}
+
+	return hash.toString(16);
+}
+
+/** Return a deterministic, weighted opening-book response for a board position (Issue #704).
+ * First tries Zobrist hash lookup for faster subsequent accesses, then falls back to FEN.
+ */
+function getOpeningBookMove(fen, random = Math.random, board = null, turn = null) {
 	if (typeof fen !== "string") return null;
+
+	// Try FEN-based lookup first (compatible with existing opening book format)
 	const parts = fen.split(" ");
 	const positionKey = parts.slice(0, 3).join(" ");
-	const options = openingBook[positionKey] || openingBook[`${parts[0]} ${parts[1]} -`];
-	if (!Array.isArray(options) || options.length === 0) return null;
+	let options = openingBook[positionKey] || openingBook[`${parts[0]} ${parts[1]} -`];
+
+	if (!Array.isArray(options) || options.length === 0) {
+		// If Zobrist board and turn provided, try Zobrist lookup as fallback
+		if (board && turn) {
+			const zobristKey = computeZobristHash(board, turn);
+			options = openingBook[zobristKey];
+		}
+		if (!Array.isArray(options) || options.length === 0) return null;
+	}
+
 	const totalWeight = options.reduce((sum, option) => sum + (option.weight || 1), 0);
 	let cursor = Math.max(0, Math.min(0.999999, random())) * totalWeight;
 	for (const option of options) {
@@ -111,6 +178,7 @@ module.exports = {
 	parseUciMove,
 	toUciMove,
 	getOpeningBookMove,
+	computeZobristHash,
 	getLegalMoves,
 	pickHeuristicMove,
 };

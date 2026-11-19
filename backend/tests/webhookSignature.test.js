@@ -59,19 +59,28 @@ describe("verifyIngressSignature (Issue #581)", () => {
 });
 
 describe("POST /api/webhooks/ingress (Issue #581)", () => {
-  const originalSecret = process.env.WEBHOOK_SECRET;
+  const originalPrimary = process.env.WEBHOOK_SECRET_PRIMARY;
+  const originalFallback = process.env.WEBHOOK_SECRET;
+  const originalSecondary = process.env.WEBHOOK_SECRET_SECONDARY;
   let app;
   const payload = JSON.stringify({ event: "deposit.confirmed", gameCode: "ABC123" });
 
   beforeEach(() => {
-    process.env.WEBHOOK_SECRET = SECRET;
+    process.env.WEBHOOK_SECRET_PRIMARY = SECRET;
+    delete process.env.WEBHOOK_SECRET_SECONDARY;
     app = express();
     app.use("/api/webhooks", webhookRoutes);
   });
 
   afterAll(() => {
-    if (originalSecret === undefined) delete process.env.WEBHOOK_SECRET;
-    else process.env.WEBHOOK_SECRET = originalSecret;
+    if (originalPrimary === undefined) delete process.env.WEBHOOK_SECRET_PRIMARY;
+    else process.env.WEBHOOK_SECRET_PRIMARY = originalPrimary;
+
+    if (originalSecondary === undefined) delete process.env.WEBHOOK_SECRET_SECONDARY;
+    else process.env.WEBHOOK_SECRET_SECONDARY = originalSecondary;
+
+    if (originalFallback === undefined) delete process.env.WEBHOOK_SECRET;
+    else process.env.WEBHOOK_SECRET = originalFallback;
   });
 
   const post = (body, headers = {}) =>
@@ -129,6 +138,47 @@ describe("POST /api/webhooks/ingress (Issue #581)", () => {
     const bad = "{not json";
     const res = await post(bad, { "x-chesster-signature": sign(bad) });
     expect(res.status).toBe(400);
+  });
+
+  describe("dual-secret rotation (Issue #702)", () => {
+    test("accepts webhook signed with primary secret when secondary is not configured", async () => {
+      process.env.WEBHOOK_SECRET_PRIMARY = SECRET;
+      delete process.env.WEBHOOK_SECRET_SECONDARY;
+      const res = await post(payload, { "x-chesster-signature": sign(payload, SECRET) });
+      expect(res.status).toBe(202);
+    });
+
+    test("accepts webhook signed with primary secret when secondary is configured", async () => {
+      const secondarySecret = "secondary-webhook-secret";
+      process.env.WEBHOOK_SECRET_PRIMARY = SECRET;
+      process.env.WEBHOOK_SECRET_SECONDARY = secondarySecret;
+      const res = await post(payload, { "x-chesster-signature": sign(payload, SECRET) });
+      expect(res.status).toBe(202);
+    });
+
+    test("accepts webhook signed with secondary secret", async () => {
+      const secondarySecret = "secondary-webhook-secret";
+      process.env.WEBHOOK_SECRET_PRIMARY = SECRET;
+      process.env.WEBHOOK_SECRET_SECONDARY = secondarySecret;
+      const res = await post(payload, { "x-chesster-signature": sign(payload, secondarySecret) });
+      expect(res.status).toBe(202);
+    });
+
+    test("rejects webhook signed with neither primary nor secondary secret", async () => {
+      const wrongSecret = "wrong-webhook-secret";
+      process.env.WEBHOOK_SECRET_PRIMARY = SECRET;
+      process.env.WEBHOOK_SECRET_SECONDARY = "secondary-webhook-secret";
+      const res = await post(payload, { "x-chesster-signature": sign(payload, wrongSecret) });
+      expect(res.status).toBe(401);
+    });
+
+    test("falls back to WEBHOOK_SECRET for backward compatibility", async () => {
+      delete process.env.WEBHOOK_SECRET_PRIMARY;
+      process.env.WEBHOOK_SECRET = SECRET;
+      delete process.env.WEBHOOK_SECRET_SECONDARY;
+      const res = await post(payload, { "x-chesster-signature": sign(payload, SECRET) });
+      expect(res.status).toBe(202);
+    });
   });
 
   test("exposes the parsed payload and raw body to downstream handlers", async () => {
