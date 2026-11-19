@@ -19,7 +19,9 @@ function reject(res) {
 /**
  * Verifies the x-chesster-signature header against the raw body and
  * WEBHOOK_SECRET, then exposes the parsed payload as req.body (Issue #581).
- * Missing headers, missing secret, altered payloads and bad signatures all
+ * Supports dual-secret rotation (Issue #702) for zero-downtime key rotation:
+ * attempts primary secret first, then secondary if configured.
+ * Missing headers, missing secrets, altered payloads and bad signatures all
  * return 401 with an identical response so callers learn nothing about why.
  */
 function verifySignature(req, res, next) {
@@ -29,13 +31,25 @@ function verifySignature(req, res, next) {
     return reject(res);
   }
 
-  const secret = process.env.WEBHOOK_SECRET;
-  if (!secret) {
-    logger.error("[webhookAuth] WEBHOOK_SECRET is not configured; rejecting inbound webhook");
+  const primarySecret = process.env.WEBHOOK_SECRET_PRIMARY || process.env.WEBHOOK_SECRET;
+  const secondarySecret = process.env.WEBHOOK_SECRET_SECONDARY;
+
+  if (!primarySecret && !secondarySecret) {
+    logger.error("[webhookAuth] Neither WEBHOOK_SECRET_PRIMARY nor WEBHOOK_SECRET_SECONDARY is configured; rejecting inbound webhook");
     return reject(res);
   }
 
-  if (!verifyIngressSignature(rawBody, req.headers[SIGNATURE_HEADER], secret)) {
+  const signature = req.headers[SIGNATURE_HEADER];
+  let verified = false;
+
+  if (primarySecret && verifyIngressSignature(rawBody, signature, primarySecret)) {
+    verified = true;
+  } else if (secondarySecret && verifyIngressSignature(rawBody, signature, secondarySecret)) {
+    logger.info("[webhookAuth] Request authenticated using secondary rotated secret");
+    verified = true;
+  }
+
+  if (!verified) {
     return reject(res);
   }
 
