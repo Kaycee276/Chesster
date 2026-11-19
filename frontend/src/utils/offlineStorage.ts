@@ -66,6 +66,9 @@ export function loadOfflinePgn(pgn: string): Chess {
   );
   const chess = new Chess();
   chess.loadPgn(safe);
+  if (decoded.Result && decoded.Result !== chess.getHeaders().Result) {
+    throw new Error("The PGN header result does not match its move text result.");
+  }
   for (const [tag, value] of Object.entries(decoded)) chess.setHeader(tag, value);
   return chess;
 }

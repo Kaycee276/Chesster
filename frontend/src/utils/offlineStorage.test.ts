@@ -94,6 +94,8 @@ describe("offline replay archives", () => {
     JSON.stringify([game, { ...game, result: "invalid" }]),
     JSON.stringify([game, { ...game, pgn: "1. e5 *" }]),
     JSON.stringify([{ ...game, result: "0-1" }]),
+    '[Result "0-1"]\n\n1. e4 e5 1-0',
+    JSON.stringify([{ ...game, result: "0-1", pgn: '[Result "0-1"]\n\n1. e4 e5 1-0' }]),
   ])("rejects invalid input without writing any games: %s", async (content) => {
     await expect(importOfflineGames(content)).rejects.toThrow();
     expect(await getAllOfflineGames()).toEqual([]);
