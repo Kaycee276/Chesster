@@ -9,16 +9,21 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import AnalysisPage from "./AnalysisPage";
 import { useToastStore } from "../store/toastStore";
+import { useStockfishEvaluation } from "../hooks/useStockfishEvaluation";
+
+vi.mock("../hooks/useStockfishEvaluation", () => ({
+	useStockfishEvaluation: vi.fn(() => ({ status: "ready", evaluation: null, variations: [] })),
+}));
 
 // The accuracy hook spawns a Stockfish worker; stub it so the page renders
 // in jsdom without one.
 vi.mock("../hooks/useMoveAccuracyAnalysis", () => ({
 	ANALYSIS_SEARCH_DEPTH: 10,
-	useMoveAccuracyAnalysis: () => ({
+	useMoveAccuracyAnalysis: (moves: unknown[]) => ({
 		progress: "idle",
 		evaluated: 0,
 		total: 0,
-		evaluations: [],
+		evaluations: moves.length ? [0, -420, -420, ...moves.slice(2).map(() => -420)] : [],
 		result: null,
 	}),
 }));
@@ -63,6 +68,7 @@ function makePgnFile(content: string, name = "games.pgn") {
 }
 
 beforeEach(() => {
+	vi.mocked(useStockfishEvaluation).mockClear();
 	useToastStore.setState({ toasts: [] });
 });
 
@@ -71,6 +77,20 @@ afterEach(() => {
 });
 
 describe("AnalysisPage PGN drag-and-drop (#318)", () => {
+	it("seeks a graph blunder to its board position and requests candidate analysis", async () => {
+		renderPage();
+		dropFile(makePgnFile(SINGLE_GAME));
+		await screen.findByText(/Alice vs Bob · 1-0/, {}, { timeout: 5000 });
+		const blunder = screen.getByRole("button", { name: "1. e4?? · Blunder (-4.20 pawns)" });
+		fireEvent.click(blunder);
+		await waitFor(() => {
+			const [fen, options] = vi.mocked(useStockfishEvaluation).mock.calls.at(-1)!;
+			expect(fen?.split(" ").slice(0, 2).join(" ")).toBe("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b");
+			expect(options).toMatchObject({ enabled: true });
+		});
+		expect(blunder).toHaveAttribute("aria-pressed", "true");
+	});
+
 	it("loads a dropped single-game PGN instantly", async () => {
 		renderPage();
 

@@ -18,7 +18,7 @@ CREATE TABLE games (
 
 -- Moves table
 CREATE TABLE moves (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID NOT NULL DEFAULT gen_random_uuid(),
   game_id UUID REFERENCES games(id) ON DELETE CASCADE,
   move_number INTEGER NOT NULL,
   player VARCHAR(10) NOT NULL,
@@ -26,8 +26,25 @@ CREATE TABLE moves (
   to_position JSONB NOT NULL,
   piece VARCHAR(5) NOT NULL,
   board_state_after JSONB NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
+
+-- Bootstrap current and upcoming UTC months. Migration 031 covers existing data.
+DO $$
+DECLARE
+  month_start timestamptz;
+  month_end timestamptz;
+BEGIN
+  FOR n IN 0..2 LOOP
+    month_start := (date_trunc('month', now() AT TIME ZONE 'UTC') + n * interval '1 month') AT TIME ZONE 'UTC';
+    month_end := ((month_start AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC';
+    EXECUTE format('CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.moves FOR VALUES FROM (%L) TO (%L)',
+      'moves_' || to_char(month_start AT TIME ZONE 'UTC', 'YYYY_MM'), month_start, month_end);
+  END LOOP;
+END $$;
+CREATE TABLE IF NOT EXISTS moves_default PARTITION OF moves DEFAULT;
+ALTER TABLE moves_default ENABLE ROW LEVEL SECURITY;
 
 -- Migration: add turn timer support
 ALTER TABLE games ADD COLUMN turn_started_at TIMESTAMP WITH TIME ZONE;

@@ -636,19 +636,14 @@ class ChessEngine {
    * `evaluationCp`/`centipawns`; missing telemetry is intentionally omitted.
    */
   generateRichPgn(moves = [], metadata = {}) {
+    const { getSevenTagRoster, escapePgnTag } = require("./pgnService");
     const headers = {
-      Event: metadata.event || "Chesster Game",
-      Site: metadata.site || "Chesster",
-      Date: metadata.date || (metadata.createdAt ? String(metadata.createdAt).slice(0, 10).replaceAll("-", ".") : "????.??.??"),
-      Round: metadata.round || "-",
-      White: metadata.white || "?",
-      Black: metadata.black || "?",
-      Result: metadata.result || "*",
+      ...getSevenTagRoster(metadata),
       TimeControl: metadata.timeControl || "-",
       Termination: metadata.termination || "normal",
     };
     const tagText = Object.entries(headers)
-      .map(([name, value]) => `[${name} "${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"]`)
+      .map(([name, value]) => `[${name} "${escapePgnTag(value)}"]`)
       .join("\n");
     let board = (metadata.startBoard || this.initBoard()).map((row) => [...row]);
     const tokens = [];
