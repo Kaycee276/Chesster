@@ -5133,6 +5133,8 @@ fn test_organizer_tier_zero_fee_match() {
 
     s.client.set_organizer_tier(&player1, &OrganizerTier::Gold);
     s.client.set_fee_bps(&0);
+    env.ledger().set_timestamp(TIMELOCK_DELAY_SECONDS);
+    s.client.apply_protocol_fee(&s.client.get_coordinator());
 
     let game_code = create_organizer_match(&env, &s, "ORG_ZERO_FEE", &player1, &player2, 100);
     s.client.resolve_match(&game_code, &Some(player1.clone()));
@@ -10125,4 +10127,167 @@ fn test_create_match_rejects_zero_wager_even_with_token_minimum() {
         res.unwrap_err(),
         Ok(contract_error(EscrowError::InvalidWager as u32))
     );
+}
+
+#[test]
+fn test_protocol_fee_timelock_boundary_and_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+    let admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &500);
+
+    client.propose_protocol_fee(&admin, &1_000);
+    let unlock_time = 1_000 + TIMELOCK_DELAY_SECONDS;
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        topics,
+        (Symbol::new(&env, "fee_change_proposed"),).into_val(&env)
+    );
+    assert_eq!(
+        FeeChangeProposedEvent::try_from_val(&env, &data).unwrap(),
+        FeeChangeProposedEvent {
+            admin: admin.clone(),
+            new_fee_bps: 1_000,
+            unlock_time,
+        }
+    );
+
+    env.ledger().set_timestamp(unlock_time - 1);
+    assert_eq!(
+        client.try_apply_protocol_fee(&admin),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowErrorExt::TimelockNotElapsed as u32
+        )))
+    );
+    assert_eq!(client.get_fee_bps(), 500);
+    env.ledger().set_timestamp(unlock_time);
+    client.apply_protocol_fee(&admin);
+    let (_, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        topics,
+        (Symbol::new(&env, "fee_change_applied"),).into_val(&env)
+    );
+    assert_eq!(
+        FeeChangeAppliedEvent::try_from_val(&env, &data).unwrap(),
+        FeeChangeAppliedEvent {
+            admin: admin.clone(),
+            old_fee_bps: 500,
+            new_fee_bps: 1_000,
+        }
+    );
+    assert_eq!(client.get_fee_bps(), 1_000);
+    env.as_contract(&contract_id, || {
+        assert!(!env.storage().instance().has(&DataKey::ProposedFee));
+        assert!(!env.storage().instance().has(&DataKey::FeeUnlockTime));
+    });
+    assert_eq!(
+        client.try_apply_protocol_fee(&admin),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowErrorExt::NoPendingFeeProposal as u32
+        )))
+    );
+}
+
+#[test]
+fn test_protocol_fee_missing_proposal_and_fee_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &500);
+    assert_eq!(
+        client.try_apply_protocol_fee(&admin),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowErrorExt::NoPendingFeeProposal as u32
+        )))
+    );
+    assert_eq!(
+        client.try_propose_protocol_fee(&admin, &1_001),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowErrorExt::FeeTooHigh as u32
+        )))
+    );
+    assert_eq!(client.get_fee_bps(), 500);
+    client.propose_protocol_fee(&admin, &0);
+    env.ledger().set_timestamp(TIMELOCK_DELAY_SECONDS + 1);
+    client.apply_protocol_fee(&admin);
+    assert_eq!(client.get_fee_bps(), 0);
+}
+
+#[test]
+fn test_protocol_fee_reproposal_restarts_full_delay_and_legacy_setter_cannot_bypass() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &500);
+    client.propose_protocol_fee(&admin, &600);
+    env.ledger().set_timestamp(TIMELOCK_DELAY_SECONDS - 1);
+    client.set_fee_bps(&700);
+    assert_eq!(client.get_fee_bps(), 500);
+    env.ledger().set_timestamp(TIMELOCK_DELAY_SECONDS);
+    assert_eq!(
+        client.try_apply_protocol_fee(&admin),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowErrorExt::TimelockNotElapsed as u32
+        )))
+    );
+    env.ledger().set_timestamp(TIMELOCK_DELAY_SECONDS * 2 - 1);
+    client.apply_protocol_fee(&admin);
+    assert_eq!(client.get_fee_bps(), 700);
+}
+
+#[test]
+fn test_protocol_fee_only_authenticated_admin_can_propose_and_apply() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let other = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &500);
+    assert_eq!(
+        client.try_propose_protocol_fee(&other, &600),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::Unauthorized as u32
+        )))
+    );
+    client.propose_protocol_fee(&admin, &600);
+    env.ledger().set_timestamp(TIMELOCK_DELAY_SECONDS);
+    assert_eq!(
+        client.try_apply_protocol_fee(&other),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::Unauthorized as u32
+        )))
+    );
+    env.mock_auths(&[]);
+    assert!(client.try_propose_protocol_fee(&admin, &700).is_err());
+    assert!(client.try_apply_protocol_fee(&admin).is_err());
+    assert_eq!(client.get_fee_bps(), 500);
+}
+
+#[test]
+fn test_protocol_fee_timestamp_overflow_does_not_create_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &500);
+    env.ledger().set_timestamp(u64::MAX);
+    assert_eq!(
+        client.try_propose_protocol_fee(&admin, &600),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowErrorExt::ArithmeticOverflow as u32
+        )))
+    );
+    assert_eq!(client.get_fee_bps(), 500);
+    env.as_contract(&contract_id, || {
+        assert!(!env.storage().instance().has(&DataKey::ProposedFee))
+    });
 }

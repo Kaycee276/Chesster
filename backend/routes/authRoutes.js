@@ -9,6 +9,8 @@ const { createAuthChallengeRateLimiter } = require("../middleware/rateLimiter");
 // DoS attempts (Issue #435).
 const authChallengeRateLimiter = createAuthChallengeRateLimiter();
 
+router.get("/auth/nonce", authChallengeRateLimiter, authController.generateNonce);
+router.post("/auth/verify", authController.verify);
 router.post("/auth/challenge", authChallengeRateLimiter, authController.createChallenge);
 router.post("/auth/login", authController.login);
 router.get("/auth/profile", requireAuth, authController.getProfile);

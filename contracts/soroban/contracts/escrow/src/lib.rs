@@ -10,6 +10,10 @@ pub const STORAGE_TTL_THRESHOLD: u32 = 103_680;
 pub const STORAGE_TTL_EXTENDED: u32 = 518_400;
 /// Duration (in seconds) disputed funds stay locked before arbitration (48 hours).
 pub const DISPUTE_TIMELOCK_SECS: u64 = 172_800;
+/// Minimum notice before a protocol fee change can take effect (48 hours).
+pub const TIMELOCK_DELAY_SECONDS: u64 = 172_800;
+/// Maximum base protocol fee (1,000 basis points = 10%).
+pub const MAX_PROTOCOL_FEE_BPS: u32 = 1_000;
 /// Maximum number of matches resolvable in a single atomic batch transaction.
 pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
 /// Maximum number of expired waiting lobbies refundable in one transaction (Issue #503).
@@ -187,6 +191,12 @@ pub enum EscrowErrorExt {
     SelfMatchNotAllowed = 60,
     /// Provided address parameter is invalid or null.
     InvalidAddress = 61,
+    /// A protocol fee proposal cannot be applied before its activation time.
+    TimelockNotElapsed = 62,
+    /// No protocol fee change is awaiting activation.
+    NoPendingFeeProposal = 63,
+    /// Proposed base protocol fee exceeds the 10 percent cap.
+    FeeTooHigh = 64,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -1083,6 +1093,24 @@ pub struct RatingCommitmentPayload {
     pub games_played: u32,
 }
 
+/// Advance notice of a base protocol fee change.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeChangeProposedEvent {
+    pub admin: Address,
+    pub new_fee_bps: u32,
+    pub unlock_time: u64,
+}
+
+/// A base protocol fee change has taken effect after the timelock.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeChangeAppliedEvent {
+    pub admin: Address,
+    pub old_fee_bps: u32,
+    pub new_fee_bps: u32,
+}
+
 /// Storage keys for rating and escrow extensions.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1117,6 +1145,10 @@ pub enum DataKey {
     IsPaused,
     /// Protocol fee discount tier of an organizer (Issue #578).
     OrganizerTier(Address),
+    /// Proposed base fee in basis points, awaiting the governance timelock.
+    ProposedFee,
+    /// Ledger timestamp when the pending protocol fee may be applied.
+    FeeUnlockTime,
 }
 
 /// Aggregated operational metrics for off-chain indexing and monitoring (Issue #288).
@@ -1838,20 +1870,80 @@ impl ChessterEscrow {
             .unwrap_or(0)
     }
 
-    /// Configures base platform fee basis points (Issue #19).
-    ///
-    /// # Arguments
-    /// * `env` - Environment reference.
-    /// * `fee_bps` - Fee basis points (e.g. 500 = 5%).
+    /// Legacy fee setter now proposes a change instead of applying it immediately.
+    /// Call `apply_protocol_fee` after the 48 hour notice period to activate it.
     pub fn set_fee_bps(env: Env, fee_bps: u32) {
         let coordinator = Self::get_coordinator(env.clone());
-        coordinator.require_auth();
-        if fee_bps > 10000 {
-            panic_with_error!(&env, EscrowError::InvalidWager);
+        Self::propose_protocol_fee(env, coordinator, fee_bps);
+    }
+
+    /// Proposes a base protocol fee update. Replacing a proposal restarts the
+    /// full notice period; the current fee remains in force until application.
+    pub fn propose_protocol_fee(env: Env, admin: Address, new_fee_bps: u32) {
+        admin.require_auth();
+        if admin != Self::get_coordinator(env.clone()) {
+            panic_with_error!(&env, EscrowError::Unauthorized);
         }
+        if new_fee_bps > MAX_PROTOCOL_FEE_BPS {
+            panic_with_error!(&env, EscrowErrorExt::FeeTooHigh);
+        }
+        let unlock_time = env
+            .ledger()
+            .timestamp()
+            .checked_add(TIMELOCK_DELAY_SECONDS)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
         env.storage()
             .instance()
-            .set(&symbol_short!("fee"), &fee_bps);
+            .set(&DataKey::ProposedFee, &new_fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeUnlockTime, &unlock_time);
+        env.storage()
+            .instance()
+            .extend_ttl(STORAGE_TTL_THRESHOLD, STORAGE_TTL_EXTENDED);
+        env.events().publish(
+            (Symbol::new(&env, "fee_change_proposed"),),
+            FeeChangeProposedEvent {
+                admin,
+                new_fee_bps,
+                unlock_time,
+            },
+        );
+    }
+
+    /// Activates the pending fee at or after its announced ledger timestamp.
+    pub fn apply_protocol_fee(env: Env, admin: Address) {
+        admin.require_auth();
+        if admin != Self::get_coordinator(env.clone()) {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+        let unlock_time: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeUnlockTime)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::NoPendingFeeProposal));
+        let new_fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposedFee)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::NoPendingFeeProposal));
+        if env.ledger().timestamp() < unlock_time {
+            panic_with_error!(&env, EscrowErrorExt::TimelockNotElapsed);
+        }
+        let old_fee_bps = Self::get_fee_bps(env.clone());
+        env.storage()
+            .instance()
+            .set(&symbol_short!("fee"), &new_fee_bps);
+        env.storage().instance().remove(&DataKey::ProposedFee);
+        env.storage().instance().remove(&DataKey::FeeUnlockTime);
+        env.events().publish(
+            (Symbol::new(&env, "fee_change_applied"),),
+            FeeChangeAppliedEvent {
+                admin,
+                old_fee_bps,
+                new_fee_bps,
+            },
+        );
     }
 
     /// Calculates platform fee basis points based on wager amount tiering (Issue #19).
