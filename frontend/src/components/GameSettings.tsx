@@ -15,6 +15,8 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
   const toggleHaptics = useGameStore((s) => s.toggleHaptics);
   const isMoveConfirmationEnabled = useGameStore((s) => s.isMoveConfirmationEnabled);
   const toggleMoveConfirmation = useGameStore((s) => s.toggleMoveConfirmation);
+  const isFigurineNotation = useGameStore((s) => s.isFigurineNotation);
+  const toggleFigurineNotation = useGameStore((s) => s.toggleFigurineNotation);
   const masterVolume = useGameStore((s) => s.masterVolume);
   const setMasterVolume = useGameStore((s) => s.setMasterVolume);
   const pieceSet = useGameStore((s) => s.pieceSet);
@@ -93,7 +95,10 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
 
             <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
               <div className="flex items-center justify-between">
-                <label htmlFor="master-volume" className="flex items-center gap-2 text-sm font-semibold">
+                <label
+                  htmlFor="master-volume"
+                  className="flex items-center gap-2 text-sm font-semibold"
+                >
                   <Volume2 size={16} /> Master volume
                 </label>
                 <output htmlFor="master-volume" className="text-xs text-(--text-tertiary)">
@@ -124,9 +129,21 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
               </div>
               <div className="grid grid-cols-1 gap-2">
                 {[
-                  { key: "classic-wood" as const, name: "Classic Wood", description: "Warm, resonant wooden board impacts" },
-                  { key: "modern-digital" as const, name: "Modern Digital", description: "Crisp, synthesized click and chime cues" },
-                  { key: "lofi-soft" as const, name: "Low-Fi Soft", description: "Muted, subtle organic taps" },
+                  {
+                    key: "classic-wood" as const,
+                    name: "Classic Wood",
+                    description: "Warm, resonant wooden board impacts",
+                  },
+                  {
+                    key: "modern-digital" as const,
+                    name: "Modern Digital",
+                    description: "Crisp, synthesized click and chime cues",
+                  },
+                  {
+                    key: "lofi-soft" as const,
+                    name: "Low-Fi Soft",
+                    description: "Muted, subtle organic taps",
+                  },
                 ].map((pack) => (
                   <div
                     key={pack.key}
@@ -182,7 +199,10 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                         : "border-(--border) hover:border-(--accent-primary)/60"
                     }`}
                   >
-                    <span className="grid h-7 w-7 grid-cols-2 grid-rows-2 overflow-hidden rounded-sm border border-black/20" aria-hidden="true">
+                    <span
+                      className="grid h-7 w-7 grid-cols-2 grid-rows-2 overflow-hidden rounded-sm border border-black/20"
+                      aria-hidden="true"
+                    >
                       <span style={{ backgroundColor: theme.light }} />
                       <span style={{ backgroundColor: theme.dark }} />
                       <span style={{ backgroundColor: theme.dark }} />
@@ -249,7 +269,11 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
               </div>
 
               {/* Progressive Blindfold Radio Options */}
-              <div className="grid grid-cols-2 gap-2 pt-1" role="radiogroup" aria-label="Blindfold Mode Options">
+              <div
+                className="grid grid-cols-2 gap-2 pt-1"
+                role="radiogroup"
+                aria-label="Blindfold Mode Options"
+              >
                 {[
                   { value: "none", label: "Visible (None)" },
                   { value: "white", label: "Hide White" },
@@ -269,7 +293,9 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                       name="blindfoldMode"
                       value={opt.value}
                       checked={blindfoldMode === opt.value}
-                      onChange={() => setBlindfoldMode(opt.value as "none" | "white" | "black" | "all")}
+                      onChange={() =>
+                        setBlindfoldMode(opt.value as "none" | "white" | "black" | "all")
+                      }
                       className="accent-(--accent-primary)"
                     />
                     <span>{opt.label}</span>
@@ -279,8 +305,8 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
             </div>
 
             <p className="text-xs text-(--text-secondary) leading-relaxed">
-              Configure partial blindfold (hide white or black pieces) or full blindfold.
-              When hidden, pieces appear as subtle markers. Use the peek button to reveal pieces.
+              Configure partial blindfold (hide white or black pieces) or full blindfold. When
+              hidden, pieces appear as subtle markers. Use the peek button to reveal pieces.
             </p>
 
             {/* Streamer Mode Toggle */}
@@ -361,6 +387,34 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   <div
                     className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
                       isMoveConfirmationEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Figurine Algebraic Notation Toggle (#661) */}
+            <div className="flex flex-col gap-3 pt-3 border-t border-(--border)">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Figurine Notation</label>
+                  <p className="text-xs text-(--text-tertiary)">
+                    Display chess piece Unicode symbols (♔, ♕, ♖, ♗, ♘) in move history
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleFigurineNotation}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    isFigurineNotation ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={isFigurineNotation}
+                  aria-label="Toggle figurine notation"
+                >
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      isFigurineNotation ? "translate-x-5" : "translate-x-0.5"
                     }`}
                   />
                 </button>

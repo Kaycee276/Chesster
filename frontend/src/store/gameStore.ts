@@ -76,7 +76,9 @@ interface GameStore {
   // Premove queue (#473): speculative move entered during opponent's turn.
   // Squares use board indices to match ChessBoard; promotion is "q"|"r"|"b"|"n".
   queuedPremove: { from: [number, number]; to: [number, number]; promotion?: string } | null;
-  setQueuedPremove: (premove: { from: [number, number]; to: [number, number]; promotion?: string } | null) => void;
+  setQueuedPremove: (
+    premove: { from: [number, number]; to: [number, number]; promotion?: string } | null
+  ) => void;
   clearPremove: () => void;
   // Move history + board playback rewind
   moveHistory: MoveRecord[];
@@ -111,6 +113,10 @@ interface GameStore {
   // Piece set preference for rendering (Issue #495)
   pieceSet: PieceSetKey | "classic";
   setPieceSet: (set: PieceSetKey | "classic") => void;
+  // Figurine Algebraic Notation (Issue #661)
+  isFigurineNotation: boolean;
+  toggleFigurineNotation: () => void;
+  setFigurineNotation: (enabled: boolean) => void;
   masterVolume: number;
   setMasterVolume: (volume: number) => void;
   // Settings modal visibility
@@ -187,6 +193,7 @@ export const useGameStore = create<GameStore>()(
       isStreamerMode: false,
       isHapticsEnabled: true,
       isMoveConfirmationEnabled: false,
+      isFigurineNotation: false,
       pieceSet: "classic" as "classic" | "neo" | "wood",
       masterVolume: soundService.getVolume(),
       isSettingsOpen: false,
@@ -199,23 +206,20 @@ export const useGameStore = create<GameStore>()(
           const next = isActive ? "none" : "all";
           return { blindfoldMode: next, isBlindfoldMode: !isActive };
         }),
-      toggleStreamerMode: () =>
-        set((s) => ({ isStreamerMode: !s.isStreamerMode })),
-      toggleOpponentMute: () =>
-        set((s) => ({ isOpponentMuted: !s.isOpponentMuted })),
-      toggleHaptics: () =>
-        set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
+      toggleStreamerMode: () => set((s) => ({ isStreamerMode: !s.isStreamerMode })),
+      toggleOpponentMute: () => set((s) => ({ isOpponentMuted: !s.isOpponentMuted })),
+      toggleHaptics: () => set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
       toggleMoveConfirmation: () =>
         set((s) => ({ isMoveConfirmationEnabled: !s.isMoveConfirmationEnabled })),
-      setPieceSet: (set_value: PieceSetKey | "classic") =>
-        set({ pieceSet: set_value }),
+      toggleFigurineNotation: () => set((s) => ({ isFigurineNotation: !s.isFigurineNotation })),
+      setFigurineNotation: (enabled: boolean) => set({ isFigurineNotation: enabled }),
+      setPieceSet: (set_value: PieceSetKey | "classic") => set({ pieceSet: set_value }),
       setMasterVolume: (volume: number) => {
         const normalized = Math.min(1, Math.max(0, volume));
         soundService.setMasterVolume(normalized);
         set({ masterVolume: normalized });
       },
-      setSettingsOpen: (open: boolean) =>
-        set({ isSettingsOpen: open }),
+      setSettingsOpen: (open: boolean) => set({ isSettingsOpen: open }),
 
       // Network state setters (Issue #401)
       setPingMs: (ms: number) => set({ pingMs: ms }),
@@ -480,7 +484,9 @@ export const useGameStore = create<GameStore>()(
           set({ queuedPremove: null, selectedSquare: null });
           try {
             soundService.lowTime();
-          } catch { /* ignore audio failures */ }
+          } catch {
+            /* ignore audio failures */
+          }
           return false;
         }
         const premove = queuedPremove;
@@ -491,7 +497,9 @@ export const useGameStore = create<GameStore>()(
         } catch {
           try {
             soundService.lowTime();
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
           return false;
         }
       },
@@ -638,6 +646,7 @@ export const useGameStore = create<GameStore>()(
         isHapticsEnabled: state.isHapticsEnabled,
         isMoveConfirmationEnabled: state.isMoveConfirmationEnabled,
         pieceSet: state.pieceSet,
+        isFigurineNotation: state.isFigurineNotation,
       }),
     }
   )
