@@ -111,7 +111,7 @@ async function handleDisconnect(deps, gameCode, playerColor) {
  * Does not touch socket.io room membership or presence maps directly -- the
  * caller owns that state and performs the actual join/broadcast.
  *
- * @param {object} deps - { gameModel, timerService }
+ * @param {object} deps - { gameModel, timerService, sessionService? }
  * @param {string} gameCode
  * @param {string} walletAddress - Authenticated wallet address of the caller.
  * @returns {Promise<{ ok: boolean, code?: string, message?: string, game?: object, playerColor?: "white"|"black" }>}
@@ -145,6 +145,10 @@ async function handleReconnect(deps, gameCode, walletAddress) {
 	// Cancel the pending auto-forfeit grace timer now that the player is
 	// provably back, before any further await lets it race against firing.
 	timerService.cancelReconnectGrace(gameCode, playerColor);
+	// Also clear the address-keyed disconnection grace (Issue #580) when provided.
+	if (deps.sessionService) {
+		deps.sessionService.cancelDisconnectionGrace(gameCode, walletAddress);
+	}
 
 	return { ok: true, game, playerColor };
 }

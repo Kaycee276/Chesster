@@ -7,7 +7,7 @@ use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Events, Ledger},
-    vec, Address, Env, String, TryFromVal,
+    vec, Address, Env, FromVal, String, TryFromVal,
 };
 
 use proptest::{prelude::*, test_runner::Config as ProptestConfig};
@@ -9875,4 +9875,206 @@ mod extended_tests {
             assert_eq!(client.get_escrowed_balance(&token.address), 0);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// MatchCancelledEvent on cancellation and refund paths (Issue #637)
+// ---------------------------------------------------------------------------
+
+/// Decodes every `MatchCancelledEvent` published by the contract in the most
+/// recent invocation.
+fn collect_cancelled_events(
+    env: &Env,
+    contract_id: &Address,
+) -> alloc::vec::Vec<MatchCancelledEvent> {
+    let cancelled = symbol_short!("cancelled");
+    env.events()
+        .all()
+        .iter()
+        .filter(|(id, _, _)| id == contract_id)
+        // Filter on the topic first: decoding other events' data as this struct fails.
+        .filter(|(_, topics, _)| {
+            topics
+                .get(1)
+                .and_then(|t| Symbol::try_from_val(env, &t).ok())
+                .is_some_and(|t| t == cancelled)
+        })
+        .map(|(_, _, data)| MatchCancelledEvent::from_val(env, &data))
+        .collect()
+}
+
+struct CancelEventSetup<'a> {
+    client: ChessterEscrowClient<'a>,
+    contract_id: Address,
+    token: TokenClient<'a>,
+    p1: Address,
+    p2: Address,
+}
+
+fn setup_cancel_event_test(env: &Env) -> CancelEventSetup<'_> {
+    env.mock_all_auths();
+    let coordinator = Address::generate(env);
+    let token_admin = Address::generate(env);
+    let (token, token_admin_client) = create_token_contract(env, &token_admin);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let p1 = Address::generate(env);
+    let p2 = Address::generate(env);
+    for p in [&p1, &p2] {
+        token_admin_client.mint(p, &1000);
+        approve(env, &token, p, &contract_id, 1000);
+    }
+    CancelEventSetup {
+        client,
+        contract_id,
+        token,
+        p1,
+        p2,
+    }
+}
+
+#[test]
+fn test_cancel_pending_match_emits_match_cancelled_event() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CANCEL_EVT1");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    let nonce = s.client.get_match(&gc).nonce;
+
+    s.client.cancel_pending_match(&gc, &s.p1);
+
+    let events = collect_cancelled_events(&env, &s.contract_id);
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0],
+        MatchCancelledEvent {
+            game_code: gc,
+            match_id: nonce,
+            token: s.token.address.clone(),
+            player: s.p1.clone(),
+            refund_amount: 100,
+            reason: Symbol::new(&env, "cancelled"),
+        }
+    );
+}
+
+#[test]
+fn test_mutual_cancellation_emits_event_per_refunded_player() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CANCEL_EVT2");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    s.client.join_match(&gc, &s.p2);
+
+    s.client.request_cancellation(&gc, &s.p1);
+    assert!(collect_cancelled_events(&env, &s.contract_id).is_empty());
+
+    s.client.request_cancellation(&gc, &s.p2);
+    let events = collect_cancelled_events(&env, &s.contract_id);
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].player, s.p1);
+    assert_eq!(events[1].player, s.p2);
+    for e in events.iter() {
+        assert_eq!(e.reason, Symbol::new(&env, "mutual"));
+        assert_eq!(e.refund_amount, 100);
+        assert_eq!(e.token, s.token.address);
+        assert_eq!(e.game_code, gc);
+    }
+}
+
+#[test]
+fn test_timeout_refund_emits_match_cancelled_events_with_timeout_reason() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CANCEL_EVT3");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    s.client.join_match(&gc, &s.p2);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 10_000;
+    });
+    s.client.claim_refund(&gc, &s.p1);
+
+    let events = collect_cancelled_events(&env, &s.contract_id);
+    assert_eq!(events.len(), 2);
+    assert!(events
+        .iter()
+        .all(|e| e.reason == Symbol::new(&env, "timeout")));
+    assert_eq!(events[0].player, s.p1);
+    assert_eq!(events[1].player, s.p2);
+}
+
+#[test]
+fn test_normal_settlement_does_not_emit_match_cancelled_event() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CANCEL_EVT4");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    s.client.join_match(&gc, &s.p2);
+
+    s.client.resolve_match(&gc, &Some(s.p1.clone()));
+    assert!(collect_cancelled_events(&env, &s.contract_id).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Per-token minimum wager: admin auth and boundary coverage (Issue #638)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_set_token_wager_limits_requires_coordinator_auth() {
+    let env = Env::default();
+    let (client, _, token, _) = setup_token_limit_test(&env);
+    // Drop the blanket auth mock: the call must now fail without coordinator auth.
+    env.set_auths(&[]);
+    assert!(client
+        .try_set_token_wager_limits(&token.address, &1_000, &100_000)
+        .is_err());
+    assert!(client
+        .try_remove_token_wager_limits(&token.address)
+        .is_err());
+}
+
+#[test]
+fn test_set_token_wager_limits_rejects_zero_and_inverted_values() {
+    let env = Env::default();
+    let (client, _, token, _) = setup_token_limit_test(&env);
+    let expected = Ok(contract_error(EscrowError::InvalidWagerLimit as u32));
+    assert_eq!(
+        client
+            .try_set_token_wager_limits(&token.address, &0, &100)
+            .unwrap_err(),
+        expected
+    );
+    assert_eq!(
+        client
+            .try_set_token_wager_limits(&token.address, &-1, &100)
+            .unwrap_err(),
+        expected
+    );
+    assert_eq!(
+        client
+            .try_set_token_wager_limits(&token.address, &100, &99)
+            .unwrap_err(),
+        expected
+    );
+}
+
+#[test]
+fn test_create_match_rejects_zero_wager_even_with_token_minimum() {
+    let env = Env::default();
+    let (client, _, token, player) = setup_token_limit_test(&env);
+    client.set_token_wager_limits(&token.address, &1_000, &100_000);
+    let res = client.try_create_match(
+        &String::from_str(&env, "ZERO01"),
+        &player,
+        &token.address,
+        &0,
+    );
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(contract_error(EscrowError::InvalidWager as u32))
+    );
 }
