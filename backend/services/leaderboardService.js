@@ -6,12 +6,139 @@ const LEADERBOARD_CACHE_PREFIX = "chesster:leaderboard";
 const LEADERBOARD_CACHE_KEY_TOP100 = "chesster:leaderboard:top100";
 const LEADERBOARD_CACHE_TTL_SECONDS = 60;
 
+// Sorted set of active players scored by ELO, used for O(log N) rank and
+// percentile lookups (Issue #642).
+const ACTIVE_PLAYERS_KEY = "leaderboard:active_players";
+const ACTIVE_PLAYERS_TTL_SECONDS = 15 * 60;
+const ZADD_CHUNK_SIZE = 1000;
+
 class LeaderboardService {
 	constructor({ database = db } = {}) {
 		this.db = database;
 		this.invalidateLeaderboardCache = this.invalidateLeaderboardCache.bind(this);
 		this.invalidateCache = this.invalidateCache.bind(this);
 		this.getLeaderboard = this.getLeaderboard.bind(this);
+		this.getPlayerRankAndPercentile = this.getPlayerRankAndPercentile.bind(this);
+		this.refreshLeaderboardCache = this.refreshLeaderboardCache.bind(this);
+		this.refreshInFlight = null;
+	}
+
+	/** Percentile of a 1-based rank among `total` players, to one decimal, floored at 0.1. */
+	static computePercentile(rank, total) {
+		return Math.max(0.1, Number((((total - rank) / total) * 100).toFixed(1)));
+	}
+
+	/** Active (non-deleted) players with their ELO, straight from the database. */
+	async fetchActivePlayerRatings() {
+		if (this.db.prisma && this.db.prisma.player) {
+			try {
+				const players = await this.db.prisma.player.findMany({
+					where: { is_deleted: false },
+					select: { wallet_address: true, elo_rating: true },
+				});
+				return players.map((p) => ({ address: p.wallet_address, elo: p.elo_rating }));
+			} catch (err) {
+				console.warn(`[LeaderboardService] prisma ratings query failed: ${err.message}`);
+			}
+		}
+		if (this.db.from) {
+			const { data, error } = await this.db
+				.from("players")
+				.select("wallet_address, elo_rating")
+				.eq("is_deleted", false);
+			if (error) throw error;
+			return (data || []).map((p) => ({ address: p.wallet_address, elo: p.elo_rating }));
+		}
+		return [];
+	}
+
+	/**
+	 * Rebuild the `leaderboard:active_players` sorted set from the database with
+	 * a 15 minute TTL. The new set is built under a temporary key and swapped in
+	 * atomically so readers never see a partial leaderboard. Concurrent callers
+	 * share a single rebuild.
+	 *
+	 * @returns {Promise<number>} number of players cached (0 if Redis is unavailable)
+	 */
+	refreshLeaderboardCache() {
+		if (this.refreshInFlight) return this.refreshInFlight;
+		this.refreshInFlight = this._refreshLeaderboardCache().finally(() => {
+			this.refreshInFlight = null;
+		});
+		return this.refreshInFlight;
+	}
+
+	async _refreshLeaderboardCache() {
+		const redis = getRedisClient();
+		if (!redis) return 0;
+		const players = (await this.fetchActivePlayerRatings()).filter(
+			(p) => p.address && Number.isFinite(Number(p.elo)),
+		);
+		const tmpKey = `${ACTIVE_PLAYERS_KEY}:building:${process.pid}`;
+		try {
+			const tx = redis.multi().del(tmpKey);
+			for (let i = 0; i < players.length; i += ZADD_CHUNK_SIZE) {
+				const args = [];
+				for (const p of players.slice(i, i + ZADD_CHUNK_SIZE)) args.push(Number(p.elo), p.address);
+				tx.zadd(tmpKey, ...args);
+			}
+			if (players.length === 0) {
+				tx.del(ACTIVE_PLAYERS_KEY);
+			} else {
+				tx.rename(tmpKey, ACTIVE_PLAYERS_KEY).expire(ACTIVE_PLAYERS_KEY, ACTIVE_PLAYERS_TTL_SECONDS);
+			}
+			await tx.exec();
+		} catch (err) {
+			console.warn(`[LeaderboardService] Active player cache refresh failed: ${err.message}`);
+			return 0;
+		}
+		return players.length;
+	}
+
+	/** Rank and percentile computed from the database, used when Redis is unavailable. */
+	async getRankAndPercentileFromDb(walletAddress) {
+		const players = await this.fetchActivePlayerRatings();
+		const me = players.find((p) => p.address === walletAddress);
+		if (!me) return { rank: null, percentile: null };
+		const higher = players.filter((p) => p.elo > me.elo).length;
+		const rank = higher + 1;
+		return { rank, totalPlayers: players.length, percentile: LeaderboardService.computePercentile(rank, players.length) };
+	}
+
+	/**
+	 * Rank and percentile of a player among active players, computed from the
+	 * Redis sorted set with ZCARD/ZREVRANK (O(log N)). Players with equal ELO
+	 * share the same rank. Falls back to PostgreSQL if Redis is unavailable.
+	 *
+	 * @param {string} walletAddress
+	 * @returns {Promise<{ rank: number|null, totalPlayers?: number, percentile: number|null }>}
+	 */
+	async getPlayerRankAndPercentile(walletAddress) {
+		if (!walletAddress) return { rank: null, percentile: null };
+		const redis = getRedisClient();
+		if (redis) {
+			try {
+				let total = await redis.zcard(ACTIVE_PLAYERS_KEY);
+				if (!total) {
+					await this.refreshLeaderboardCache();
+					total = await redis.zcard(ACTIVE_PLAYERS_KEY);
+				}
+				if (!total) return { rank: null, percentile: null };
+
+				const index = await redis.zrevrank(ACTIVE_PLAYERS_KEY, walletAddress);
+				if (index === null || index === undefined) return { rank: null, percentile: null };
+
+				// ZREVRANK orders tied scores arbitrarily; resolve ties to the best rank
+				// so equal ratings always get the same percentile.
+				const score = await redis.zscore(ACTIVE_PLAYERS_KEY, walletAddress);
+				const higher = await redis.zcount(ACTIVE_PLAYERS_KEY, `(${score}`, "+inf");
+				const rank = Number(higher) + 1;
+				return { rank, totalPlayers: total, percentile: LeaderboardService.computePercentile(rank, total) };
+			} catch (err) {
+				console.warn(`[LeaderboardService] Redis rank lookup failed, using database: ${err.message}`);
+			}
+		}
+		return this.getRankAndPercentileFromDb(walletAddress);
 	}
 
 	getCacheKey(category = "all", limit = 50, offset = 0) {
