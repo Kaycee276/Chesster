@@ -1,3 +1,4 @@
+import { calculateNewRating, DEFAULT_PUZZLE_RATING } from "../utils/glickoCalculator";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useEffect, useRef } from "react";
@@ -45,6 +46,11 @@ function stopLocalTimer() {
 }
 
 interface GameStore {
+  puzzleRating: number;
+  puzzleRD: number;
+  puzzleVolatility: number;
+  ratedPuzzleIds: string[];
+  updatePuzzleRating: (puzzleRating: number, isSolved: boolean, puzzleId: string) => number | null;
   gameCode: string | null;
   playerColor: "white" | "black" | null;
   // Network connection state (Issue #401)
@@ -146,6 +152,18 @@ interface GameStore {
 export const useGameStore = create<GameStore>()(
   persist(
     (set, get) => ({
+      puzzleRating: DEFAULT_PUZZLE_RATING.rating,
+      puzzleRD: DEFAULT_PUZZLE_RATING.rd,
+      puzzleVolatility: DEFAULT_PUZZLE_RATING.volatility,
+      ratedPuzzleIds: [],
+      updatePuzzleRating: (puzzleRating, isSolved, puzzleId) => {
+        const state = get();
+        if (state.ratedPuzzleIds.includes(puzzleId)) return null;
+        const next = calculateNewRating({ rating: state.puzzleRating, rd: state.puzzleRD, volatility: state.puzzleVolatility }, puzzleRating, isSolved);
+        set({ puzzleRating: next.rating, puzzleRD: next.rd, puzzleVolatility: next.volatility,
+          ratedPuzzleIds: [...state.ratedPuzzleIds, puzzleId] });
+        return Math.round(next.rating) - Math.round(state.puzzleRating);
+      },
       gameCode: null,
       playerColor: null,
       playerAddress: null,
@@ -630,6 +648,10 @@ export const useGameStore = create<GameStore>()(
     {
       name: "chesster-game",
       partialize: (state) => ({
+        puzzleRating: state.puzzleRating,
+        puzzleRD: state.puzzleRD,
+        puzzleVolatility: state.puzzleVolatility,
+        ratedPuzzleIds: state.ratedPuzzleIds,
         gameCode: state.gameCode,
         playerColor: state.playerColor,
         blindfoldMode: state.blindfoldMode,

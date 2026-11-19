@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { type Puzzle, puzzleApi } from "../api/puzzleApi";
 import { useToastStore } from "../store/toastStore";
 import { Loader2, RotateCcw, Lightbulb, Home, Flame, Check, Trophy, X } from "lucide-react";
+import { useGameStore } from "../store/gameStore";
+import { soundService } from "../services/soundService";
 import { usePuzzleStreak } from "../hooks/usePuzzleStreak";
 
 interface PuzzleMove {
@@ -76,30 +78,6 @@ function applyMove(board: string[][], move: PuzzleMove): string[][] {
   }
 
   return newBoard;
-}
-
-/**
- * Determine whose turn it is based on the piece colors still on board and the sequence of moves.
- * For simplicity, we count the pieces: if black has fewer pieces, it's white's turn.
- * This is a heuristic and assumes the puzzle follows normal parity.
- */
-function getTurnFromBoard(board: string[][]): "white" | "black" {
-  let whitePieces = 0;
-  let blackPieces = 0;
-  for (const row of board) {
-    for (const piece of row) {
-      if (piece !== ".") {
-        if (piece === piece.toUpperCase()) {
-          whitePieces++;
-        } else {
-          blackPieces++;
-        }
-      }
-    }
-  }
-  // Normally both sides start with 16 pieces. If counts are equal, white moves; otherwise black.
-  // This is a simplification; ideally the puzzle FEN would include the turn indicator.
-  return whitePieces > blackPieces ? "black" : "white";
 }
 
 function PuzzleBoard({
@@ -300,6 +278,9 @@ export default function PuzzlePage() {
   const navigate = useNavigate();
   const { addToast } = useToastStore();
 
+  const puzzleRating = useGameStore((s) => s.puzzleRating);
+  const updatePuzzleRating = useGameStore((s) => s.updatePuzzleRating);
+  const [ratingChange, setRatingChange] = useState<number | null>(null);
   const [puzzle, setPuzzle] = useState<Puzzle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -326,43 +307,64 @@ export default function PuzzlePage() {
   const autoReplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
 
-  // Fetch puzzle on mount
-  useEffect(() => {
-    const fetchPuzzle = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const p = await puzzleApi.fetchDailyPuzzle();
-        setPuzzle(p);
-        setBoard(fenToBoard(p.fen));
-        setMoveStep(0);
-        setStatus("solving");
-        setHintShown(false);
-        setLastMove(null);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Failed to fetch puzzle";
-        setError(msg);
-        addToast(msg, "error");
-      } finally {
-        setLoading(false);
-      }
-    };
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  const movePendingRef = useRef(false);
 
-    fetchPuzzle();
-  }, [addToast]);
-
-  // Clean up auto-reply timer on unmount
-  useEffect(() => {
-    return () => {
-      if (autoReplyTimerRef.current !== null) {
-        clearTimeout(autoReplyTimerRef.current);
-        autoReplyTimerRef.current = null;
-      }
-    };
+  const clearTimers = useCallback(() => {
+    for (const timer of [autoReplyTimerRef, retryTimerRef, hintTimerRef]) {
+      if (timer.current !== null) clearTimeout(timer.current);
+      timer.current = null;
+    }
+    movePendingRef.current = false;
   }, []);
 
+  const fetchPuzzle = useCallback(async (excludeId?: string) => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    clearTimers();
+    setLoading(true);
+    setError(null);
+    try {
+      const p = await puzzleApi.fetchAdaptivePuzzle(useGameStore.getState().puzzleRating, excludeId, controller.signal);
+      if (controller.signal.aborted) return;
+      setPuzzle(p);
+      setBoard(fenToBoard(p.fen));
+      setMoveStep(0);
+      setStatus("solving");
+      setHintShown(false);
+      setLastMove(null);
+      setShowConfetti(false);
+      setRatingChange(null);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      const msg = err instanceof Error ? err.message : "Failed to fetch puzzle";
+      setError(msg);
+      addToast(msg, "error");
+    } finally {
+      if (!controller.signal.aborted) setLoading(false);
+    }
+  }, [addToast, clearTimers]);
+
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => { if (active) void fetchPuzzle(); });
+    return () => { active = false; requestRef.current?.abort(); clearTimers(); };
+  }, [fetchPuzzle, clearTimers]);
+
+  const recordOutcome = (solved: boolean) => {
+    if (!puzzle) return;
+    const delta = updatePuzzleRating(puzzle.rating, solved, puzzle.id);
+    if (delta === null) return;
+    setRatingChange(delta);
+    if (solved) soundService.brilliant();
+    else soundService.playAlert();
+  };
+
   const handleMove = (from: [number, number], to: [number, number]) => {
-    if (!puzzle || status !== "solving") return;
+    if (!puzzle || status !== "solving" || movePendingRef.current) return;
 
     const expectedMove = puzzle.solution[moveStep];
     if (!expectedMove) return;
@@ -375,10 +377,11 @@ export default function PuzzlePage() {
       expectedMove.to[1] === to[1];
 
     if (!moveMatches) {
+      recordOutcome(false);
       setStatus("failed");
       addToast("Incorrect move. Try again!", "error");
       // Allow retry by not advancing moveStep
-      setTimeout(() => setStatus("solving"), 1500);
+      retryTimerRef.current = setTimeout(() => { setStatus("solving"); retryTimerRef.current = null; }, 1500);
       return;
     }
 
@@ -390,6 +393,7 @@ export default function PuzzlePage() {
 
     // Check if puzzle is complete (all solution moves executed)
     if (moveStep + 1 >= puzzle.solution.length) {
+      recordOutcome(true);
       setStatus("correct");
       setShowConfetti(true);
       recordPuzzleSolved();
@@ -398,6 +402,7 @@ export default function PuzzlePage() {
     }
 
     // Auto-apply opponent's reply move after 300ms
+    movePendingRef.current = true;
     autoReplyTimerRef.current = setTimeout(() => {
       const opponentMove = puzzle.solution[moveStep + 1];
       if (!opponentMove) return;
@@ -412,25 +417,29 @@ export default function PuzzlePage() {
 
       // Check again if puzzle is complete
       if (moveStep + 2 >= puzzle.solution.length) {
+        recordOutcome(true);
         setStatus("correct");
         setShowConfetti(true);
         recordPuzzleSolved();
         addToast("Puzzle solved! 🎉", "success");
       }
 
+      movePendingRef.current = false;
       autoReplyTimerRef.current = null;
     }, 300);
   };
 
   const handleShowHint = () => {
-    if (!puzzle || moveStep >= puzzle.solution.length) return;
+    if (!puzzle || status !== "solving" || movePendingRef.current || moveStep >= puzzle.solution.length) return;
 
+    recordOutcome(false);
     const nextMove = puzzle.solution[moveStep];
     setHintShown(true);
 
     // Highlight the source square only
-    setTimeout(() => {
+    hintTimerRef.current = setTimeout(() => {
       setHintShown(false);
+      hintTimerRef.current = null;
     }, 3000);
 
     addToast(
@@ -441,15 +450,14 @@ export default function PuzzlePage() {
 
   const handleReset = () => {
     if (!puzzle) return;
+    clearTimers();
+    setShowConfetti(false);
     setBoard(fenToBoard(puzzle.fen));
     setMoveStep(0);
     setStatus("solving");
     setHintShown(false);
     setLastMove(null);
-    if (autoReplyTimerRef.current !== null) {
-      clearTimeout(autoReplyTimerRef.current);
-      autoReplyTimerRef.current = null;
-    }
+
   };
 
   if (loading) {
@@ -468,6 +476,7 @@ export default function PuzzlePage() {
           <h2 className="text-xl font-bold text-red-400">Failed to load puzzle</h2>
           <p className="text-sm text-(--text-secondary)">{error || "Unknown error"}</p>
         </div>
+        <button onClick={() => void fetchPuzzle(puzzle?.id)} className="px-4 py-2 rounded-lg bg-(--accent-primary) text-white font-semibold">Try again</button>
         <button
           onClick={() => navigate("/")}
           className="px-4 py-2 rounded-lg bg-(--accent-primary) hover:bg-(--accent-dark) text-white font-semibold transition-colors flex items-center gap-2"
@@ -479,7 +488,7 @@ export default function PuzzlePage() {
     );
   }
 
-  const sideToMove = getTurnFromBoard(board);
+  const sideToMove = moveStep % 2 === 0 ? puzzle.sideToMove : puzzle.sideToMove === "white" ? "black" : "white";
   const isUsersTurn = sideToMove === puzzle.sideToMove;
   const hintSquare =
     hintShown && moveStep < puzzle.solution.length ? puzzle.solution[moveStep].from : null;
@@ -513,13 +522,13 @@ export default function PuzzlePage() {
 
       {/* Header: Puzzle info & Streak tracker */}
       <div className="shrink-0 flex flex-col gap-1.5 p-2 sm:px-4 sm:py-2.5 rounded-xl bg-(--bg-secondary) border border-(--border)">
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           {/* Left: Title & Rating */}
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-            <div className="flex flex-col gap-0.5 shrink-0">
-              <div className="flex items-center gap-1.5">
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-widest text-(--text-tertiary)">
-                  Daily Tactics
+                  Adaptive Tactics
                 </p>
                 {/* Streak Badge */}
                 <span
@@ -537,7 +546,7 @@ export default function PuzzlePage() {
                   <span className="text-[10px] opacity-75 font-normal">(Best: {longestStreak})</span>
                 </span>
               </div>
-              <p className="text-xs sm:text-sm font-bold text-(--text)">Rating: {puzzle.rating}</p>
+              <p className="text-xs sm:text-sm font-bold text-(--text)">Puzzle: {puzzle.rating} · Your rating: {Math.round(puzzleRating)}</p>
             </div>
             <div className="hidden md:flex items-center gap-1 flex-wrap">
               {puzzle.themes.map((theme) => (
@@ -552,7 +561,7 @@ export default function PuzzlePage() {
           </div>
 
           {/* Right: Moves & Turn */}
-          <div className="text-right flex flex-col gap-0.5 shrink-0">
+          <div className="ml-auto text-right flex flex-col gap-0.5 shrink-0">
             <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-widest text-(--text-tertiary)">
               {puzzle.sideToMove === "white" ? "White to move" : "Black to move"}
             </p>
@@ -606,6 +615,12 @@ export default function PuzzlePage() {
         </div>
       </div>
 
+      {ratingChange !== null && (
+        <div role="status" aria-live="polite" className={`shrink-0 rounded-lg px-3 py-2 text-sm font-semibold tabular-nums motion-safe:animate-[rating-feedback_450ms_ease-out] ${ratingChange >= 0 ? "bg-green-500/15 text-green-800 [.dark_&]:text-green-300" : "bg-(--bg-secondary) text-(--text)"}`}>
+          {ratingChange >= 0 ? "+" : ""}{ratingChange} Rating · {Math.round(puzzleRating)}
+        </div>
+      )}
+
       {/* Board */}
       <PuzzleBoard
         board={board}
@@ -639,17 +654,18 @@ export default function PuzzlePage() {
           <div className="flex items-center gap-2">
             <span className="text-green-400 font-bold text-sm">✓ Puzzle solved!</span>
             <button
-              onClick={() => navigate("/")}
+              onClick={() => void fetchPuzzle(puzzle.id)}
               className="px-3 py-1.5 bg-(--accent-primary) hover:bg-(--accent-dark) text-white rounded-lg text-xs font-semibold transition-colors"
             >
-              Home
+              Next puzzle
             </button>
           </div>
         )}
 
-        {status === "failed" && (
-          <span className="text-red-400 font-semibold text-xs">✗ Try again</span>
+        {status !== "correct" && (
+          <button className="text-xs font-semibold px-2 py-1 rounded hover:bg-(--bg-tertiary)" onClick={() => { recordOutcome(false); void fetchPuzzle(puzzle.id); }}>Next puzzle</button>
         )}
+        {status === "failed" && <span className="text-red-400 font-semibold text-xs">Try again</span>}
 
         {status === "solving" && (
           <span className="text-xs text-(--text-tertiary) italic">

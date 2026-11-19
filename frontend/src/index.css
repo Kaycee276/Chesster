@@ -396,3 +396,9 @@ button:disabled {
 		font-size: 0.875rem;
 	}
 }
+
+/* Puzzle rating feedback respects the user's reduced motion preference. */
+@keyframes rating-feedback {
+  from { transform: translateY(6px); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
