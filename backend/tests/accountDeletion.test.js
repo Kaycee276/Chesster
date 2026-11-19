@@ -41,6 +41,7 @@ describe("account deletion", () => {
 	test("requires JWT authentication", async () => {
 		const response = await request(buildApp())
 			.post("/api/users/delete-account")
+			.set("Origin", "http://localhost:3090")
 			.send({ signature: "signed" });
 
 		expect(response.status).toBe(401);
@@ -55,6 +56,7 @@ describe("account deletion", () => {
 
 		const response = await request(buildApp())
 			.post("/api/auth/login")
+			.set("Origin", "http://localhost:3090")
 			.send({ address: "GPLAYER", signature: "signed-login-challenge" });
 
 		expect(response.status).toBe(401);
@@ -72,6 +74,7 @@ describe("account deletion", () => {
 
 		const response = await request(buildApp())
 			.post("/api/users/delete-account")
+			.set("Origin", "http://localhost:3090")
 			.set("Authorization", `Bearer ${token}`)
 			.send({ signature: "signed-deletion-challenge" });
 
@@ -80,6 +83,7 @@ describe("account deletion", () => {
 			"GPLAYER",
 			"signed-deletion-challenge",
 			"delete-account",
+			{ origin: "http://localhost:3090", uri: undefined },
 		);
 		expect(userModel.anonymizeUser).toHaveBeenCalledWith("GPLAYER");
 		expect(sessionService.revokeAll).toHaveBeenCalledWith("GPLAYER");

@@ -93,12 +93,12 @@ if (createAdapter && pubClient && subClient) {
 }
 
 // Rate limit WebSocket handshake/connection attempts per IP to prevent
-// connection-flooding DoS before a socket is ever allocated (Issue #244).
+// connection flooding before allocation, using Redis and an LRU fallback (#657).
 const socketHandshakeLimiter = createSocketRateLimiter({
   windowMs: 60 * 1000,
   max: 30,
 });
-io.engine.use((req, res, next) => socketHandshakeLimiter(req, res, next));
+io.engine.use(socketHandshakeLimiter);
 
 const PORT = process.env.PORT || 3001;
 
@@ -740,14 +740,11 @@ io.on("connection", (socket) => {
 app.set("io", io);
 timerService.init(io);
 sessionService.setIo(io);
-// Stop the auth challenge sweep timer on shutdown so the event loop exits cleanly.
-const authService = require("./services/authService");
 const botService = require("./services/botService");
 if (require.main === module) {
 	for (const signal of ["SIGTERM", "SIGINT"]) {
 		process.on(signal, async () => {
 			try {
-				authService.stop();
 				// Terminate bot workers and kill their Stockfish processes so none are orphaned.
 				await botService.shutdown();
 			} finally {

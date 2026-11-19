@@ -1,219 +1,159 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const { Keypair } = require("@stellar/stellar-sdk");
+const { getRedisConnection } = require("../config/redis");
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-insecure-secret-change-me";
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
-const CHALLENGE_TTL_MS = Number(process.env.AUTH_CHALLENGE_TTL_MS) || 5 * 60 * 1000; // 5 minutes
-const DEFAULT_MAX_CHALLENGES = Number(process.env.AUTH_CHALLENGE_MAX) || 5000;
-const DEFAULT_SWEEP_INTERVAL_MS = Number(process.env.AUTH_CHALLENGE_SWEEP_MS) || 60 * 1000;
+const CHALLENGE_TTL_SECONDS = 300;
 
-/**
- * AuthService — Stellar wallet "sign the nonce" login.
- *
- * Flow:
- *   1. Client calls createChallenge(address) -> gets a one-time message.
- *   2. Client signs that message with their Stellar wallet (Freighter, etc.)
- *      and posts { address, signature } back.
- *   3. verifyLogin() checks the signature against the wallet's public key
- *      and, if valid, issues a JWT the client attaches as a Bearer token on
- *      subsequent requests (see middleware/authMiddleware.js).
- *
- * Capacity policy (documented):
- *   - Challenges are kept in memory (single-process backend, same pattern as
- *     timerService's in-memory timer map) and expire after `ttlMs`.
- *   - One active challenge per address: creating a challenge for an address
- *     that already has one replaces it (the previous nonce is invalidated).
- *   - The store holds at most `maxEntries` addresses. When full, creation
- *     evicts the oldest-inserted entry (Map insertion order) to make room.
- *     Expired entries are preferred for eviction first via pruneExpired().
- *   - Expired entries are pruned on a predictable schedule (interval sweep,
- *     default 60s) and opportunistically on createChallenge/verifySignature
- *     and via the public pruneExpired() method. Node runs JS on a single
- *     thread so individual Map get/set/delete operations are atomic — no lock
- *     is needed; concurrent requests are serialized by the event loop.
- *   - Call stop() (or shutdown()) on process shutdown to clear the sweep
- *     timer so the event loop can exit cleanly.
- */
+// Consume before validating anything else. One Redis operation ensures that
+// simultaneous verification requests on different servers cannot reuse it.
+const CONSUME_CHALLENGE = `
+local challenge = redis.call('GET', KEYS[1])
+if challenge then redis.call('DEL', KEYS[1]) end
+return challenge
+`;
+
+/** Stellar wallet sign in with shared, single-use, origin-bound challenges. */
 class AuthService {
 	constructor(options = {}) {
-		this.challenges = new Map(); // address -> { message, purpose, expiresAt, createdAt }
-		this.ttlMs = options.ttlMs ?? CHALLENGE_TTL_MS;
-		this.maxEntries = options.maxEntries ?? DEFAULT_MAX_CHALLENGES;
-		this.sweepIntervalMs = options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
-		this._now = options.now ?? (() => Date.now());
-		this._timer = null;
-		if (options.autoSweep ?? true) this.startSweep();
+		this.getRedis = options.getRedis ?? getRedisConnection;
+		this._now = options.now ?? Date.now;
+		this.allowedOrigins = options.allowedOrigins ?? (
+			process.env.AUTH_ALLOWED_ORIGINS || process.env.CORS_ORIGIN ||
+			(process.env.NODE_ENV === "production" ? "" : "http://localhost:3090")
+		).split(",").map((origin) => origin.trim()).filter((origin) => origin && origin !== "*");
 	}
 
-	_nowMs() {
-		return this._now();
-	}
-
-	startSweep() {
-		if (this._timer || !this.sweepIntervalMs || this.sweepIntervalMs <= 0) return;
-		this._timer = setInterval(() => {
-			try {
-				this.pruneExpired();
-			} catch {
-				// Never let the background sweep crash the process.
-			}
-		}, this.sweepIntervalMs);
-		if (typeof this._timer.unref === "function") this._timer.unref();
-	}
-
-	stop() {
-		if (this._timer) {
-			clearInterval(this._timer);
-			this._timer = null;
+	async _redis() {
+		const redis = await this.getRedis();
+		if (!redis) {
+			const error = new Error("Authentication store unavailable, please try again later");
+			error.status = 503;
+			throw error;
 		}
+		return redis;
 	}
 
-	shutdown() {
-		this.stop();
-	}
-
-	get size() {
-		return this.challenges.size;
-	}
-
-	/** Remove all entries whose expiry has passed. Returns number removed. */
-	pruneExpired(now = this._nowMs()) {
-		let removed = 0;
-		for (const [address, entry] of this.challenges) {
-			if (now > entry.expiresAt) {
-				this.challenges.delete(address);
-				removed += 1;
-			}
+	_binding(origin, uri = origin) {
+		let originUrl;
+		let clientUrl;
+		try {
+			originUrl = new URL(origin);
+			clientUrl = new URL(uri);
+		} catch {
+			throw new Error("Invalid authentication origin or URI");
 		}
-		return removed;
-	}
-
-	_evictOldest() {
-		const oldest = this.challenges.keys().next();
-		if (!oldest.done) this.challenges.delete(oldest.value);
-	}
-
-	createChallenge(address, purpose = "login") {
-		if (!address || typeof address !== "string") {
-			throw new Error("Wallet address is required");
+		if (
+			!["http:", "https:"].includes(originUrl.protocol) ||
+			origin !== originUrl.origin ||
+			!this.allowedOrigins.includes(origin) ||
+			clientUrl.origin !== origin || clientUrl.username || clientUrl.password
+		) {
+			throw new Error("Authentication origin is not allowed");
 		}
+		return { origin, domain: originUrl.host, uri: clientUrl.href };
+	}
+
+	_message(challenge) {
+		const statement = challenge.purpose === "delete-account"
+			? "Authorize account deletion on Chesster."
+			: "Sign in to Chesster.";
+		return `${challenge.domain} wants you to sign in with your Stellar account:\n${challenge.address}\n\n${statement}\n\nURI: ${challenge.uri}\nVersion: 1\nNonce: ${challenge.nonce}\nIssued At: ${challenge.issuedAt}\nExpiration Time: ${challenge.expirationTime}`;
+	}
+
+	async generateAuthNonce(address, options = {}) {
+		try {
+			Keypair.fromPublicKey(address);
+		} catch {
+			throw new Error("Invalid Stellar wallet address");
+		}
+		const purpose = options.purpose ?? "login";
 		if (!["login", "delete-account"].includes(purpose)) {
 			throw new Error("Unsupported authentication challenge purpose");
 		}
-
-		const now = this._nowMs();
-
-		// Refreshing the same address replaces its challenge (one active each),
-		// so delete first to renew insertion order for capacity eviction.
-		this.challenges.delete(address);
-
-		// Opportunistic bound: drop expired entries before enforcing capacity.
-		if (this.challenges.size >= this.maxEntries) this.pruneExpired(now);
-		while (this.challenges.size >= this.maxEntries) this._evictOldest();
-
-		const nonce = crypto.randomBytes(16).toString("hex");
-		const action = purpose === "delete-account" ? "account deletion" : "login";
-		const message = `Chesster ${action}\naddress: ${address}\nnonce: ${nonce}`;
-		this.challenges.set(address, {
-			message,
+		const binding = this._binding(options.origin ?? this.allowedOrigins[0], options.uri);
+		const now = this._now();
+		const challenge = {
+			address,
+			...binding,
 			purpose,
-			expiresAt: now + this.ttlMs,
-			createdAt: now,
-		});
-		return message;
+			nonce: crypto.randomBytes(32).toString("hex"),
+			issuedAt: new Date(now).toISOString(),
+			expirationTime: new Date(now + CHALLENGE_TTL_SECONDS * 1000).toISOString(),
+		};
+		const redis = await this._redis();
+		await redis.set(`auth:nonce:${address}`, JSON.stringify(challenge), "EX", CHALLENGE_TTL_SECONDS);
+		return { ...challenge, message: this._message(challenge) };
 	}
 
-	/**
-	 * Verify a signed challenge and return a signed JWT for the address.
-	 * @param {string} address - Stellar public key (G...)
-	 * @param {string} signature - base64-encoded signature over the challenge message
-	 */
-	verifySignature(address, signature, expectedPurpose = "login") {
-		const entry = this.challenges.get(address);
-		if (!entry) throw new Error("No pending login challenge for this address");
-		if (entry.purpose !== expectedPurpose) {
-			throw new Error("Authentication challenge purpose mismatch");
-		}
-		if (this._nowMs() > entry.expiresAt) {
-			this.challenges.delete(address);
-			throw new Error("Login challenge expired, request a new one");
-		}
-		if (!signature) throw new Error("Signature is required");
+	/** Legacy challenge route retains its message response and deletion purpose. */
+	async createChallenge(address, purpose = "login", options = {}) {
+		return (await this.generateAuthNonce(address, { ...options, purpose })).message;
+	}
 
-		let keypair;
-		try {
-			keypair = Keypair.fromPublicKey(address);
-		} catch (err) {
-			throw new Error("Invalid Stellar wallet address");
+	async verifySIWSSignature(address, message, signature, options = {}) {
+		const redis = await this._redis();
+		const raw = await redis.eval(CONSUME_CHALLENGE, 1, `auth:nonce:${address}`);
+		if (!raw) throw new Error("Invalid or expired authentication nonce");
+		const challenge = JSON.parse(raw);
+		const binding = this._binding(options.origin ?? this.allowedOrigins[0], options.uri ?? challenge.uri);
+		if (binding.origin !== challenge.origin || binding.domain !== challenge.domain || binding.uri !== challenge.uri) {
+			throw new Error("Authentication domain or URI mismatch");
 		}
-
+		if (challenge.address !== address || challenge.purpose !== (options.purpose ?? "login")) {
+			throw new Error("Authentication challenge purpose or address mismatch");
+		}
+		const issuedAt = Date.parse(challenge.issuedAt);
+		const expiration = Date.parse(challenge.expirationTime);
+		const now = this._now();
+		if (!Number.isFinite(issuedAt) || !Number.isFinite(expiration) || issuedAt > now ||
+			expiration - issuedAt !== CHALLENGE_TTL_SECONDS * 1000 || now >= expiration) {
+			throw new Error("Authentication challenge expired or invalid");
+		}
+		const expected = this._message(challenge);
+		if ((options.requireMessage && typeof message !== "string") || (message !== undefined && message !== expected)) {
+			throw new Error("Authentication challenge message mismatch");
+		}
+		const encoding = options.signatureEncoding ?? "hex";
+		if (typeof signature !== "string" ||
+			(encoding === "hex" ? !/^[0-9a-f]{128}$/i.test(signature) :
+				encoding !== "base64" || !/^[A-Za-z0-9+/]{86}==$/.test(signature))) {
+			throw new Error("Invalid signature encoding");
+		}
 		let valid = false;
 		try {
-			valid = keypair.verify(
-				Buffer.from(entry.message, "utf8"),
-				Buffer.from(signature, "base64"),
-			);
-		} catch (err) {
+			valid = Keypair.fromPublicKey(address).verify(Buffer.from(expected, "utf8"), Buffer.from(signature, encoding));
+		} catch {
 			valid = false;
 		}
-
-		if (!valid) throw new Error("Signature verification failed");
-
-		// Challenge is single-use.
-		this.challenges.delete(address);
+		if (!valid) throw new Error("Cryptographic signature verification failed");
 		return true;
 	}
 
-	/**
-	 * Issue a JWT token for an authenticated wallet address.
-	 * 
-	 * @param {string} address - Stellar wallet address
-	 * @param {string} ipSubnet - Client IP subnet for binding (optional, e.g., "192.168.1")
-	 * @returns {string} Signed JWT token
-	 */
+	async verifySignature(address, signature, expectedPurpose = "login", options = {}) {
+		return this.verifySIWSSignature(address, undefined, signature, {
+			...options, purpose: expectedPurpose, signatureEncoding: "base64",
+		});
+	}
+
 	issueToken(address, ipSubnet = null) {
-		const jti = crypto.randomUUID();
-		const payload = {
-			sub: address,
-			address,
-			...(ipSubnet && { ipSubnet }), // Include IP subnet if provided
-		};
-		return jwt.sign(payload, JWT_SECRET, {
+		if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
+			throw new Error("JWT_SECRET must be configured for authentication");
+		}
+		return jwt.sign({ sub: address, address, ...(ipSubnet && { ipSubnet }) }, JWT_SECRET, {
 			expiresIn: JWT_EXPIRES_IN,
-			jwtid: jti,
+			jwtid: crypto.randomUUID(),
 		});
 	}
 
 	verifyToken(token) {
 		return jwt.verify(token, JWT_SECRET);
 	}
-
-	/** Test/support hook: reconfigure bounds and clock. */
-	_configure(options = {}) {
-		if (options.ttlMs !== undefined) this.ttlMs = options.ttlMs;
-		if (options.maxEntries !== undefined) this.maxEntries = options.maxEntries;
-		if (options.sweepIntervalMs !== undefined) {
-			this.stop();
-			this.sweepIntervalMs = options.sweepIntervalMs;
-			if (options.autoSweep ?? true) this.startSweep();
-		}
-		if (options.now !== undefined) this._now = options.now;
-		return this;
-	}
-
-	/** Test/support hook: clear all challenges. */
-	_reset() {
-		this.challenges.clear();
-		return this;
-	}
 }
 
-const singleton = new AuthService();
-singleton.AuthService = AuthService;
-singleton.CHALLENGE_TTL_MS = CHALLENGE_TTL_MS;
-singleton.DEFAULT_MAX_CHALLENGES = DEFAULT_MAX_CHALLENGES;
-singleton.DEFAULT_SWEEP_INTERVAL_MS = DEFAULT_SWEEP_INTERVAL_MS;
-
-module.exports = singleton;
+module.exports = new AuthService();
+module.exports.AuthService = AuthService;
 module.exports.JWT_SECRET = JWT_SECRET;
+module.exports.CHALLENGE_TTL_SECONDS = CHALLENGE_TTL_SECONDS;
