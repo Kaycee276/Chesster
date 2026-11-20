@@ -215,6 +215,42 @@ class ArchivalService {
   }
 }
 
+  async purgeExpiredSoftDeletedGames(retentionDays = 90, batchSize = 500) {
+    if (!(retentionDays > 0)) throw new Error("Retention days must be positive");
+    if (!(batchSize > 0)) throw new Error("Batch size must be positive");
+
+    const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    const cutoffISOString = cutoffDate.toISOString();
+    let totalDeleted = 0;
+
+    while (true) {
+      const expiredGames = await this.db.from("games")
+        .select("id")
+        .not("deleted_at", "is", null)
+        .lt("deleted_at", cutoffISOString)
+        .limit(batchSize);
+
+      if (expiredGames.error) throw expiredGames.error;
+      if (!expiredGames.data?.length) break;
+
+      const gameIds = expiredGames.data.map((g) => g.id);
+
+      if (this.db.prisma && this.db.prisma.$transaction) {
+        await this.db.prisma.$transaction([
+          this.db.prisma.move.deleteMany({ where: { game_id: { in: gameIds } } }),
+          this.db.prisma.matchAuditLog.deleteMany({ where: { game_id: { in: gameIds } } }),
+          this.db.prisma.game.deleteMany({ where: { id: { in: gameIds } } }),
+        ]);
+      }
+
+      totalDeleted += gameIds.length;
+      if (gameIds.length < batchSize) break;
+    }
+
+    return totalDeleted;
+  }
+}
+
 module.exports = new ArchivalService();
 module.exports.ArchivalService = ArchivalService;
 module.exports.SupabaseArchiveRepository = SupabaseArchiveRepository;

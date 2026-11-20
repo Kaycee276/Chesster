@@ -69,6 +69,141 @@ describe("TournamentBracketTree", () => {
     expect(screen.getByText("LIVE")).toBeInTheDocument();
   });
 
+  it("renders zoom controls", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1", seed: 1, score: 0 },
+        player2: { id: "p2", name: "Player 2", seed: 2, score: 0 },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "−" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fit" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reset" })).toBeInTheDocument();
+  });
+
+  it("responds to zoom in button click", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1", seed: 1, score: 0 },
+        player2: { id: "p2", name: "Player 2", seed: 2, score: 0 },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+
+    const zoomInBtn = screen.getByRole("button", { name: "+" });
+    fireEvent.click(zoomInBtn);
+
+    expect(screen.getByText("132%")).toBeInTheDocument();
+  });
+
+  it("responds to zoom out button click", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1", seed: 1, score: 0 },
+        player2: { id: "p2", name: "Player 2", seed: 2, score: 0 },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+
+    const zoomOutBtn = screen.getByRole("button", { name: "−" });
+    fireEvent.click(zoomOutBtn);
+
+    expect(screen.getByText("83%")).toBeInTheDocument();
+  });
+
+  it("responds to reset view button", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1", seed: 1, score: 0 },
+        player2: { id: "p2", name: "Player 2", seed: 2, score: 0 },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+
+    const zoomInBtn = screen.getByRole("button", { name: "+" });
+    const resetBtn = screen.getByRole("button", { name: "Reset" });
+
+    fireEvent.click(zoomInBtn);
+    expect(screen.queryByText("100%")).not.toBeInTheDocument();
+
+    fireEvent.click(resetBtn);
+    expect(screen.getByText("100%")).toBeInTheDocument();
+  });
+
+  it("responds to wheel zoom event", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1", seed: 1, score: 0 },
+        player2: { id: "p2", name: "Player 2", seed: 2, score: 0 },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+    const container = screen.getByTestId("tournament-bracket-tree");
+
+    fireEvent.wheel(container, { deltaY: -100 });
+    expect(screen.getByText("132%")).toBeInTheDocument();
+
+    fireEvent.wheel(container, { deltaY: 100 });
+    expect(screen.getByText("100%")).toBeInTheDocument();
+  });
+
+  it("enforces zoom bounds", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1", seed: 1, score: 0 },
+        player2: { id: "p2", name: "Player 2", seed: 2, score: 0 },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+
+    const zoomInBtn = screen.getByRole("button", { name: "+" });
+    for (let i = 0; i < 20; i++) {
+      fireEvent.click(zoomInBtn);
+    }
+
+    expect(screen.getByText("250%")).toBeInTheDocument();
+  });
+
   it("highlights winning player when match is finished", () => {
     const matches: TreeMatch[] = [
       {

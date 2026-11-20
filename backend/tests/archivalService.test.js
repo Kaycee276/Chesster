@@ -146,3 +146,107 @@ describe("ArchivalService monthly partition maintenance", () => {
     expect(client.query.mock.calls.some(([sql]) => sql.includes("ATTACH PARTITION"))).toBe(false);
   });
 });
+
+describe("ArchivalService soft-delete retention purge", () => {
+  test("purges soft-deleted games older than retention period", async () => {
+    const now = new Date("2026-12-15T12:00:00Z");
+    const retentionDays = 90;
+    const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000);
+
+    const expiredGames = [
+      { id: "game-1" },
+      { id: "game-2" },
+    ];
+
+    const db = {
+      from: jest.fn((table) => {
+        if (table === "games") {
+          return {
+            select: jest.fn().mockReturnThis(),
+            not: jest.fn().mockReturnThis(),
+            lt: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockResolvedValue({ data: expiredGames, error: null }),
+          };
+        }
+      }),
+      prisma: {
+        $transaction: jest.fn(async (ops) => {
+          return ops.map(() => ({ count: 1 }));
+        }),
+        move: { deleteMany: jest.fn().mockResolvedValue({ count: 2 }) },
+        matchAuditLog: { deleteMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        game: { deleteMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      },
+    };
+
+    const service = new ArchivalService({ db, now: () => now });
+    const result = await service.purgeExpiredSoftDeletedGames(retentionDays, 500);
+
+    expect(result).toBe(2);
+    expect(db.prisma.$transaction).toHaveBeenCalled();
+  });
+
+  test("handles multiple batches for large delete operations", async () => {
+    const now = new Date("2026-12-15T12:00:00Z");
+    const batch1 = Array(500).fill(null).map((_, i) => ({ id: `game-${i}` }));
+    const batch2 = [{ id: "game-500" }];
+    let callCount = 0;
+
+    const db = {
+      from: jest.fn((table) => {
+        if (table === "games") {
+          return {
+            select: jest.fn().mockReturnThis(),
+            not: jest.fn().mockReturnThis(),
+            lt: jest.fn().mockReturnThis(),
+            limit: jest.fn().mockImplementation(() => {
+              const result = callCount === 0 ? batch1 : batch2;
+              callCount++;
+              return Promise.resolve({ data: result, error: null });
+            }),
+          };
+        }
+      }),
+      prisma: {
+        $transaction: jest.fn(async (ops) => {
+          return ops.map(() => ({ count: 1 }));
+        }),
+        move: { deleteMany: jest.fn() },
+        matchAuditLog: { deleteMany: jest.fn() },
+        game: { deleteMany: jest.fn() },
+      },
+    };
+
+    const service = new ArchivalService({ db, now: () => now });
+    const result = await service.purgeExpiredSoftDeletedGames(90, 500);
+
+    expect(result).toBe(501);
+    expect(db.prisma.$transaction).toHaveBeenCalledTimes(2);
+  });
+
+  test("throws error on invalid retention days", async () => {
+    const service = new ArchivalService({ db: {} });
+    await expect(service.purgeExpiredSoftDeletedGames(0, 500)).rejects.toThrow("positive");
+    await expect(service.purgeExpiredSoftDeletedGames(-10, 500)).rejects.toThrow("positive");
+  });
+
+  test("throws error on invalid batch size", async () => {
+    const service = new ArchivalService({ db: {} });
+    await expect(service.purgeExpiredSoftDeletedGames(90, 0)).rejects.toThrow("positive");
+    await expect(service.purgeExpiredSoftDeletedGames(90, -1)).rejects.toThrow("positive");
+  });
+
+  test("handles database query errors gracefully", async () => {
+    const db = {
+      from: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        not: jest.fn().mockReturnThis(),
+        lt: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockResolvedValue({ data: null, error: new Error("query failed") }),
+      })),
+    };
+
+    const service = new ArchivalService({ db });
+    await expect(service.purgeExpiredSoftDeletedGames(90, 500)).rejects.toThrow("query failed");
+  });
+});
