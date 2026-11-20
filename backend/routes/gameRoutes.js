@@ -485,4 +485,42 @@ router.get('/games/:id/stream', gameController.streamGameReplay);
  */
 router.get('/games/:id/audit-export', requireAuth, gameController.exportMatchAudit);
 
+/**
+ * @openapi
+ * /api/games/{id}/verify-audit:
+ *   get:
+ *     summary: Verify SHA-256 match audit integrity
+ *     tags: [Games]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Game UUID or game code
+ *     responses:
+ *       200:
+ *         description: Audit verification result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 verified:
+ *                   type: boolean
+ *                   description: Whether the move chain hash matches
+ *                 expectedHash:
+ *                   type: string
+ *                   description: SHA-256 hash stored in audit package
+ *                 calculatedHash:
+ *                   type: string
+ *                   description: SHA-256 hash computed from moves
+ *                 moveCount:
+ *                   type: integer
+ *                   description: Number of moves in the game
+ *       404:
+ *         description: Game not found
+ */
+router.get('/games/:id/verify-audit', gameController.verifyMatchAudit);
+
 module.exports = router;

@@ -122,6 +122,10 @@ interface GameStore {
   setPieceSet: (set: PieceSetKey | "classic") => void;
   masterVolume: number;
   setMasterVolume: (volume: number) => void;
+  moveSoundsEnabled: boolean;
+  toggleMoveSounds: () => void;
+  alertSoundsEnabled: boolean;
+  toggleAlertSounds: () => void;
   // Settings modal visibility
   isSettingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
@@ -211,6 +215,8 @@ export const useGameStore = create<GameStore>()(
       autoQueen: false,
       pieceSet: "classic" as "classic" | "neo" | "wood",
       masterVolume: soundService.getVolume(),
+      moveSoundsEnabled: JSON.parse(localStorage.getItem("chesster:moveSoundsEnabled") ?? "true"),
+      alertSoundsEnabled: JSON.parse(localStorage.getItem("chesster:alertSoundsEnabled") ?? "true"),
       isSettingsOpen: false,
 
       setBlindfoldMode: (mode: "none" | "white" | "black" | "all") =>
@@ -238,6 +244,18 @@ export const useGameStore = create<GameStore>()(
         soundService.setMasterVolume(normalized);
         set({ masterVolume: normalized });
       },
+      toggleMoveSounds: () =>
+        set((s) => {
+          const newState = !s.moveSoundsEnabled;
+          localStorage.setItem("chesster:moveSoundsEnabled", JSON.stringify(newState));
+          return { moveSoundsEnabled: newState };
+        }),
+      toggleAlertSounds: () =>
+        set((s) => {
+          const newState = !s.alertSoundsEnabled;
+          localStorage.setItem("chesster:alertSoundsEnabled", JSON.stringify(newState));
+          return { alertSoundsEnabled: newState };
+        }),
       setSettingsOpen: (open: boolean) =>
         set({ isSettingsOpen: open }),
 
