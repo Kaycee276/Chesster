@@ -64,6 +64,7 @@ function getJitteredDelay(attempt, baseDelay = 50, maxDelay = 1000) {
  * @param {Function} prismaTransactionFn - Async callback returning the transaction promise
  * @param {number|object} [optionsOrMaxRetries=5] - maxRetries number or configuration options object
  * @param {number} [baseDelay=100] - Base delay in milliseconds
+ * Object options also accept `retryOn(error) => boolean`, an extra predicate OR-ed with the built-in transient checks.
  * @returns {Promise<*>} Result of the transaction callback
  */
 async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, baseDelay = 100) {
@@ -73,8 +74,11 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 	let context = "tournament-transaction";
 	let onRetry = null;
 	let sleepFn = null;
+	let retryOn = null;
 
 	if (typeof optionsOrMaxRetries === "object" && optionsOrMaxRetries !== null) {
+		// Extra caller-specific retry predicate (e.g. Stellar txBAD_SEQ), OR-ed with the built-in transient checks.
+		retryOn = typeof optionsOrMaxRetries.retryOn === "function" ? optionsOrMaxRetries.retryOn : null;
 		maxRetries = optionsOrMaxRetries.maxRetries ?? 5;
 		baseDelayMs = optionsOrMaxRetries.baseDelayMs ?? optionsOrMaxRetries.baseDelay ?? 100;
 		maxDelayMs = optionsOrMaxRetries.maxDelayMs ?? optionsOrMaxRetries.maxDelay ?? 1000;
@@ -92,7 +96,7 @@ async function executeWithRetry(prismaTransactionFn, optionsOrMaxRetries = 5, ba
 			return await prismaTransactionFn();
 		} catch (error) {
 			attempt++;
-			const isDeadlock = isTransientConflictError(error);
+			const isDeadlock = isTransientConflictError(error) || Boolean(retryOn && retryOn(error));
 
 			if (!isDeadlock || attempt >= maxRetries) {
 				if (isDeadlock) {

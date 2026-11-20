@@ -109,6 +109,36 @@ describe("Automatic Transaction Deadlock Retry Routine (Issue #443)", () => {
     expect(sleepFn).toHaveBeenCalledTimes(3);
   });
 
+  describe("custom retry predicate (Issue #645)", () => {
+    it("retries errors accepted by retryOn in addition to the built-in transient errors", async () => {
+      const fn = jest
+        .fn()
+        .mockRejectedValueOnce(new Error("txBAD_SEQ"))
+        .mockRejectedValueOnce(Object.assign(new Error("deadlock detected"), { code: "40P01" }))
+        .mockResolvedValueOnce("ok");
+      const sleepFn = jest.fn().mockResolvedValue();
+
+      const result = await executeWithRetry(fn, {
+        maxRetries: 5,
+        sleepFn,
+        retryOn: (error) => /bad_seq/i.test(error.message),
+      });
+
+      expect(result).toBe("ok");
+      expect(fn).toHaveBeenCalledTimes(3);
+      expect(sleepFn).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not retry errors that neither the built-ins nor retryOn accept", async () => {
+      const fn = jest.fn().mockRejectedValue(new Error("syntax error"));
+
+      await expect(
+        executeWithRetry(fn, { maxRetries: 5, sleepFn: jest.fn(), retryOn: () => false }),
+      ).rejects.toThrow("syntax error");
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("Randomized jitter calculation (Issue #534)", () => {
     const { getJitteredDelay } = require("../database/transactionRetry");
 
