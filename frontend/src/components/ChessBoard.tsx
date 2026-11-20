@@ -1,5 +1,7 @@
 import { useGameStore, useGameNotifications, useSoundEffects } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
+import type { DragState, PendingDrag, BoardSquare } from "../types/chess";
+import { isSameSquare, isLegalDragTarget, DRAG_SNAP_CLASSES, GHOST_SCALE } from "../utils/dragSnap";
 import { soundService, type SoundPack } from "../services/soundService";
 import { friendlyError } from "../utils/errorMessages";
 import {
@@ -1006,24 +1008,10 @@ function ChessBoardInner() {
   // the tap-to-select / tap-to-move flow above. Pointer Events give us a
   // single API that covers mouse, touch and pen.
   const DRAG_THRESHOLD_PX = 6;
-  const [dragPiece, setDragPiece] = useState<{
-    row: number;
-    col: number;
-    piece: string;
-    pointerId: number;
-    pointerType: string;
-    x: number;
-    y: number;
-  } | null>(null);
-  const pendingDragRef = useRef<{
-    row: number;
-    col: number;
-    piece: string;
-    pointerId: number;
-    pointerType: string;
-    startX: number;
-    startY: number;
-  } | null>(null);
+  const [dragPiece, setDragPiece] = useState<DragState | null>(null);
+  const pendingDragRef = useRef<PendingDrag | null>(null);
+  // Square currently under the dragged piece, used for the snap preview (#584).
+  const [hoveredSquare, setHoveredSquare] = useState<BoardSquare | null>(null);
 
   const squareFromPoint = (clientX: number, clientY: number): [number, number] | null => {
     const el = boardGridRef.current;
@@ -1037,6 +1025,13 @@ function ChessBoardInner() {
     const actualRow = playerColor === "black" ? 7 - rowIndex : rowIndex;
     const actualCol = playerColor === "black" ? 7 - colIndex : colIndex;
     return [actualRow, actualCol];
+  };
+
+  // Track which square is under the drag ghost. Bails out when unchanged so
+  // pointer moves within one square do not re-render the whole board.
+  const updateHoveredSquare = (clientX: number, clientY: number) => {
+    const next = squareFromPoint(clientX, clientY);
+    setHoveredSquare((prev) => (isSameSquare(prev, next) ? prev : next));
   };
 
   const handlePiecePointerDown = (e: React.PointerEvent, row: number, col: number) => {
@@ -1079,12 +1074,14 @@ function ChessBoardInner() {
           x: e.clientX,
           y: e.clientY + yOffset,
         });
+        updateHoveredSquare(e.clientX, e.clientY + yOffset);
       }
       return;
     }
     if (dragPiece && dragPiece.pointerId === e.pointerId) {
       const yOffset = dragPiece.pointerType === "touch" ? -30 : 0;
       setDragPiece((prev) => (prev ? { ...prev, x: e.clientX, y: e.clientY + yOffset } : prev));
+      updateHoveredSquare(e.clientX, e.clientY + yOffset);
     }
   };
 
@@ -1099,6 +1096,7 @@ function ChessBoardInner() {
     const yOffset = dragPiece.pointerType === "touch" ? -30 : 0;
     const target = squareFromPoint(e.clientX, e.clientY + yOffset) || squareFromPoint(e.clientX, e.clientY);
     setDragPiece(null);
+    setHoveredSquare(null);
 
     if (!target) {
       safeHaptic("error");
@@ -1149,6 +1147,7 @@ function ChessBoardInner() {
       x: touch.clientX,
       y: touch.clientY - 30, // -30px Y-axis offset so target square remains visible
     });
+    updateHoveredSquare(touch.clientX, touch.clientY - 30);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
@@ -1156,6 +1155,7 @@ function ChessBoardInner() {
     const touch = e.touches[0];
     if (!touch) return;
     setDragPiece((prev) => (prev ? { ...prev, x: touch.clientX, y: touch.clientY - 30 } : null));
+    updateHoveredSquare(touch.clientX, touch.clientY - 30);
   };
 
   const handleTouchEnd = async (e: React.TouchEvent) => {
@@ -1163,6 +1163,7 @@ function ChessBoardInner() {
     const from: [number, number] = [dragPiece.row, dragPiece.col];
     const changedTouch = e.changedTouches[0];
     setDragPiece(null);
+    setHoveredSquare(null);
 
     if (!changedTouch) return;
     const target =
@@ -1199,7 +1200,10 @@ function ChessBoardInner() {
 
   const handlePointerCancel = (e: React.PointerEvent) => {
     if (pendingDragRef.current?.pointerId === e.pointerId) pendingDragRef.current = null;
-    if (dragPiece?.pointerId === e.pointerId) setDragPiece(null);
+    if (dragPiece?.pointerId === e.pointerId) {
+      setDragPiece(null);
+      setHoveredSquare(null);
+    }
   };
 
   const handlePromotion = async (piece: string) => {
@@ -1972,7 +1976,7 @@ function ChessBoardInner() {
                 role="grid"
                 tabIndex={-1}
                 aria-label={`Chess board, ${moveHistory.length} moves played. Use the move input bar to type moves, arrow keys to move the square cursor, Enter to pick up or place, Z to step back, F to flip the board.`}
-                className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 ${isMoving ? "opacity-70" : "opacity-100"}`}
+                className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 ${isMoving ? "opacity-70" : "opacity-100"} ${dragPiece ? "cursor-grabbing" : ""}`}
                 style={
                   {
                     width: boardPx,
@@ -2033,6 +2037,17 @@ function ChessBoardInner() {
                     const isCursor =
                       cursor !== null && cursor[0] === actualRow && cursor[1] === actualCol;
 
+                    // Snap preview (#584): glow only the hovered square, and only
+                    // when it is a legal destination for the dragged piece.
+                    const isSnapTarget =
+                      dragPiece !== null &&
+                      isSameSquare(hoveredSquare, [actualRow, actualCol]) &&
+                      isLegalDragTarget(
+                        [dragPiece.row, dragPiece.col],
+                        [actualRow, actualCol],
+                        possibleMoves
+                      );
+
                     // Premove highlight (#473): distinct orange/cyan markers.
                     const isPremoveSource =
                       queuedPremove !== null &&
@@ -2048,6 +2063,7 @@ function ChessBoardInner() {
                         key={`${rowIndex}-${colIndex}`}
                         data-testid={`square-${actualRow}-${actualCol}`}
                         data-premove={isPremoveSource ? "source" : isPremoveDest ? "dest" : undefined}
+                        data-drag-hover={isSnapTarget ? "legal" : undefined}
                         role="gridcell"
                         tabIndex={0}
                         aria-label={squareAriaLabel(piece, actualRow, actualCol)}
@@ -2062,7 +2078,7 @@ function ChessBoardInner() {
                           isPremoveSource ? "premove-source outline-2 outline-orange-400 -outline-offset-2" : ""
                         } ${
                           isPremoveDest ? "premove-dest outline-2 outline-cyan-300 -outline-offset-2" : ""
-                        }`}
+                        } ${isSnapTarget ? DRAG_SNAP_CLASSES : ""}`}
                         style={
                           isCaptureSquare
                             ? { animation: "captureFlash 0.4s ease-out forwards" }
@@ -2202,7 +2218,7 @@ function ChessBoardInner() {
             {dragPiece && boardPx > 0 && (
               <span
                 data-testid="ghost-piece-overlay"
-                className="fixed leading-none pointer-events-none z-50 ghost-piece-overlay"
+                className="fixed leading-none pointer-events-none z-50 cursor-grabbing ghost-piece-overlay"
                 style={
                   {
                     left: dragPiece.x,
@@ -2210,10 +2226,10 @@ function ChessBoardInner() {
                     fontSize: `calc(${boardPx}px / 8 * 0.72)`,
                     transform:
                       dragPiece.pointerType === "touch"
-                        ? "translate(-50%, calc(-50% - 30px)) scale(1.2)"
-                        : "translate(-50%, -50%) scale(1.1)",
+                        ? `translate(-50%, calc(-50% - 30px)) scale(${GHOST_SCALE})`
+                        : `translate(-50%, -50%) scale(${GHOST_SCALE})`,
                     filter: "drop-shadow(0 10px 15px rgba(0, 0, 0, 0.5))",
-                    transition: "transform 0.1s ease-out",
+                    transition: "transform 75ms ease-out",
                     ...(dragPiece.piece === dragPiece.piece.toUpperCase()
                       ? WHITE_PIECE_STYLE
                       : BLACK_PIECE_STYLE),

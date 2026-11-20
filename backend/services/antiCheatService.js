@@ -411,6 +411,30 @@ class AntiCheatService {
 		return { timestampMs, durationMs };
 	}
 
+	/**
+	 * Log a move timing burst / forged premove attempt to `anti_cheat_logs`
+	 * (Issue #583). Telemetry must never block or fail move handling, so errors
+	 * are logged and swallowed.
+	 *
+	 * @returns {Promise<boolean>} true if the row was written
+	 */
+	async logMoveBurst({ gameCode, walletAddress, ip, deltaMs, reason }) {
+		try {
+			const { error } = await this.db.from("anti_cheat_logs").insert({
+				game_code: gameCode,
+				wallet_address: walletAddress || null,
+				ip_address: ip || null,
+				delta_ms: Number.isFinite(deltaMs) ? Math.round(deltaMs) : null,
+				reason,
+			});
+			if (error) throw error;
+			return true;
+		} catch (error) {
+			this.logger.warn(`[AntiCheat] burst telemetry failed: ${error.message}`);
+			return false;
+		}
+	}
+
 	async getTelemetry(gameId) {
 		const { data, error } = await this.db
 			.from("match_audit_logs")

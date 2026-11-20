@@ -1,6 +1,7 @@
 const authService = require("../services/authService");
 const sessionService = require("../services/sessionService");
 const userModel = require("../models/userModel");
+const leaderboardService = require("../services/leaderboardService");
 const { getIpSubnetFromRequest } = require("../utils/ipUtils");
 const jwt = require("jsonwebtoken");
 
@@ -9,6 +10,19 @@ function challengeBinding(req, uri) {
 	// browser origins must never fall back to the service's trusted default.
 	const origin = req.get("origin") || "null";
 	return { origin, uri };
+}
+
+/**
+ * Attach leaderboard rank and percentile (Issue #642) to a profile. Failures
+ * degrade to nulls so the profile endpoint never breaks on ranking issues.
+ */
+async function withPercentile(profile, address) {
+	try {
+		const { rank, percentile } = await leaderboardService.getPlayerRankAndPercentile(address);
+		return { ...profile, rank, percentile };
+	} catch (err) {
+		return { ...profile, rank: null, percentile: null };
+	}
 }
 
 class AuthController {
@@ -103,7 +117,7 @@ class AuthController {
 		try {
 			const profile = await userModel.getUserProfile(req.user.address);
 			if (!profile) return res.status(404).json({ success: false, error: "Profile not found" });
-			res.json({ success: true, data: profile });
+			res.json({ success: true, data: await withPercentile(profile, req.user.address) });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });
 		}
@@ -118,7 +132,7 @@ class AuthController {
 		try {
 			const profile = await userModel.getUserProfile(req.params.address);
 			if (!profile) return res.status(404).json({ success: false, error: "Profile not found" });
-			res.json({ success: true, data: profile });
+			res.json({ success: true, data: await withPercentile(profile, req.params.address) });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });
 		}
