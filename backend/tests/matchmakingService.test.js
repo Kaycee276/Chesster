@@ -768,3 +768,341 @@ describe("MatchmakingService", () => {
 		});
 	});
 });
+
+describe("Redis Streams distributed queue (Issue #644)", () => {
+	const FakeRedisStreams = require("./fixtures/fakeRedisStreams");
+	const { STREAM_CONFIG } = require("../services/matchmakingService");
+	const { STREAM_KEY, CONSUMER_GROUP, DEAD_LETTER_KEY, TICKET_EXPIRY_MS } = STREAM_CONFIG;
+
+	let nowMs;
+	let redis;
+	const makeReplica = () => {
+		const replica = new MatchmakingService();
+		replica.setRedis(redis);
+		return replica;
+	};
+	const ticket = (wallet, rating, overrides = {}) => ({
+		wallet,
+		rating,
+		timeControl: "5+0",
+		wagerAmount: 10,
+		wagerTier: "low",
+		enqueuedAt: nowMs,
+		...overrides,
+	});
+
+	beforeEach(() => {
+		nowMs = 1_700_000_000_000;
+		redis = new FakeRedisStreams({ now: () => nowMs });
+		jest.spyOn(console, "error").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		jest.restoreAllMocks();
+	});
+
+	test("uses the documented stream key and consumer group", () => {
+		expect(STREAM_KEY).toBe("stream:matchmaking:queue");
+		expect(CONSUMER_GROUP).toBe("group:matchmakers");
+		expect(TICKET_EXPIRY_MS).toBe(60_000);
+	});
+
+	describe("enqueueTicket", () => {
+		test("writes the ticket fields to the stream with XADD", async () => {
+			const service = makeReplica();
+			const id = await service.enqueueTicket(ticket("GAAA", 1500));
+
+			expect(id).toMatch(/^\d+-\d+$/);
+			expect(redis.entries(STREAM_KEY)).toEqual([
+				expect.objectContaining({
+					id,
+					wallet: "GAAA",
+					rating: "1500",
+					timeControl: "5+0",
+					wagerAmount: "10",
+					enqueuedAt: String(nowMs),
+				}),
+			]);
+		});
+
+		test("rejects tickets without a wallet or a numeric rating", async () => {
+			const service = makeReplica();
+			await expect(service.enqueueTicket({ rating: 1500 })).rejects.toThrow("wallet is required");
+			await expect(service.enqueueTicket({ wallet: "GAAA", rating: "abc" })).rejects.toThrow("rating must be a number");
+			expect(await redis.xlen(STREAM_KEY)).toBe(0);
+		});
+
+		test("requires a Redis client", async () => {
+			await expect(new MatchmakingService().enqueueTicket(ticket("GAAA", 1500))).rejects.toThrow("Redis client is required");
+		});
+	});
+
+	describe("consumeTickets", () => {
+		test("delivers each ticket to exactly one consumer in the group", async () => {
+			const w1 = makeReplica();
+			const w2 = makeReplica();
+			await w1.ensureConsumerGroup();
+			for (let i = 0; i < 6; i++) await w1.enqueueTicket(ticket(`G${i}`, 1500 + i));
+
+			const first = await w1.consumeTickets("w1", { count: 4, blockMs: 0 });
+			const second = await w2.consumeTickets("w2", { count: 4, blockMs: 0 });
+
+			expect(first).toHaveLength(4);
+			expect(second).toHaveLength(2);
+			const ids = [...first, ...second].map((t) => t.streamId);
+			expect(new Set(ids).size).toBe(6);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toHaveLength(6);
+		});
+
+		test("ensureConsumerGroup is idempotent", async () => {
+			const service = makeReplica();
+			await service.ensureConsumerGroup();
+			await expect(service.ensureConsumerGroup()).resolves.toBeUndefined();
+		});
+	});
+
+	describe("pairing and acknowledgement", () => {
+		test("matches two compatible tickets and acknowledges both with XACK", async () => {
+			const service = makeReplica();
+			await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.enqueueTicket(ticket("GBBB", 1520));
+
+			const matches = await service.processStreamQueue("w1", { now: nowMs });
+
+			expect(matches).toHaveLength(1);
+			expect([matches[0].player1.userId, matches[0].player2.userId].sort()).toEqual(["GAAA", "GBBB"]);
+			expect(matches[0].matchCode).toMatch(/^MATCH_/);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([]);
+		});
+
+		test("keeps unmatched tickets pending until a partner arrives", async () => {
+			const service = makeReplica();
+			await service.enqueueTicket(ticket("GAAA", 1500));
+			expect(await service.processStreamQueue("w1", { now: nowMs })).toEqual([]);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toHaveLength(1);
+
+			await service.enqueueTicket(ticket("GBBB", 1510));
+			expect(await service.processStreamQueue("w1", { now: nowMs })).toHaveLength(1);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([]);
+		});
+
+		test("pairs a ticket held by another worker", async () => {
+			const w1 = makeReplica();
+			const w2 = makeReplica();
+			await w1.enqueueTicket(ticket("GAAA", 1500));
+			await w1.processStreamQueue("w1", { now: nowMs }); // w1 now holds GAAA
+			await w2.enqueueTicket(ticket("GBBB", 1505));
+
+			const matches = await w2.processStreamQueue("w2", { now: nowMs });
+			expect(matches).toHaveLength(1);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([]);
+		});
+
+		test("does not pair incompatible tickets", async () => {
+			const service = makeReplica();
+			await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.enqueueTicket(ticket("GFAR", 1900)); // outside rating tolerance
+			await service.enqueueTicket(ticket("GWAG", 1500, { wagerAmount: 50 })); // different wager
+			await service.enqueueTicket(ticket("GTC", 1500, { timeControl: "1+0" })); // different time control
+
+			expect(await service.processStreamQueue("w1", { now: nowMs })).toEqual([]);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toHaveLength(4);
+		});
+
+		test("widens the rating window with waiting time like the in-memory queue", async () => {
+			const service = makeReplica();
+			await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.enqueueTicket(ticket("GBBB", 1580));
+			expect(await service.processStreamQueue("w1", { now: nowMs })).toEqual([]);
+
+			nowMs += 30_000; // tolerance grows from 50 to 150
+			expect(await service.processStreamQueue("w1", { now: nowMs })).toHaveLength(1);
+		});
+
+		test("never pairs a wallet with its own duplicate ticket", async () => {
+			const service = makeReplica();
+			await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.enqueueTicket(ticket("GAAA", 1500));
+
+			expect(await service.processStreamQueue("w1", { now: nowMs })).toEqual([]);
+		});
+
+		test("prefers the closest rating gap", async () => {
+			const service = makeReplica();
+			await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.enqueueTicket(ticket("GNEAR", 1505));
+			await service.enqueueTicket(ticket("GMID", 1540));
+
+			const [match] = await service.processStreamQueue("w1", { now: nowMs });
+			expect([match.player1.userId, match.player2.userId].sort()).toEqual(["GAAA", "GNEAR"]);
+		});
+
+		test("cancelTicket removes a waiting ticket so it is never matched", async () => {
+			const service = makeReplica();
+			const id = await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.processStreamQueue("w1", { now: nowMs });
+			expect(await service.cancelTicket(id)).toBe(true);
+
+			await service.enqueueTicket(ticket("GBBB", 1500));
+			expect(await service.processStreamQueue("w1", { now: nowMs })).toEqual([]);
+		});
+	});
+
+	describe("multi-worker concurrency", () => {
+		async function runRounds(workers, rounds) {
+			const matches = [];
+			for (let round = 0; round < rounds; round++) {
+				const results = await Promise.all(
+					workers.map(({ service, name }) => service.processStreamQueue(name, { now: nowMs, count: 5 })),
+				);
+				for (const result of results) matches.push(...result);
+			}
+			return matches;
+		}
+
+		test("never double-books a player under parallel load", async () => {
+			const workers = ["w1", "w2", "w3"].map((name) => ({ name, service: makeReplica() }));
+			const producer = makeReplica();
+			const wallets = Array.from({ length: 40 }, (_, i) => `GWALLET${i}`);
+			for (const [i, wallet] of wallets.entries()) await producer.enqueueTicket(ticket(wallet, 1500 + (i % 10)));
+
+			const matches = await runRounds(workers, 12);
+
+			const seenWallets = matches.flatMap((m) => [m.player1.userId, m.player2.userId]);
+			const seenTickets = matches.flatMap((m) => [m.player1.streamId, m.player2.streamId]);
+			expect(new Set(seenWallets).size).toBe(seenWallets.length);
+			expect(new Set(seenTickets).size).toBe(seenTickets.length);
+			expect(new Set(matches.map((m) => m.matchCode)).size).toBe(matches.length);
+			// Everyone is pairable, so nobody should be left waiting.
+			expect(matches).toHaveLength(20);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([]);
+		});
+
+		test("does not double-book a wallet that queued several tickets", async () => {
+			const workers = ["w1", "w2", "w3"].map((name) => ({ name, service: makeReplica() }));
+			const producer = makeReplica();
+			// GDUP has three tickets; three other players could each pair with one of them.
+			for (const wallet of ["GDUP", "GDUP", "GDUP", "GX1", "GX2", "GX3"]) {
+				await producer.enqueueTicket(ticket(wallet, 1500));
+			}
+
+			const matches = await runRounds(workers, 6);
+
+			const seenWallets = matches.flatMap((m) => [m.player1.userId, m.player2.userId]);
+			expect(seenWallets.filter((wallet) => wallet === "GDUP").length).toBeLessThanOrEqual(1);
+			expect(new Set(seenWallets).size).toBe(seenWallets.length);
+		});
+
+		test("conserves tickets: every ticket is either matched or still pending", async () => {
+			const workers = ["w1", "w2"].map((name) => ({ name, service: makeReplica() }));
+			const producer = makeReplica();
+			for (let i = 0; i < 15; i++) await producer.enqueueTicket(ticket(`GC${i}`, 1500 + i));
+
+			const matches = await runRounds(workers, 10);
+
+			const pending = redis.pendingIds(STREAM_KEY, CONSUMER_GROUP).length;
+			expect(matches.length * 2 + pending).toBe(15);
+			expect(pending).toBe(1); // odd player out keeps waiting
+		});
+	});
+
+	describe("dead-letter recovery", () => {
+		test("moves tickets pending past 60 seconds to the dead-letter stream and notifies the client", async () => {
+			const service = makeReplica();
+			const id = await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.processStreamQueue("w1", { now: nowMs });
+
+			nowMs += TICKET_EXPIRY_MS - 1;
+			expect(await service.recoverStaleTickets("monitor")).toEqual([]);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([id]);
+
+			nowMs += 1;
+			const onExpired = jest.fn();
+			const expired = await service.recoverStaleTickets("monitor", { onExpired });
+
+			expect(expired.map((t) => t.streamId)).toEqual([id]);
+			expect(onExpired).toHaveBeenCalledWith(expect.objectContaining({ userId: "GAAA", streamId: id }), { reason: "expired_unmatched" });
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([]);
+			expect(redis.entries(DEAD_LETTER_KEY)).toEqual([
+				expect.objectContaining({ wallet: "GAAA", originalId: id, reason: "expired_unmatched" }),
+			]);
+		});
+
+		test("recovers tickets stranded by a worker that crashed after reading them", async () => {
+			const crashed = makeReplica();
+			const survivor = makeReplica();
+			await crashed.enqueueTicket(ticket("GLOST", 1500));
+			await crashed.ensureConsumerGroup();
+			await crashed.consumeTickets("crashed", { blockMs: 0 }); // delivered, never processed
+
+			nowMs += TICKET_EXPIRY_MS;
+			const expired = await survivor.recoverStaleTickets("survivor");
+
+			expect(expired).toHaveLength(1);
+			expect(expired[0]).toMatchObject({ userId: "GLOST", consumer: "survivor" });
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([]);
+		});
+
+		test("does not expire tickets that were matched in time", async () => {
+			const service = makeReplica();
+			await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.enqueueTicket(ticket("GBBB", 1500));
+			await service.processStreamQueue("w1", { now: nowMs });
+
+			nowMs += TICKET_EXPIRY_MS * 2;
+			expect(await service.recoverStaleTickets("monitor")).toEqual([]);
+			expect(await redis.xlen(DEAD_LETTER_KEY)).toBe(0);
+		});
+
+		test("dead-letters malformed tickets instead of looping on them", async () => {
+			const service = makeReplica();
+			await redis.xadd(STREAM_KEY, "*", "wallet", "GBAD", "rating", "not-a-number", "enqueuedAt", String(nowMs));
+			const onExpired = jest.fn();
+
+			await service.processStreamQueue("w1", { now: nowMs, onExpired });
+
+			expect(onExpired).toHaveBeenCalledWith(expect.objectContaining({ userId: "GBAD" }), { reason: "invalid_ticket" });
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([]);
+			expect(redis.entries(DEAD_LETTER_KEY)).toEqual([expect.objectContaining({ reason: "invalid_ticket" })]);
+		});
+
+		test("a failing onExpired handler does not stop recovery", async () => {
+			const service = makeReplica();
+			await service.enqueueTicket(ticket("GAAA", 1500));
+			await service.enqueueTicket(ticket("GBBB", 1900));
+			await service.processStreamQueue("w1", { now: nowMs });
+			nowMs += TICKET_EXPIRY_MS;
+
+			const expired = await service.recoverStaleTickets("monitor", { onExpired: () => { throw new Error("socket gone"); } });
+			expect(expired).toHaveLength(2);
+			expect(redis.pendingIds(STREAM_KEY, CONSUMER_GROUP)).toEqual([]);
+		});
+	});
+
+	describe("startStreamWorker", () => {
+		test("requires a consumer name, an onMatch callback and a Redis client", () => {
+			const service = makeReplica();
+			expect(() => service.startStreamWorker({ onMatch: () => {} })).toThrow("consumerName is required");
+			expect(() => service.startStreamWorker({ consumerName: "w1" })).toThrow("onMatch callback is required");
+			expect(() => new MatchmakingService().startStreamWorker({ consumerName: "w1", onMatch: () => {} })).toThrow("Redis client is required");
+		});
+
+		test("a tick delivers matches to onMatch and stopStreamWorker clears the timer", async () => {
+			const service = makeReplica();
+			const onMatch = jest.fn();
+			const onExpired = jest.fn();
+			// nowMs is far in the past relative to Date.now(); use real-time enqueue stamps.
+			const tick = service.startStreamWorker({ consumerName: "w1", onMatch, onExpired, intervalMs: 60_000 });
+			await service.enqueueTicket({ ...ticket("GAAA", 1500), enqueuedAt: Date.now() });
+			await service.enqueueTicket({ ...ticket("GBBB", 1500), enqueuedAt: Date.now() });
+			await service.enqueueTicket({ ...ticket("GFAR", 1900), enqueuedAt: Date.now() });
+
+			await tick();
+			service.stopStreamWorker();
+
+			expect(onMatch).toHaveBeenCalledTimes(1);
+			expect(onExpired).not.toHaveBeenCalled();
+			expect(service.streamTimer).toBeNull();
+		});
+	});
+});

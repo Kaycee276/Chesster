@@ -22,6 +22,18 @@ const HIGH_ENTROPY_MIN_ENGINE_CORRELATION = 0.9;
 const ANTI_CHEAT_FLAG_LOW_ENTROPY = "low_time_variance_entropy";
 const ANTI_CHEAT_FLAG_HIGH_ENTROPY = "high_time_variance_entropy_engine_correlation";
 
+// Instant tactical refutation heuristic (Issue #643). A reply to a volatile
+// position (the opponent's last move swung the eval by more than 200cp) that
+// is the engine's top line, is chosen among many legal moves and is played in
+// under 300ms is a bot hallmark; humans stop to evaluate such positions.
+const TACTICAL_BURST_FLAG = "TACTICAL_BURST_FLAG";
+const TACTICAL_EVAL_SWING_CP = 200;
+const TACTICAL_MIN_LEGAL_MOVES = 15;
+const TACTICAL_BURST_MAX_MS = 300;
+const TACTICAL_MIN_BURSTS = 2;
+const TACTICAL_BURST_SCORE_STEP = 10;
+const TACTICAL_BURST_SCORE_MAX = 40;
+
 function mean(values) {
 	return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
@@ -322,6 +334,75 @@ function analyzeGameMoveTimes(moveHistory, { engineCorrelation = {} } = {}) {
 	return result;
 }
 
+/**
+ * Classify whether a position is complex enough for response speed to be
+ * meaningful. Forced replies (one legal move, e.g. a recapture) and quiet
+ * positions are excluded because they are naturally played quickly.
+ * priorMoveEvalDiff is the centipawn swing caused by the opponent's last move.
+ * @returns {{complex: boolean, reason: string}}
+ */
+function evaluateMoveComplexity({ legalMovesCount, priorMoveEvalDiff } = {}) {
+	const legal = toFiniteNumber(legalMovesCount);
+	const swing = toFiniteNumber(priorMoveEvalDiff);
+	if (legal === null || swing === null) return { complex: false, reason: "insufficient_data" };
+	if (legal <= 1) return { complex: false, reason: "forced_move" };
+	if (legal <= TACTICAL_MIN_LEGAL_MOVES) return { complex: false, reason: "few_legal_moves" };
+	if (Math.abs(swing) <= TACTICAL_EVAL_SWING_CP) return { complex: false, reason: "low_volatility" };
+	return { complex: true, reason: "high_tactical_volatility" };
+}
+
+/**
+ * Flag a single move if it is an instant engine-top reply in a complex position.
+ * @param {{isTopEngineMove: boolean, durationMs: number|null, moveNumber?: number}} moveData
+ * @returns {{type: string, flag: string, severity: string, moveNumber: number|null, durationMs: number}|null}
+ */
+function evaluateTacticalResponse(moveData, priorMoveEvalDiff, legalMovesCount) {
+	if (!moveData || moveData.isTopEngineMove !== true) return null;
+	const durationMs = toFiniteNumber(moveData.durationMs);
+	if (durationMs === null || durationMs < 0 || durationMs >= TACTICAL_BURST_MAX_MS) return null;
+	if (!evaluateMoveComplexity({ legalMovesCount, priorMoveEvalDiff }).complex) return null;
+	return {
+		type: TACTICAL_BURST_FLAG,
+		flag: TACTICAL_BURST_FLAG,
+		severity: "high",
+		moveNumber: toFiniteNumber(moveData.moveNumber),
+		durationMs,
+	};
+}
+
+/**
+ * Scan one player's moves for repeated instant tactical refutations. A single
+ * fast reply is not enough: at least TACTICAL_MIN_BURSTS complex positions in
+ * the match must be answered instantly with the engine's top move.
+ * Each move: {moveNumber, durationMs, isTopEngineMove, priorMoveEvalDiff, legalMovesCount}.
+ * @returns {{bursts: object[], complexMoves: number, flags: object[], suspicionBoost: number}}
+ */
+function detectInstantTacticalRefutations(moves = []) {
+	const bursts = [];
+	let complexMoves = 0;
+	for (const move of moves || []) {
+		if (!move) continue;
+		if (evaluateMoveComplexity(move).complex) complexMoves += 1;
+		const flag = evaluateTacticalResponse(move, move.priorMoveEvalDiff, move.legalMovesCount);
+		if (flag) bursts.push(flag);
+	}
+	if (bursts.length < TACTICAL_MIN_BURSTS) return { bursts, complexMoves, flags: [], suspicionBoost: 0 };
+	return {
+		bursts,
+		complexMoves,
+		flags: [{
+			type: TACTICAL_BURST_FLAG,
+			flag: TACTICAL_BURST_FLAG,
+			severity: "high",
+			burstCount: bursts.length,
+			complexMoves,
+			thresholdMs: TACTICAL_BURST_MAX_MS,
+			moveNumbers: bursts.map((burst) => burst.moveNumber),
+		}],
+		suspicionBoost: Math.min(TACTICAL_BURST_SCORE_MAX, bursts.length * TACTICAL_BURST_SCORE_STEP),
+	};
+}
+
 function summarizeCentipawnLoss(losses) {
 	return {
 		count: losses.length,
@@ -467,10 +548,44 @@ class AntiCheatService {
 		return {
 			matchesTopMove: playedMove === before.bestMove,
 			centipawnLoss,
+			evalBeforeCp: Number.isFinite(before.scoreCp) ? before.scoreCp : null,
 		};
 	}
 
-	buildPlayerAnalysis(color, playerAddress, telemetry, engineResults, rating = null, timing = null) {
+	/**
+	 * Per-move inputs for the tactical refutation heuristic: each of `color`'s
+	 * moves paired with the eval swing of the opponent move that preceded it.
+	 * evalBeforeCp is from the mover's view, so the opponent's move swung the
+	 * eval by |evalBefore(previous) + evalBefore(this)|.
+	 */
+	collectTacticalMoves(telemetry, color, engineByEntry) {
+		const moves = [];
+		telemetry.forEach((entry, index) => {
+			const event = entry.event_data;
+			const previous = telemetry[index - 1];
+			if (event?.color !== color || !previous || previous.event_data?.color === color) return;
+			const current = engineByEntry.get(entry);
+			const prior = engineByEntry.get(previous);
+			const hasEvals = Number.isFinite(current?.evalBeforeCp) && Number.isFinite(prior?.evalBeforeCp);
+			let legalMovesCount = null;
+			try {
+				legalMovesCount = toFiniteNumber(event.legalMoveCount)
+					?? countLegalMoves(event.boardBefore, color, TACTICAL_MIN_LEGAL_MOVES + 1);
+			} catch {
+				legalMovesCount = null;
+			}
+			moves.push({
+				moveNumber: toFiniteNumber(event.moveNumber),
+				durationMs: toFiniteNumber(entry.move_duration_ms),
+				isTopEngineMove: current?.matchesTopMove === true,
+				priorMoveEvalDiff: hasEvals ? current.evalBeforeCp + prior.evalBeforeCp : null,
+				legalMovesCount,
+			});
+		});
+		return moves;
+	}
+
+	buildPlayerAnalysis(color, playerAddress, telemetry, engineResults, rating = null, timing = null, tactical = null) {
 		const durations = telemetry
 			.map((entry) => entry.move_duration_ms)
 			.filter((value) => Number.isFinite(value) && value >= 0);
@@ -495,6 +610,7 @@ class AntiCheatService {
 		);
 		const ratingRisk = hasRating ? Math.max(0, Math.min(1, (2000 - Number(rating)) / 1200)) : 0;
 		const suspicionScore = Math.round(Math.min(100, Math.max(0,
+			(tactical?.suspicionBoost || 0) +
 			score * 35 +
 			(engineMatches.length ? engineMatches.filter(Boolean).length / engineMatches.length : 0) * 40 +
 			(centipawnLosses.length ? Math.max(0, 1 - mean(centipawnLosses) / 200) : 0) * 15 +
@@ -519,6 +635,10 @@ class AntiCheatService {
 			reasons.push(flag.type === ANTI_CHEAT_FLAG_LOW_ENTROPY
 				? "suspiciously uniform move time distribution (low time variance entropy)"
 				: "near-maximal move time entropy with over 90% engine correlation");
+		}
+		for (const flag of tactical?.flags || []) {
+			antiCheatFlags.push(flag);
+			reasons.push(`${flag.burstCount} instant (under ${TACTICAL_BURST_MAX_MS}ms) engine-top replies to complex tactical positions`);
 		}
 
 		return {
@@ -579,16 +699,19 @@ class AntiCheatService {
 		})));
 
 		const analysis = {};
+		const engineByEntry = new Map();
 		for (const color of ["white", "black"]) {
 			const entries = grouped[color];
 			const engineResults = [];
 			for (const entry of entries) {
+				let result = null;
 				try {
-					engineResults.push(await this.analyzeEngineMove(entry));
+					result = await this.analyzeEngineMove(entry);
 				} catch (error) {
 					this.logger.warn(`[AntiCheat] Engine analysis skipped: ${error.message}`);
-					engineResults.push(null);
 				}
+				engineByEntry.set(entry, result);
+				engineResults.push(result);
 			}
 			analysis[color] = this.buildPlayerAnalysis(
 				color,
@@ -597,6 +720,7 @@ class AntiCheatService {
 				engineResults,
 				ratings[color],
 				moveTimes[color],
+				detectInstantTacticalRefutations(this.collectTacticalMoves(telemetry, color, engineByEntry)),
 			);
 		}
 
@@ -647,6 +771,14 @@ module.exports.countLegalMoves = countLegalMoves;
 module.exports.analyzeGameMoveTimes = analyzeGameMoveTimes;
 module.exports.analyzeMoveTimeDistribution = analyzeMoveTimeDistribution;
 module.exports.calculateVariance = calculateVariance;
+module.exports.evaluateMoveComplexity = evaluateMoveComplexity;
+module.exports.evaluateTacticalResponse = evaluateTacticalResponse;
+module.exports.detectInstantTacticalRefutations = detectInstantTacticalRefutations;
+module.exports.TACTICAL_BURST_FLAG = TACTICAL_BURST_FLAG;
+module.exports.TACTICAL_BURST_MAX_MS = TACTICAL_BURST_MAX_MS;
+module.exports.TACTICAL_EVAL_SWING_CP = TACTICAL_EVAL_SWING_CP;
+module.exports.TACTICAL_MIN_LEGAL_MOVES = TACTICAL_MIN_LEGAL_MOVES;
+module.exports.TACTICAL_MIN_BURSTS = TACTICAL_MIN_BURSTS;
 module.exports.calculatePearsonCorrelation = calculatePearsonCorrelation;
 module.exports.ENTROPY_BIN_EDGES_MS = ENTROPY_BIN_EDGES_MS;
 module.exports.LOW_ENTROPY_THRESHOLD = LOW_ENTROPY_THRESHOLD;

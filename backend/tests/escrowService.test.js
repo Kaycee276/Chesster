@@ -341,5 +341,313 @@ describe("Escrow Service", () => {
         .toThrow("missing required arguments");
     });
   });
-});
 
+  describe("idempotent settlement coordinator (Issue #645)", () => {
+    const { OptimisticLockError } = require("../database/transactionRetry");
+    const {
+      settleMatchWithIdempotency,
+      checkOnChainStatus,
+      createMemoryLedger,
+      createSupabaseLedger,
+      SettlementInProgressError,
+      MatchNotActiveError,
+      ON_CHAIN_STATUS,
+    } = escrowService;
+
+    /** Shared-state Redis fake: SET NX EX, EXPIRE and the compare-and-delete release script. */
+    function createFakeRedis() {
+      const store = new Map();
+      return {
+        store,
+        set: jest.fn(async (key, value, ...opts) => {
+          await Promise.resolve();
+          if (opts.includes("NX") && store.has(key)) return null;
+          store.set(key, value);
+          return "OK";
+        }),
+        expire: jest.fn(async () => 1),
+        eval: jest.fn(async (_script, _n, key, owner) => {
+          await Promise.resolve();
+          if (store.get(key) === owner) {
+            store.delete(key);
+            return 1;
+          }
+          return 0;
+        }),
+      };
+    }
+
+    const active = async () => ({ status: ON_CHAIN_STATUS.ACTIVE, isActive: true, isFinal: false });
+    const resolved = async () => ({ status: ON_CHAIN_STATUS.RESOLVED, isActive: false, isFinal: true });
+    const pendingOnChain = async () => ({ status: ON_CHAIN_STATUS.PENDING, isActive: false, isFinal: false });
+    const noRetryDelay = { retry: { sleepFn: async () => {} } };
+
+    it("runs the settlement once and records it as confirmed in the ledger", async () => {
+      const redis = createFakeRedis();
+      const ledger = createMemoryLedger();
+      const settle = jest.fn().mockResolvedValue({ hash: "tx-1" });
+
+      const result = await settleMatchWithIdempotency("GAME1", settle, { redis, ledger, checkStatus: active, ...noRetryDelay });
+
+      expect(result).toMatchObject({ matchId: "GAME1", status: "confirmed", txHash: "tx-1", idempotent: false, alreadySettled: false });
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(await ledger.find("GAME1")).toMatchObject({ status: "confirmed", tx_hash: "tx-1", attempts: 1 });
+      expect(redis.set).toHaveBeenCalledWith("lock:escrow:match:GAME1", expect.any(String), "NX", "EX", 30);
+      expect(redis.store.has("lock:escrow:match:GAME1")).toBe(false); // lock released
+    });
+
+    it("lets exactly one of many concurrent settlements through (no double submission)", async () => {
+      const redis = createFakeRedis();
+      const ledger = createMemoryLedger();
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const settle = jest.fn(async () => {
+        await gate;
+        return { hash: "tx-once" };
+      });
+
+      const attempts = Array.from({ length: 8 }, () =>
+        settleMatchWithIdempotency("GAME2", settle, { redis, ledger, checkStatus: active, ...noRetryDelay }),
+      );
+      const pendingResults = Promise.allSettled(attempts); // attach handlers before any can reject
+      // Let every contender reach the lock before the winner finishes.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      release();
+      const results = await pendingResults;
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(fulfilled).toHaveLength(1);
+      expect(fulfilled[0].value.txHash).toBe("tx-once");
+      expect(rejected).toHaveLength(7);
+      for (const r of rejected) expect(r.reason).toBeInstanceOf(SettlementInProgressError);
+      expect(await ledger.find("GAME2")).toMatchObject({ status: "confirmed", tx_hash: "tx-once" });
+    });
+
+    it("returns the ledger entry without resubmitting once confirmed", async () => {
+      const redis = createFakeRedis();
+      const ledger = createMemoryLedger();
+      const checkStatus = jest.fn(active);
+      await settleMatchWithIdempotency("GAME3", async () => ({ hash: "tx-3" }), { redis, ledger, checkStatus, ...noRetryDelay });
+
+      const settleAgain = jest.fn();
+      const second = await settleMatchWithIdempotency("GAME3", settleAgain, { redis, ledger, checkStatus, ...noRetryDelay });
+
+      expect(second).toMatchObject({ txHash: "tx-3", idempotent: true, alreadySettled: true });
+      expect(settleAgain).not.toHaveBeenCalled();
+      expect(checkStatus).toHaveBeenCalledTimes(1); // the second call never even queried the chain
+    });
+
+    it("does not settle a match that is already resolved on-chain and reconciles the ledger", async () => {
+      const ledger = createMemoryLedger();
+      const settle = jest.fn();
+
+      const result = await settleMatchWithIdempotency("GAME4", settle, { redis: createFakeRedis(), ledger, checkStatus: resolved, ...noRetryDelay });
+
+      expect(settle).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ idempotent: true, alreadySettled: true, onChainStatus: ON_CHAIN_STATUS.RESOLVED });
+      expect(await ledger.find("GAME4")).toMatchObject({ status: "confirmed" });
+    });
+
+    it("reconciles a stale pending entry whose transaction landed before the worker died", async () => {
+      const ledger = createMemoryLedger();
+      await ledger.insertPending("GAME5"); // crashed worker left this behind
+      const settle = jest.fn();
+
+      const result = await settleMatchWithIdempotency("GAME5", settle, { redis: createFakeRedis(), ledger, checkStatus: resolved, ...noRetryDelay });
+
+      expect(settle).not.toHaveBeenCalled();
+      expect(result.alreadySettled).toBe(true);
+      expect(await ledger.find("GAME5")).toMatchObject({ status: "confirmed" });
+    });
+
+    it("refuses to settle a match that is not Active on-chain", async () => {
+      const ledger = createMemoryLedger();
+      const settle = jest.fn();
+
+      await expect(
+        settleMatchWithIdempotency("GAME6", settle, { redis: createFakeRedis(), ledger, checkStatus: pendingOnChain, ...noRetryDelay }),
+      ).rejects.toBeInstanceOf(MatchNotActiveError);
+
+      expect(settle).not.toHaveBeenCalled();
+      expect(await ledger.find("GAME6")).toBeNull();
+    });
+
+    it("marks a failed submission as failed, releases the lock and allows a later retry", async () => {
+      const redis = createFakeRedis();
+      const ledger = createMemoryLedger();
+      const opts = { redis, ledger, checkStatus: active, ...noRetryDelay };
+
+      await expect(
+        settleMatchWithIdempotency("GAME7", jest.fn().mockRejectedValue(new Error("HostError: contract trapped")), opts),
+      ).rejects.toThrow("HostError: contract trapped");
+      expect(await ledger.find("GAME7")).toMatchObject({ status: "failed", last_error: "HostError: contract trapped" });
+      expect(redis.store.has("lock:escrow:match:GAME7")).toBe(false);
+
+      const result = await settleMatchWithIdempotency("GAME7", async () => ({ hash: "tx-7" }), opts);
+      expect(result.txHash).toBe("tx-7");
+      expect(await ledger.find("GAME7")).toMatchObject({ status: "confirmed", attempts: 2, last_error: null });
+    });
+
+    it("retries optimistic-lock conflicts on ledger updates with backoff", async () => {
+      const base = createMemoryLedger();
+      let conflicts = 1;
+      const ledger = {
+        ...base,
+        update: jest.fn(async (...args) => {
+          if (conflicts-- > 0) throw new OptimisticLockError();
+          return base.update(...args);
+        }),
+      };
+      const sleepFn = jest.fn(async () => {});
+
+      const result = await settleMatchWithIdempotency("GAME8", async () => ({ hash: "tx-8" }), {
+        redis: createFakeRedis(),
+        ledger,
+        checkStatus: active,
+        retry: { sleepFn },
+      });
+
+      expect(result.status).toBe("confirmed");
+      expect(sleepFn).toHaveBeenCalledTimes(1);
+      expect(await base.find("GAME8")).toMatchObject({ status: "confirmed", tx_hash: "tx-8" });
+    });
+
+    it("still returns the receipt if the confirmation write fails after the transaction landed", async () => {
+      const base = createMemoryLedger();
+      const ledger = { ...base, update: jest.fn().mockRejectedValue(new Error("db down")) };
+      const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await settleMatchWithIdempotency("GAME9", async () => ({ hash: "tx-9" }), {
+        redis: createFakeRedis(),
+        ledger,
+        checkStatus: active,
+        retry: { maxRetries: 1, sleepFn: async () => {} },
+      });
+
+      expect(result).toMatchObject({ txHash: "tx-9", status: "confirmed" });
+      errorSpy.mockRestore();
+    });
+
+    it("falls back to an in-process lock when Redis is unavailable", async () => {
+      const ledger = createMemoryLedger();
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const settle = jest.fn(async () => {
+        await gate;
+        return { hash: "tx-local" };
+      });
+      const opts = { redis: null, ledger, checkStatus: active, ...noRetryDelay };
+
+      const first = settleMatchWithIdempotency("GAME10", settle, opts);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await expect(settleMatchWithIdempotency("GAME10", settle, opts)).rejects.toBeInstanceOf(SettlementInProgressError);
+      release();
+      await expect(first).resolves.toMatchObject({ txHash: "tx-local" });
+      expect(settle).toHaveBeenCalledTimes(1);
+    });
+
+    it("validates its arguments", async () => {
+      await expect(settleMatchWithIdempotency("", jest.fn())).rejects.toThrow("matchId is required");
+      await expect(settleMatchWithIdempotency("GAME11", null)).rejects.toThrow("settlementFn must be a function");
+    });
+
+    it("retries a txBAD_SEQ sequence collision with backoff during real submission", async () => {
+      serverInstance.sendTransaction
+        .mockRejectedValueOnce(new Error("txBAD_SEQ"))
+        .mockResolvedValueOnce({ status: "PENDING", hash: "seq-hash" });
+
+      const result = await settleMatchWithIdempotency("GAME12", () => escrowService.resolveWithWinner("GAME12", "PLAYER1"), {
+        redis: createFakeRedis(),
+        ledger: createMemoryLedger(),
+        checkStatus: active,
+        ...noRetryDelay,
+      });
+
+      expect(result.status).toBe("confirmed");
+      expect(serverInstance.sendTransaction).toHaveBeenCalledTimes(2);
+    });
+
+    describe("checkOnChainStatus", () => {
+      const match = (overrides) => ({
+        game_code: "GAME1",
+        player1: "P1",
+        player2: "P2",
+        wager_amount: 1n,
+        total_staked: 2n,
+        created_at: 1000n,
+        status: 1,
+        winner: null,
+        ...overrides,
+      });
+
+      it("reports an Active match as settleable", async () => {
+        scValToNative.mockReturnValueOnce(match({ status: 1 }));
+        await expect(checkOnChainStatus("GAME1")).resolves.toMatchObject({ status: 1, exists: true, isActive: true, isFinal: false });
+      });
+
+      it("reports Resolved and Refunded matches as final", async () => {
+        scValToNative.mockReturnValueOnce(match({ status: 2 }));
+        await expect(checkOnChainStatus("GAME1")).resolves.toMatchObject({ isActive: false, isFinal: true });
+        scValToNative.mockReturnValueOnce(match({ status: 3 }));
+        await expect(checkOnChainStatus("GAME1")).resolves.toMatchObject({ isActive: false, isFinal: true });
+      });
+
+      it("treats a match that was never created as neither active nor final", async () => {
+        scValToNative.mockReturnValueOnce(match({ status: 1, created_at: 0n }));
+        await expect(checkOnChainStatus("GAME1")).resolves.toMatchObject({ exists: false, isActive: false, isFinal: false });
+      });
+
+      it("propagates RPC failures so settlement is not attempted blind", async () => {
+        serverInstance.simulateTransaction.mockResolvedValueOnce({ error: "rpc down" });
+        await expect(checkOnChainStatus("GAME1")).rejects.toThrow("Simulation failed");
+      });
+    });
+
+    describe("createSupabaseLedger", () => {
+      function fakeSupabase({ insertResult, updateResult, findResult } = {}) {
+        const calls = { eq: [] };
+        const builder = {
+          select: jest.fn(() => builder),
+          insert: jest.fn(() => builder),
+          update: jest.fn(() => builder),
+          eq: jest.fn((...args) => { calls.eq.push(args); return builder; }),
+          single: jest.fn(async () => insertResult),
+          maybeSingle: jest.fn(async () => findResult),
+          then: (resolve) => resolve(updateResult),
+        };
+        return { client: { from: jest.fn(() => builder) }, builder, calls };
+      }
+
+      it("inserts a pending row and maps a unique violation to null", async () => {
+        const ok = fakeSupabase({ insertResult: { data: { match_id: "G", status: "pending", version: 0 }, error: null } });
+        await expect(createSupabaseLedger(ok.client).insertPending("G")).resolves.toMatchObject({ status: "pending" });
+        expect(ok.client.from).toHaveBeenCalledWith("escrow_settlement_ledger");
+
+        const dup = fakeSupabase({ insertResult: { data: null, error: { code: "23505" } } });
+        await expect(createSupabaseLedger(dup.client).insertPending("G")).resolves.toBeNull();
+
+        const broken = fakeSupabase({ insertResult: { data: null, error: { code: "XX000", message: "boom" } } });
+        await expect(createSupabaseLedger(broken.client).insertPending("G")).rejects.toMatchObject({ code: "XX000" });
+      });
+
+      it("updates conditionally on the expected version and raises an optimistic lock error on 0 rows", async () => {
+        const hit = fakeSupabase({ updateResult: { data: [{ match_id: "G", version: 4 }], error: null } });
+        await createSupabaseLedger(hit.client).update("G", 3, { status: "confirmed" });
+        expect(hit.builder.update).toHaveBeenCalledWith(expect.objectContaining({ status: "confirmed", version: 4 }));
+        expect(hit.calls.eq).toEqual(expect.arrayContaining([["match_id", "G"], ["version", 3]]));
+
+        const miss = fakeSupabase({ updateResult: { data: [], error: null } });
+        await expect(createSupabaseLedger(miss.client).update("G", 3, {})).rejects.toBeInstanceOf(OptimisticLockError);
+      });
+
+      it("finds a row by match id", async () => {
+        const found = fakeSupabase({ findResult: { data: { match_id: "G", status: "confirmed" }, error: null } });
+        await expect(createSupabaseLedger(found.client).find("G")).resolves.toMatchObject({ status: "confirmed" });
+        const none = fakeSupabase({ findResult: { data: null, error: null } });
+        await expect(createSupabaseLedger(none.client).find("G")).resolves.toBeNull();
+      });
+    });
+  });
+});

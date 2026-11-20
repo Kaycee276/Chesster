@@ -10,6 +10,16 @@
  * Two players are paired only when their mutual tolerances allow it: the
  * rating gap must fit inside BOTH players' current windows. Among all eligible
  * pairs, the closest ratings are paired first.
+ *
+ * Distributed queue (Issue #644): the same pairing rules also run on a Redis
+ * Streams queue so several server replicas can share one matchmaking pool.
+ * Tickets are written with XADD to stream:matchmaking:queue and delivered to
+ * workers through the consumer group group:matchmakers (XREADGROUP). A ticket
+ * stays in the group's pending list (the waiting pool) until two players are
+ * matched, at which point both are acknowledged with a single atomic XACK.
+ * Tickets left pending for 60 seconds are claimed (XPENDING / XCLAIM), moved to
+ * stream:matchmaking:dead-letter and reported to the client as expired.
+ * Double booking is prevented by a per-wallet SET NX claim taken before the XACK.
  */
 
 const BASE_TOLERANCE = 50; // rating points accepted on entering the queue
@@ -17,6 +27,16 @@ const TOLERANCE_STEP = 50; // extra rating points per expansion step
 const EXPANSION_INTERVAL_SEC = 15; // seconds of waiting per expansion step
 const MAX_RATING_GAP = 350; // hard ceiling for any pairing
 const DEFAULT_POLL_INTERVAL_MS = 1000;
+
+// Issue #644: Redis Streams distributed matchmaking queue.
+const MATCHMAKING_STREAM_KEY = "stream:matchmaking:queue";
+const MATCHMAKING_CONSUMER_GROUP = "group:matchmakers";
+const MATCHMAKING_DEAD_LETTER_KEY = "stream:matchmaking:dead-letter";
+const TICKET_EXPIRY_MS = 60_000; // unacknowledged tickets older than this are dead-lettered
+const WALLET_CLAIM_PREFIX = "lock:matchmaking:wallet:";
+const WALLET_CLAIM_TTL_MS = 10_000;
+const MAX_POOL_TICKETS = 200; // pending tickets considered per worker iteration
+const DEFAULT_READ_COUNT = 10;
 
 // Issue #552: Skill-based matchmaking (SBMM) expansion windows over wait time
 const SBMM_BASE_TOLERANCE = 75;
@@ -66,6 +86,8 @@ class MatchmakingService {
 		this.pollTimer = null;
 		this._pairedGames = [];
 		this._pairedPlayerIds = new Set();
+		this.redis = null;
+		this.streamTimer = null;
 	}
 
 	/**
@@ -518,6 +540,320 @@ class MatchmakingService {
 		this._pairedPlayerIds = new Set();
 	}
 
+	// ------------------------------------------------------------------
+	// Redis Streams distributed queue (Issue #644)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Use `redisClient` (an ioredis-compatible client) for the stream queue.
+	 * Blocking reads (blockMs > 0) hold the connection, so give workers their
+	 * own client rather than sharing the application cache connection.
+	 */
+	setRedis(redisClient) {
+		this.redis = redisClient || null;
+	}
+
+	_requireRedis(redis) {
+		const client = redis || this.redis;
+		if (!client) throw new Error("A Redis client is required for the matchmaking stream queue");
+		return client;
+	}
+
+	/** Create the consumer group (and the stream) if they do not exist yet. Idempotent. */
+	async ensureConsumerGroup(redis = null) {
+		const client = this._requireRedis(redis);
+		try {
+			// "0" so tickets written before the group existed are still delivered.
+			await client.xgroup("CREATE", MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, "0", "MKSTREAM");
+		} catch (err) {
+			if (!String((err && err.message) || "").includes("BUSYGROUP")) throw err;
+		}
+	}
+
+	/**
+	 * Write a matchmaking ticket to the stream (XADD).
+	 * @param {{wallet: string, rating: number, timeControl?: string, wagerAmount?: number|string,
+	 *   wagerTier?: string, wagerAsset?: string, enqueuedAt?: number}} ticketData
+	 * @returns {Promise<string>} stream entry id
+	 */
+	async enqueueTicket(ticketData, redis = null) {
+		const client = this._requireRedis(redis);
+		const { wallet, rating, timeControl, wagerAmount, wagerTier, wagerAsset, enqueuedAt } = ticketData || {};
+		if (!wallet) throw new Error("wallet is required for a matchmaking ticket");
+		if (!Number.isFinite(Number(rating))) throw new Error("rating must be a number");
+
+		const fields = [
+			"wallet", String(wallet),
+			"rating", String(Number(rating)),
+			"timeControl", timeControl ? String(timeControl) : "",
+			"wagerAmount", String(wagerAmount ?? 0),
+			"wagerTier", String(wagerTier || "free").toLowerCase(),
+			"wagerAsset", wagerAsset ? String(wagerAsset).toUpperCase() : "",
+			"enqueuedAt", String(enqueuedAt ?? Date.now()),
+		];
+		return client.xadd(MATCHMAKING_STREAM_KEY, "*", ...fields);
+	}
+
+	/**
+	 * Cancel a waiting ticket (acknowledge it out of the pending list and delete it).
+	 * @returns {Promise<boolean>} true when the ticket was pending or still in the stream
+	 */
+	async cancelTicket(streamId, redis = null) {
+		const client = this._requireRedis(redis);
+		const acked = await client.xack(MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, streamId);
+		const deleted = await client.xdel(MATCHMAKING_STREAM_KEY, streamId);
+		return Number(acked) > 0 || Number(deleted) > 0;
+	}
+
+	/**
+	 * Fetch new tickets for this consumer atomically (XREADGROUP). Each entry is
+	 * delivered to exactly one consumer in the group and stays pending until acked.
+	 * @returns {Promise<object[]>} parsed tickets
+	 */
+	async consumeTickets(consumerName, { count = DEFAULT_READ_COUNT, blockMs = 2000, redis = null } = {}) {
+		const client = this._requireRedis(redis);
+		const args = ["GROUP", MATCHMAKING_CONSUMER_GROUP, consumerName, "COUNT", count];
+		if (blockMs > 0) args.push("BLOCK", blockMs);
+		args.push("STREAMS", MATCHMAKING_STREAM_KEY, ">");
+		const reply = await client.xreadgroup(...args);
+		const tickets = [];
+		for (const [, entries] of reply || []) {
+			for (const entry of entries) tickets.push({ ...this._parseTicket(entry), consumer: consumerName });
+		}
+		return tickets;
+	}
+
+	/** Convert a raw stream entry [id, [field, value, ...]] into a queue-compatible ticket. */
+	_parseTicket([streamId, flat]) {
+		const raw = {};
+		for (let i = 0; i < (flat || []).length; i += 2) raw[flat[i]] = flat[i + 1];
+		const elo = Number(raw.rating);
+		const queuedAt = Number(raw.enqueuedAt);
+		return {
+			streamId,
+			userId: raw.wallet ? String(raw.wallet) : "",
+			elo: Number.isFinite(elo) ? Math.round(elo) : NaN,
+			timeControl: raw.timeControl || null,
+			wagerAmount: raw.wagerAmount ?? "0",
+			wagerTier: String(raw.wagerTier || "free").toLowerCase(),
+			wagerAsset: raw.wagerAsset || null,
+			queuedAt: Number.isFinite(queuedAt) ? queuedAt : Date.now(),
+			raw,
+		};
+	}
+
+	_isValidTicket(ticket) {
+		return Boolean(ticket.userId) && Number.isFinite(ticket.elo) && ticket.elo > 0;
+	}
+
+	/** Every waiting ticket in the group (pending for any consumer), oldest first. */
+	async _loadWaitingPool(client) {
+		const pending = await client.xpending(MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, "-", "+", MAX_POOL_TICKETS);
+		const pool = [];
+		for (const [id, consumer, idleMs] of pending || []) {
+			const entries = await client.xrange(MATCHMAKING_STREAM_KEY, id, id);
+			if (!entries || entries.length === 0) {
+				// Deleted (cancelled) while pending: drop the dangling reference.
+				await client.xack(MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, id);
+				continue;
+			}
+			pool.push({ ...this._parseTicket(entries[0]), consumer, idleMs: Number(idleMs) });
+		}
+		return pool;
+	}
+
+	/** Copy a ticket to the dead-letter stream, acknowledge it and notify the client. */
+	async _deadLetter(client, ticket, reason, onExpired) {
+		await client.xadd(
+			MATCHMAKING_DEAD_LETTER_KEY, "*",
+			...Object.entries(ticket.raw || {}).flat(),
+			"originalId", ticket.streamId,
+			"reason", reason,
+			"deadLetteredAt", String(Date.now()),
+		);
+		await client.xack(MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, ticket.streamId);
+		if (typeof onExpired === "function") {
+			try {
+				onExpired(ticket, { reason });
+			} catch (err) {
+				console.error("Matchmaking onExpired handler failed:", err);
+			}
+		}
+	}
+
+	/** Same pairing rules as the in-memory queue, plus an exact wager amount match. */
+	_canPairTickets(a, b, now) {
+		return String(a.wagerAmount) === String(b.wagerAmount) && this.canPair(a, b, now);
+	}
+
+	/**
+	 * Take the per-wallet claims then acknowledge both tickets with one atomic
+	 * XACK. Returns true only when this worker now exclusively owns the match.
+	 */
+	async _claimPair(client, a, b, consumerName) {
+		const wallets = [a.userId, b.userId].sort();
+		const held = [];
+		const releaseAll = async () => {
+			for (const key of held) await client.del(key);
+		};
+		for (const wallet of wallets) {
+			const key = WALLET_CLAIM_PREFIX + wallet;
+			const ok = await client.set(key, consumerName, "PX", WALLET_CLAIM_TTL_MS, "NX");
+			if (!ok) {
+				await releaseAll();
+				return false;
+			}
+			held.push(key);
+		}
+
+		// Both tickets must still be waiting (not matched, cancelled or expired meanwhile).
+		for (const ticket of [a, b]) {
+			const still = await client.xpending(MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, ticket.streamId, ticket.streamId, 1);
+			if (!still || still.length === 0) {
+				await releaseAll();
+				return false;
+			}
+		}
+
+		const acked = Number(await client.xack(MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, a.streamId, b.streamId));
+		if (acked === 2) return true; // wallet claims expire on their own, shielding duplicate tickets
+
+		// Another actor acknowledged one of them between the check and the XACK.
+		// Put the pair back rather than lose a waiting player.
+		console.error(`[Matchmaking] Partial acknowledgement (${acked}/2); re-enqueuing tickets`);
+		await releaseAll();
+		for (const ticket of [a, b]) {
+			await this.enqueueTicket({ ...ticket.raw, wallet: ticket.userId, rating: ticket.elo, enqueuedAt: ticket.queuedAt }, client);
+		}
+		return false;
+	}
+
+	/**
+	 * One worker iteration: read new tickets, pair the waiting pool (closest
+	 * ratings first, longest wait breaking ties) and acknowledge matches.
+	 * A worker only initiates pairs that include one of its own tickets; the
+	 * claim step makes concurrent workers safe.
+	 * @param {string} consumerName
+	 * @param {{count?: number, blockMs?: number, now?: number, onExpired?: Function, redis?: object}} [options]
+	 * @returns {Promise<Array<{matchCode: string, round: number, player1: object, player2: object}>>}
+	 */
+	async processStreamQueue(consumerName, { count = DEFAULT_READ_COUNT, blockMs = 0, now = Date.now(), onExpired = null, redis = null } = {}) {
+		const client = this._requireRedis(redis);
+		await this.ensureConsumerGroup(client);
+		const delivered = await this.consumeTickets(consumerName, { count, blockMs, redis: client });
+		for (const ticket of delivered) {
+			if (!this._isValidTicket(ticket)) await this._deadLetter(client, ticket, "invalid_ticket", onExpired);
+		}
+
+		const pool = (await this._loadWaitingPool(client)).filter((ticket) => this._isValidTicket(ticket));
+		const groups = new Map();
+		for (const ticket of pool) {
+			const key = `${ticket.wagerTier}:${ticket.wagerAsset || "DEFAULT"}:${ticket.timeControl || "DEFAULT"}:${ticket.wagerAmount}`;
+			if (!groups.has(key)) groups.set(key, []);
+			groups.get(key).push(ticket);
+		}
+
+		const candidates = [];
+		for (const tickets of groups.values()) {
+			tickets.sort((x, y) => x.elo - y.elo);
+			for (let i = 0; i < tickets.length; i++) {
+				for (let j = i + 1; j < tickets.length; j++) {
+					if (tickets[j].elo - tickets[i].elo > this.maxRatingGap) break;
+					const mine = tickets[i].consumer === consumerName || tickets[j].consumer === consumerName;
+					if (mine && this._canPairTickets(tickets[i], tickets[j], now)) candidates.push([tickets[i], tickets[j]]);
+				}
+			}
+		}
+		candidates.sort(
+			([a1, b1], [a2, b2]) =>
+				Math.abs(a1.elo - b1.elo) - Math.abs(a2.elo - b2.elo) ||
+				Math.min(a1.queuedAt, b1.queuedAt) - Math.min(a2.queuedAt, b2.queuedAt),
+		);
+
+		const matches = [];
+		const used = new Set();
+		for (const [a, b] of candidates) {
+			if (used.has(a.streamId) || used.has(b.streamId)) continue;
+			if (!(await this._claimPair(client, a, b, consumerName))) continue;
+			used.add(a.streamId);
+			used.add(b.streamId);
+			const pair = a.queuedAt <= b.queuedAt ? { player1: a, player2: b } : { player1: b, player2: a };
+			matches.push({ matchCode: this.generateMatchCode(), round: 1, ...pair });
+		}
+		return matches;
+	}
+
+	/**
+	 * Dead-letter monitor: claim tickets pending longer than `minIdleMs`
+	 * (XPENDING / XCLAIM), copy them to the dead-letter stream, acknowledge them
+	 * and report each one through `onExpired` so the client can be told. Covers
+	 * both unmatched waiting players and tickets stranded by a crashed worker.
+	 * @returns {Promise<object[]>} the expired tickets
+	 */
+	async recoverStaleTickets(consumerName, { minIdleMs = TICKET_EXPIRY_MS, onExpired = null, redis = null } = {}) {
+		const client = this._requireRedis(redis);
+		await this.ensureConsumerGroup(client);
+		const pending = await client.xpending(MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, "-", "+", MAX_POOL_TICKETS);
+		const staleIds = (pending || []).filter(([, , idleMs]) => Number(idleMs) >= minIdleMs).map(([id]) => id);
+		if (staleIds.length === 0) return [];
+
+		// XCLAIM re-checks the idle time, so a ticket another worker just claimed is skipped.
+		const claimed = await client.xclaim(MATCHMAKING_STREAM_KEY, MATCHMAKING_CONSUMER_GROUP, consumerName, minIdleMs, ...staleIds);
+		const expired = [];
+		for (const entry of claimed || []) {
+			if (!entry) continue;
+			const ticket = { ...this._parseTicket(entry), consumer: consumerName };
+			await this._deadLetter(client, ticket, "expired_unmatched", onExpired);
+			expired.push(ticket);
+		}
+		return expired;
+	}
+
+	/**
+	 * Start the stream worker loop for this replica. Runs a pairing iteration
+	 * then an expiry sweep, repeating every `intervalMs`.
+	 * @param {object} options
+	 * @param {string} options.consumerName - unique per replica/worker
+	 * @param {(match: object) => void} options.onMatch
+	 * @param {(ticket: object, info: {reason: string}) => void} [options.onExpired]
+	 */
+	startStreamWorker({ consumerName, onMatch, onExpired = null, intervalMs = DEFAULT_POLL_INTERVAL_MS, blockMs = 0, redis = null } = {}) {
+		if (!consumerName) throw new Error("consumerName is required to start the matchmaking stream worker");
+		if (typeof onMatch !== "function") throw new Error("onMatch callback is required to start the matchmaking stream worker");
+		this._requireRedis(redis);
+		this.stopStreamWorker();
+
+		let running = false;
+		const tick = async () => {
+			if (running) return; // never overlap iterations
+			running = true;
+			try {
+				for (const match of await this.processStreamQueue(consumerName, { blockMs, onExpired, redis })) {
+					try {
+						onMatch(match);
+					} catch (err) {
+						console.error("Matchmaking onMatch handler failed:", err);
+					}
+				}
+				await this.recoverStaleTickets(consumerName, { onExpired, redis });
+			} catch (err) {
+				console.error("Matchmaking stream worker iteration failed:", err.message);
+			} finally {
+				running = false;
+			}
+		};
+		this.streamTimer = setInterval(tick, intervalMs);
+		if (typeof this.streamTimer.unref === "function") this.streamTimer.unref();
+		return tick;
+	}
+
+	stopStreamWorker() {
+		if (this.streamTimer) {
+			clearInterval(this.streamTimer);
+			this.streamTimer = null;
+		}
+	}
+
 	_normalizeElo(elo) {
 		return Number.isInteger(elo) && elo > 0 ? elo : this.defaultElo;
 	}
@@ -536,6 +872,13 @@ module.exports.MatchmakingService = MatchmakingService;
 module.exports.getPlayerTolerance = getPlayerTolerance;
 module.exports.calculateEloTolerance = calculateEloTolerance;
 module.exports.EXPANSION_THRESHOLDS_SEC = EXPANSION_THRESHOLDS_SEC;
+module.exports.STREAM_CONFIG = Object.freeze({
+	STREAM_KEY: MATCHMAKING_STREAM_KEY,
+	CONSUMER_GROUP: MATCHMAKING_CONSUMER_GROUP,
+	DEAD_LETTER_KEY: MATCHMAKING_DEAD_LETTER_KEY,
+	TICKET_EXPIRY_MS,
+	WALLET_CLAIM_TTL_MS,
+});
 module.exports.MATCHMAKING_CONFIG = Object.freeze({
 	BASE_TOLERANCE,
 	TOLERANCE_STEP,
