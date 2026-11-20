@@ -526,6 +526,36 @@ function toCsv(pkg) {
 	return `${lines.join("\r\n")}\r\n`;
 }
 
+/**
+ * Verify the integrity of a match's move chain by recomputing and comparing hashes.
+ * Returns detailed verification status including expected and calculated hashes.
+ *
+ * @param {string} gameId - UUID of the game
+ * @returns {Promise<object>} Verification result { verified, expectedHash, calculatedHash, moveCount }
+ */
+async function verifyMatchAuditIntegrity(gameId) {
+	const game = await getGame(gameId);
+	if (!game) throw new Error("Game not found");
+
+	const moves = await getMoves(gameId);
+	const pkg = await buildAuditPackage(game);
+
+	if (!pkg || !pkg.integrity) {
+		throw new Error("Failed to build audit package for game");
+	}
+
+	const expectedHash = pkg.integrity.outcome.movesDigest;
+	const calculatedHash = sha256(canonicalJson(moves));
+	const verified = expectedHash === calculatedHash;
+
+	return {
+		verified,
+		expectedHash,
+		calculatedHash,
+		moveCount: moves.length,
+	};
+}
+
 module.exports = {
 	getGame,
 	canAccessAudit,
@@ -533,6 +563,7 @@ module.exports = {
 	buildAuditPackage,
 	exportMatchAudit,
 	verifyAuditPackage,
+	verifyMatchAuditIntegrity,
 	getChainVerificationReport,
 	recordAntiCheatAlert,
 	ANTI_CHEAT_ALERT_EVENT,

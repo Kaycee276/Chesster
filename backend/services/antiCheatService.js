@@ -40,6 +40,12 @@ const MIN_TRAJECTORY_POINTS = 5;
 const SYNTHETIC_LINEARITY_THRESHOLD = 0.999;
 const MICRO_JITTER_THRESHOLD = 0.05;
 const HUMAN_MAX_VELOCITY_PX_S = 5000;
+// Move duration outlier Z-score analysis (Issue #700). Detect unnatural timing homogeneity
+// where move durations are suspiciously uniform across all moves (bot hallmark).
+const TIMING_HOMOGENEITY_FLAG = "TIMING_HOMOGENEITY_FLAG";
+const MIN_MOVES_FOR_ZSCORE = 15;
+const Z_SCORE_THRESHOLD = 1.0;
+const STD_DEV_THRESHOLD_MS = 400;
 
 function mean(values) {
 	return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -333,10 +339,27 @@ function analyzeGameMoveTimes(moveHistory, { engineCorrelation = {} } = {}) {
 	const delays = extractMoveDelays(moveHistory);
 	const result = {};
 	for (const color of ["white", "black"]) {
-		const summary = summarizeMoveTimeEntropy(delays.filter((delay) => delay.color === color));
+		const colorDelays = delays.filter((delay) => delay.color === color);
+		const summary = summarizeMoveTimeEntropy(colorDelays);
 		const correlation = toFiniteNumber(engineCorrelation[color]);
-		const flags = entropyFlags(summary.timeVarianceEntropyScore, correlation);
-		result[color] = { ...summary, flags, flagged: flags.length > 0 };
+		const entropyFlagsList = entropyFlags(summary.timeVarianceEntropyScore, correlation);
+
+		// Check for unnatural timing homogeneity (Z-score based)
+		const moveDurations = colorDelays
+			.filter((d) => d.delayMs !== null && d.delayMs >= 0)
+			.map((d) => d.delayMs);
+		const timingHomogeneity = calculateTimingHomogeneity(moveDurations);
+
+		let flags = [...entropyFlagsList];
+		if (timingHomogeneity.flagged) {
+			flags.push({
+				type: TIMING_HOMOGENEITY_FLAG,
+				reason: timingHomogeneity.reason,
+				metrics: timingHomogeneity.metrics,
+			});
+		}
+
+		result[color] = { ...summary, flags, flagged: flags.length > 0, timingHomogeneity };
 	}
 	return result;
 }
@@ -442,6 +465,65 @@ function calculateAnomalyScore({ moveDurationsMs, engineMatches, centipawnLosses
 	const cpl = summarizeCentipawnLoss(centipawnLosses);
 	const engineAccuracy = cpl.median == null ? 0 : 1 - Math.min(1, cpl.median / 200);
 	return Number(Math.min(1, timingRegularity * 0.4 + engineCorrelation * 0.5 + engineAccuracy * 0.1).toFixed(4));
+}
+
+function computeTimingMetrics(moveDurations) {
+	if (!Array.isArray(moveDurations) || moveDurations.length < MIN_MOVES_FOR_ZSCORE) {
+		return {
+			isHomogeneous: false,
+			mean: null,
+			stdDev: null,
+			zScores: [],
+		};
+	}
+
+	const validDurations = moveDurations.filter((d) => Number.isFinite(d) && d >= 0);
+	if (validDurations.length < MIN_MOVES_FOR_ZSCORE) {
+		return {
+			isHomogeneous: false,
+			mean: null,
+			stdDev: null,
+			zScores: [],
+		};
+	}
+
+	const avg = mean(validDurations);
+	const variance = calculateVariance(validDurations);
+	const stdDev = Math.sqrt(variance);
+
+	const zScores = validDurations.map((duration) => {
+		if (stdDev === 0) return 0;
+		return (duration - avg) / stdDev;
+	});
+
+	const outlierCount = zScores.filter((z) => Math.abs(z) >= Z_SCORE_THRESHOLD).length;
+	const isHomogeneous = stdDev < STD_DEV_THRESHOLD_MS && outlierCount === 0;
+
+	return {
+		isHomogeneous,
+		mean: Number(avg.toFixed(2)),
+		stdDev: Number(stdDev.toFixed(2)),
+		zScores: zScores.map((z) => Number(z.toFixed(4))),
+		outlierCount,
+	};
+}
+
+function calculateTimingHomogeneity(moveDurations) {
+	const metrics = computeTimingMetrics(moveDurations);
+
+	if (!metrics.isHomogeneous) {
+		return {
+			flagged: false,
+			reason: null,
+			metrics,
+		};
+	}
+
+	return {
+		flagged: true,
+		reason: `Unnatural timing homogeneity detected: std dev ${metrics.stdDev}ms (threshold: ${STD_DEV_THRESHOLD_MS}ms), no Z-score outliers`,
+		metrics,
+	};
 }
 
 function coordsToSquare(coords) {
@@ -891,3 +973,9 @@ module.exports.MIN_TRAJECTORY_POINTS = MIN_TRAJECTORY_POINTS;
 module.exports.SYNTHETIC_LINEARITY_THRESHOLD = SYNTHETIC_LINEARITY_THRESHOLD;
 module.exports.MICRO_JITTER_THRESHOLD = MICRO_JITTER_THRESHOLD;
 module.exports.HUMAN_MAX_VELOCITY_PX_S = HUMAN_MAX_VELOCITY_PX_S;
+module.exports.computeTimingMetrics = computeTimingMetrics;
+module.exports.calculateTimingHomogeneity = calculateTimingHomogeneity;
+module.exports.TIMING_HOMOGENEITY_FLAG = TIMING_HOMOGENEITY_FLAG;
+module.exports.MIN_MOVES_FOR_ZSCORE = MIN_MOVES_FOR_ZSCORE;
+module.exports.Z_SCORE_THRESHOLD = Z_SCORE_THRESHOLD;
+module.exports.STD_DEV_THRESHOLD_MS = STD_DEV_THRESHOLD_MS;

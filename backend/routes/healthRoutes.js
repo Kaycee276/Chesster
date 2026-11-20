@@ -7,7 +7,7 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../config/supabase");
 const redisConfig = require("../config/redis");
-const { checkDbHealth, getPoolMetrics } = require("../services/dbHealthService");
+const { checkDbHealth, getPoolMetrics, checkPostgresLatency, checkRedisLatency, checkSorobanRpcLatency } = require("../services/dbHealthService");
 const logger = require("../utils/logger");
 const { Keypair, rpc, Networks } = require("@stellar/stellar-sdk");
 
@@ -339,6 +339,46 @@ router.get("/status/stellar", async (req, res) => {
     logger.error("Stellar status check failed", error);
     res.status(500).json({
       status: "error",
+      error: error.message,
+    });
+  }
+});
+
+/**
+ * GET /api/health/deep (and /health/deep)
+ * Deep healthcheck probe with service latency reporting for PostgreSQL, Redis, and Soroban RPC.
+ * Returns HTTP 200 when all services are healthy, HTTP 503 when any service is unavailable or latency exceeds thresholds.
+ */
+router.get(["/health/deep", "/deep"], async (req, res) => {
+  try {
+    const startTime = Date.now();
+    const [postgresHealth, redisHealth, sorobanHealth] = await Promise.all([
+      checkPostgresLatency(2000),
+      checkRedisLatency(2000),
+      checkSorobanRpcLatency(2000),
+    ]);
+
+    const isHealthy =
+      postgresHealth.status === "ok" &&
+      redisHealth.status === "ok" &&
+      sorobanHealth.status === "ok";
+
+    const statusCode = isHealthy ? 200 : 503;
+    return res.status(statusCode).json({
+      status: isHealthy ? "healthy" : "degraded",
+      timestamp: new Date().toISOString(),
+      services: {
+        postgres: postgresHealth,
+        redis: redisHealth,
+        sorobanRpc: sorobanHealth,
+      },
+      durationMs: Date.now() - startTime,
+    });
+  } catch (error) {
+    logger.error("Deep health check failed", error);
+    return res.status(503).json({
+      status: "error",
+      timestamp: new Date().toISOString(),
       error: error.message,
     });
   }

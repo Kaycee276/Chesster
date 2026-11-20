@@ -4422,6 +4422,8 @@ impl ChessterEscrow {
             );
         }
 
+        Self::bump_instance_ttl(&env);
+
         env.events().publish(
             (symbol_short!("resolved"), game_code.clone()),
             MatchResolvedEvent {
@@ -5559,6 +5561,26 @@ impl ChessterEscrow {
         Self::load_match(&env, &game_code);
         Self::bump_entry_ttl(&env, &game_code);
         Self::bump_instance_ttl(&env);
+    }
+
+    /// Extends contract instance and persistent storage TTLs on demand (Issue #672).
+    ///
+    /// Only the admin/coordinator may call this. If `threshold` or `extend_to` is 0,
+    /// defaults are used: threshold = 100,000 ledgers (~7 days), extend_to = 500,000 (~35 days).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `admin` - Coordinator or admin address (must call require_auth).
+    /// * `threshold` - Remaining TTL (in ledgers) before extension triggers (0 = use default).
+    /// * `extend_to` - New TTL to extend to in ledgers (0 = use default).
+    pub fn extend_contract_ttl(env: Env, admin: Address, threshold: u32, extend_to: u32) {
+        admin.require_auth();
+        Self::require_admin(&env, &admin);
+
+        let t = if threshold == 0 { STORAGE_TTL_THRESHOLD } else { threshold };
+        let e = if extend_to == 0 { STORAGE_TTL_EXTENDED } else { extend_to };
+
+        env.storage().instance().extend_ttl(t, e);
     }
 
     /// Retrieves cancellation request status for both players (Issue #37).

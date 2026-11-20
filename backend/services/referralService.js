@@ -141,6 +141,91 @@ class ReferralService {
 		});
 		return response.data;
 	}
+
+	async getPendingReferrerBalances(minThreshold = 10) {
+		const { data, error } = await this.db
+			.from("claimable_commission_ledger")
+			.select("referrer_address, amount_lumens")
+			.eq("status", "pending");
+
+		if (error) throw error;
+
+		const balanceMap = new Map();
+		(data || []).forEach((record) => {
+			const address = record.referrer_address;
+			const amount = typeof record.amount_lumens === "string"
+				? BigInt(record.amount_lumens)
+				: BigInt(Math.round(record.amount_lumens));
+
+			if (balanceMap.has(address)) {
+				balanceMap.set(address, balanceMap.get(address) + amount);
+			} else {
+				balanceMap.set(address, amount);
+			}
+		});
+
+		const eligible = [];
+		balanceMap.forEach((total, address) => {
+			if (total >= BigInt(minThreshold)) {
+				eligible.push({ referrer_address: address, total_amount: total.toString() });
+			}
+		});
+
+		return eligible;
+	}
+
+	async processAutoClaimBatch(thresholdAmount = 10) {
+		const eligible = await this.getPendingReferrerBalances(thresholdAmount);
+		const results = [];
+
+		for (const item of eligible) {
+			const { referrer_address, total_amount } = item;
+
+			try {
+				const { data: records, error: fetchError } = await this.db
+					.from("claimable_commission_ledger")
+					.select("id")
+					.eq("referrer_address", referrer_address)
+					.eq("status", "pending");
+
+				if (fetchError) throw fetchError;
+
+				if (!records || records.length === 0) continue;
+
+				const payout = await this.payoutTransfer({
+					walletAddress: referrer_address,
+					amount: total_amount,
+					claimId: `auto-claim-${referrer_address}-${Date.now()}`,
+				});
+
+				const transactionHash = payout.transactionHash || payout.txHash || payout.id;
+				if (!transactionHash) throw new Error("Payout provider did not return transaction hash");
+
+				const recordIds = records.map((r) => r.id);
+				const { error: updateError } = await this.db
+					.from("claimable_commission_ledger")
+					.update({ status: "claimed", claimed_at: new Date().toISOString() })
+					.in("id", recordIds);
+
+				if (updateError) throw updateError;
+
+				results.push({
+					referrer_address,
+					amount: total_amount,
+					transactionHash,
+					recordCount: recordIds.length,
+				});
+			} catch (batchError) {
+				results.push({
+					referrer_address,
+					error: batchError.message,
+					amount: total_amount,
+				});
+			}
+		}
+
+		return results;
+	}
 }
 
 module.exports = new ReferralService();

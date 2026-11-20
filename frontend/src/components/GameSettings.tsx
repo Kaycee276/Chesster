@@ -15,8 +15,14 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
   const toggleHaptics = useGameStore((s) => s.toggleHaptics);
   const isMoveConfirmationEnabled = useGameStore((s) => s.isMoveConfirmationEnabled);
   const toggleMoveConfirmation = useGameStore((s) => s.toggleMoveConfirmation);
+  const autoQueen = useGameStore((s) => s.autoQueen);
+  const toggleAutoQueen = useGameStore((s) => s.toggleAutoQueen);
   const masterVolume = useGameStore((s) => s.masterVolume);
   const setMasterVolume = useGameStore((s) => s.setMasterVolume);
+  const moveSoundsEnabled = useGameStore((s) => s.moveSoundsEnabled);
+  const toggleMoveSounds = useGameStore((s) => s.toggleMoveSounds);
+  const alertSoundsEnabled = useGameStore((s) => s.alertSoundsEnabled);
+  const toggleAlertSounds = useGameStore((s) => s.toggleAlertSounds);
   const pieceSet = useGameStore((s) => s.pieceSet);
   const setPieceSet = useGameStore((s) => s.setPieceSet);
   const boardTheme = useThemeStore((s) => s.boardTheme);
@@ -115,6 +121,56 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                 aria-label="Master volume"
                 className="w-full accent-(--accent-primary)"
               />
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Move Sounds</label>
+                  <p className="text-xs text-(--text-tertiary)">Clicks for moves and captures</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleMoveSounds}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    moveSoundsEnabled ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={moveSoundsEnabled}
+                  aria-label="Toggle move sounds"
+                >
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      moveSoundsEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Alert Sounds</label>
+                  <p className="text-xs text-(--text-tertiary)">Turn notifications and low-time warnings</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleAlertSounds}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    alertSoundsEnabled ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={alertSoundsEnabled}
+                  aria-label="Toggle alert sounds"
+                >
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      alertSoundsEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
@@ -361,6 +417,34 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   <div
                     className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
                       isMoveConfirmationEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Auto-Queen Promotion Toggle (#671) */}
+            <div className="flex flex-col gap-3 pt-3 border-t border-(--border)">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Auto-Queen Promotion</label>
+                  <p className="text-xs text-(--text-tertiary)">
+                    Automatically promote pawns to queens (hold Alt/Option to override)
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleAutoQueen}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    autoQueen ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={autoQueen}
+                  aria-label="Toggle auto-queen promotion"
+                >
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      autoQueen ? "translate-x-5" : "translate-x-0.5"
                     }`}
                   />
                 </button>

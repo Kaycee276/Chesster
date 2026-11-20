@@ -540,6 +540,22 @@ class GameController {
 		}
 	}
 
+	/**
+	 * GET /api/games/:id/verify-audit (Issue #667)
+	 * Verify SHA-256 match audit integrity by recomputing the move chain hash.
+	 * Public endpoint for independent verification without authentication.
+	 */
+	async verifyMatchAudit(req, res) {
+		try {
+			const { id } = req.params;
+			const result = await auditService.verifyMatchAuditIntegrity(id);
+			res.json({ success: true, data: result });
+		} catch (error) {
+			const isNotFound = error.message?.includes("not found");
+			res.status(isNotFound ? 404 : 500).json({ success: false, error: error.message });
+		}
+	}
+
 	async getChatMessages(req, res) {
 		try {
 			const { gameCode } = req.params;

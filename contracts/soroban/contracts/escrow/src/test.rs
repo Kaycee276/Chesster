@@ -10291,3 +10291,59 @@ fn test_protocol_fee_timestamp_overflow_does_not_create_proposal() {
         assert!(!env.storage().instance().has(&DataKey::ProposedFee))
     });
 }
+
+#[test]
+fn test_extend_contract_ttl_requires_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &500);
+
+    assert_eq!(
+        client.try_extend_contract_ttl(&non_admin, &100_000, &500_000),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            EscrowError::Unauthorized as u32
+        )))
+    );
+
+    client.extend_contract_ttl(&admin, &100_000, &500_000);
+}
+
+#[test]
+fn test_extend_contract_ttl_with_defaults() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &500);
+
+    client.extend_contract_ttl(&admin, &0, &0);
+}
+
+#[test]
+fn test_extend_match_ttl_bumps_instance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &1000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.add_whitelisted_token(&token.address);
+
+    let game_code = String::from_str(&env, "EXTEND_TTL_1");
+    approve(&env, &token, &player1, &contract_id, 1000);
+    client.create_match(&game_code, &player1, &token.address, &100);
+
+    client.extend_match_ttl(&game_code);
+}
