@@ -31,6 +31,9 @@ class CronService {
 		this.archivalHandle = null;
 		this.lastPartitionMonth = null;
 		this.partitionCheckPending = false;
+		this.lastSoftDeletePurgeAt = 0;
+		this.softDeletePurgeIntervalMs = 7 * 24 * 60 * 60 * 1000; // 7 days
+		this.softDeleteRetentionDays = 90;
 	}
 
 	get escrow() {
@@ -301,6 +304,20 @@ class CronService {
 		}
 	}
 
+	async purgeSoftDeletedGames() {
+		try {
+			const purged = await this.archival.purgeExpiredSoftDeletedGames(
+				this.softDeleteRetentionDays,
+				500
+			);
+			console.log(`[CronService] Soft-deleted games purge completed: ${purged} games deleted`);
+			return { success: true, purged };
+		} catch (error) {
+			console.error("[CronService] Soft-deleted games purge failed:", error.message);
+			return { success: false, error: error.message };
+		}
+	}
+
 	async ensureMovePartitions(now = new Date()) {
 		const month = `${now.getUTCFullYear()}-${now.getUTCMonth()}`;
 		if (this.lastPartitionMonth === month || this.partitionCheckPending) return;
@@ -337,6 +354,10 @@ class CronService {
 		if (now.getTime() - this.lastHourlyAggregationAt >= this.hourlyAggregationIntervalMs) {
 			this.lastHourlyAggregationAt = now.getTime();
 			tasks.push(this.aggregateHourlyMetrics(now));
+		}
+		if (now.getTime() - this.lastSoftDeletePurgeAt >= this.softDeletePurgeIntervalMs) {
+			this.lastSoftDeletePurgeAt = now.getTime();
+			tasks.push(this.purgeSoftDeletedGames());
 		}
 		return Promise.allSettled(tasks);
 	}
