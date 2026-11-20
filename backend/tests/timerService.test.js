@@ -269,6 +269,40 @@ describe("TimerService monotonic clock precision (Issue #462)", () => {
 		});
 	});
 
+	it("records an ISO wall-clock turn start alongside the monotonic anchor", () => {
+		jest.setSystemTime(new Date("2026-10-17T12:00:00.000Z"));
+		service.startClock("ISO", { preset: "rapid" });
+		const state = service.clocks.get("ISO");
+		expect(state.turnStartedAt).toBe("2026-10-17T12:00:00.000Z");
+		expect(typeof state.turnStartHr).toBe("bigint");
+
+		jest.setSystemTime(new Date("2026-10-17T12:00:05.000Z"));
+		hrNow.advance(5_000);
+		service.applyMove("ISO", "white");
+		expect(service.clocks.get("ISO").turnStartedAt).toBe("2026-10-17T12:00:05.000Z");
+	});
+
+	it("ignores a backwards NTP step of the wall clock during an active turn", () => {
+		jest.setSystemTime(new Date("2026-10-17T12:00:00.000Z"));
+		service.startClock("NTP_BACK", { preset: "rapid" });
+		const before = service.getClockState("NTP_BACK").whiteMs;
+
+		hrNow.advance(2_000);
+		jest.setSystemTime(new Date("2026-10-17T11:59:59.800Z")); // wall clock steps back ~200ms+
+		expect(service.getClockState("NTP_BACK").whiteMs).toBe(before - 2_000);
+	});
+
+	it("ignores a forward NTP step of the wall clock during an active turn", () => {
+		jest.setSystemTime(new Date("2026-10-17T12:00:00.000Z"));
+		service.startClock("NTP_FWD", { preset: "rapid" });
+		const before = service.getClockState("NTP_FWD").whiteMs;
+
+		hrNow.advance(1_000);
+		jest.setSystemTime(new Date("2026-10-17T13:00:00.000Z")); // +1 hour jump
+		expect(service.getClockState("NTP_FWD").whiteMs).toBe(before - 1_000);
+		expect(service.getClockState("NTP_FWD").whiteMs).toBeGreaterThan(0);
+	});
+
 	it("re-anchors deadline-only clock states onto the monotonic clock", () => {
 		jest.setSystemTime(10_000);
 		service.clocks.set("LEGACY", {

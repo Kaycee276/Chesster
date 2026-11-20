@@ -71,6 +71,8 @@ class TimerService {
 		//   incrementMs, preset, turn,
 		//   turnStartHr      - process.hrtime.bigint() when the active turn
 		//                      began (null while paused)
+		//   turnStartedAt    - ISO wall-clock timestamp of the same instant
+		//                      (informational only, never used for elapsed time)
 		//   paused,
 		//   deadline         - wall-clock flag-fall estimate (informational)
 		//   timeout
@@ -156,6 +158,7 @@ class TimerService {
 			preset: tc.preset,
 			turn,
 			turnStartHr: this.hrNow(),
+			turnStartedAt: new Date().toISOString(),
 			paused: false,
 			deadline: Date.now() + baseMs,
 			timeout: null,
@@ -196,6 +199,7 @@ class TimerService {
 		state[key] = Math.max(0, remaining) + state.incrementMs;
 		state.turn = moverColor === "white" ? "black" : "white";
 		state.turnStartHr = state.paused ? null : this.hrNow();
+		state.turnStartedAt = new Date().toISOString();
 
 		this._scheduleFlagFall(gameCode);
 		this._emitTimerSync(gameCode);
@@ -229,6 +233,7 @@ class TimerService {
 		if (state.paused) {
 			state.paused = false;
 			state.turnStartHr = this.hrNow();
+			state.turnStartedAt = new Date().toISOString();
 			this._scheduleFlagFall(gameCode);
 			this._emitTimerSync(gameCode);
 		}
