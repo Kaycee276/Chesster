@@ -5,6 +5,12 @@ set -euo pipefail
 # Verifies that compiled WASM binaries stay within a defined size budget.
 # Usage: ./check-wasm-size.sh [WASM_FILE_PATH]
 #        MAX_WASM_BYTES=65536 ./check-wasm-size.sh [WASM_FILE_PATH]
+#        WASM_SIZE_JSON_OUT=sizes.json ./check-wasm-size.sh [WASM_FILE_PATH]
+#
+# When WASM_SIZE_JSON_OUT is set, machine-readable metrics are also written to that
+# file (raw_bytes, optimized_bytes or null, effective_bytes, max_bytes, within_budget).
+# The JSON is written before the budget verdict so it is available even when the
+# check fails. It is consumed by wasm-size-report.sh to build the PR size comment.
 
 # Resolve script directory for portable path resolution
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,7 +69,7 @@ fi
 
 # Calculate KB values for display
 WASM_KB=$(awk "BEGIN {printf \"%.2f\", $WASM_SIZE/1024}")
-OPTIMIZED_KB=$(awk "BEGIN {printf \"%.2f\", $OPTIMIZED_SIZE/1024}" 2>/dev/null || echo "$WASM_KB")
+OPTIMIZED_KB=$(awk "BEGIN {printf \"%.2f\", ${OPTIMIZED_SIZE:-$WASM_SIZE}/1024}" 2>/dev/null || echo "$WASM_KB")
 EFFECTIVE_KB=$(awk "BEGIN {printf \"%.2f\", $EFFECTIVE_SIZE/1024}")
 MAX_KB=$(awk "BEGIN {printf \"%.2f\", $MAX_WASM_BYTES/1024}")
 
@@ -76,6 +82,22 @@ else
   OVERAGE=$((EFFECTIVE_SIZE - MAX_WASM_BYTES))
   OVERAGE_KB=$(awk "BEGIN {printf \"%.2f\", $OVERAGE/1024}")
   PERCENT_USED=$(awk "BEGIN {printf \"%.1f\", ($EFFECTIVE_SIZE/$MAX_WASM_BYTES)*100}")
+fi
+
+# Optional machine-readable metrics (see header)
+if [ -n "${WASM_SIZE_JSON_OUT:-}" ]; then
+  if [ -f "$OPTIMIZED_WASM_FILE" ]; then
+    JSON_OPTIMIZED="$OPTIMIZED_SIZE"
+  else
+    JSON_OPTIMIZED="null"
+  fi
+  if [ "$EFFECTIVE_SIZE" -le "$MAX_WASM_BYTES" ]; then
+    JSON_WITHIN_BUDGET="true"
+  else
+    JSON_WITHIN_BUDGET="false"
+  fi
+  printf '{"raw_bytes":%s,"optimized_bytes":%s,"effective_bytes":%s,"max_bytes":%s,"within_budget":%s}
+'     "$WASM_SIZE" "$JSON_OPTIMIZED" "$EFFECTIVE_SIZE" "$MAX_WASM_BYTES" "$JSON_WITHIN_BUDGET"     > "$WASM_SIZE_JSON_OUT"
 fi
 
 # Format output
