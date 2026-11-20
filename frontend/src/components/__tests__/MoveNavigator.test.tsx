@@ -246,4 +246,319 @@ describe("MoveNavigator", () => {
 		unmount();
 		expect(removeEventListenerSpy).toHaveBeenCalledWith("keydown", expect.any(Function));
 	});
+
+	it("handles rapid successive keyboard navigations", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		fireEvent.keyDown(window, { key: "ArrowRight" });
+		fireEvent.keyDown(window, { key: "ArrowRight" });
+		fireEvent.keyDown(window, { key: "ArrowLeft" });
+		fireEvent.keyDown(window, { key: "ArrowLeft" });
+
+		expect(onMoveChange).toHaveBeenCalledTimes(4);
+	});
+
+	it("seeks to arbitrary ply via slider input", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={3}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		const slider = screen.getByRole("slider");
+		fireEvent.change(slider, { target: { value: "7" } });
+
+		expect(onMoveChange).toHaveBeenCalledWith(7);
+	});
+
+	it("seeks from starting position (-1) to first move via slider", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={-1}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		const slider = screen.getByRole("slider");
+		fireEvent.change(slider, { target: { value: "0" } });
+
+		expect(onMoveChange).toHaveBeenCalledWith(0);
+	});
+
+	it("displays correct move count in the counter element", () => {
+		const { rerender } = render(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		expect(screen.getByText("6")).toBeInTheDocument();
+
+		rerender(
+			<MoveNavigator
+				currentMoveIndex={9}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		expect(screen.getByText("10")).toBeInTheDocument();
+	});
+
+	it("disables all navigation buttons when totalMoves is 0", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={-1}
+				totalMoves={0}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		const buttons = screen.getAllByRole("button");
+		buttons.forEach((btn) => {
+			expect(btn).toBeDisabled();
+		});
+	});
+
+	it("hides slider when totalMoves is 0", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={-1}
+				totalMoves={0}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		const slider = screen.queryByRole("slider");
+		expect(slider).not.toBeInTheDocument();
+	});
+
+	it("plays autoplay timer on play toggle", () => {
+		vi.useFakeTimers();
+		render(
+			<MoveNavigator
+				currentMoveIndex={3}
+				totalMoves={10}
+				isPlaying={true}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		vi.advanceTimersByTime(800);
+		expect(onMoveChange).toHaveBeenCalledWith(4);
+
+		vi.useRealTimers();
+	});
+
+	it("stops autoplay at the end and calls onTogglePlay to pause", () => {
+		vi.useFakeTimers();
+		const { rerender } = render(
+			<MoveNavigator
+				currentMoveIndex={9}
+				totalMoves={10}
+				isPlaying={true}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		vi.advanceTimersByTime(800);
+		expect(onTogglePlay).toHaveBeenCalled();
+
+		vi.useRealTimers();
+	});
+
+	it("ignores keyboard shortcuts during active editing in nested contentEditable", () => {
+		render(
+			<div>
+				<div data-testid="outer">
+					<div data-testid="nested" contentEditable="true" />
+					<MoveNavigator
+						currentMoveIndex={4}
+						totalMoves={10}
+						isPlaying={false}
+						onMoveChange={onMoveChange}
+						onTogglePlay={onTogglePlay}
+					/>
+				</div>
+			</div>
+		);
+
+		const nestedEditable = screen.getByTestId("nested");
+		nestedEditable.focus();
+
+		fireEvent.keyDown(nestedEditable, { key: "ArrowLeft" });
+		fireEvent.keyDown(nestedEditable, { key: "ArrowRight" });
+
+		expect(onMoveChange).not.toHaveBeenCalled();
+	});
+
+	it("seeks to first move via Home key from middle position", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		fireEvent.keyDown(window, { key: "Home" });
+		expect(onMoveChange).toHaveBeenCalledWith(-1);
+	});
+
+	it("seeks to last move via End key from middle position", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		fireEvent.keyDown(window, { key: "End" });
+		expect(onMoveChange).toHaveBeenCalledWith(9);
+	});
+
+	it("supports both ArrowUp and Home key to seek to start", () => {
+		const { rerender } = render(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		fireEvent.keyDown(window, { key: "ArrowUp" });
+		expect(onMoveChange).toHaveBeenCalledWith(-1);
+
+		vi.clearAllMocks();
+
+		rerender(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		fireEvent.keyDown(window, { key: "Home" });
+		expect(onMoveChange).toHaveBeenCalledWith(-1);
+	});
+
+	it("supports both ArrowDown and End key to seek to end", () => {
+		const { rerender } = render(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		fireEvent.keyDown(window, { key: "ArrowDown" });
+		expect(onMoveChange).toHaveBeenCalledWith(9);
+
+		vi.clearAllMocks();
+
+		rerender(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		fireEvent.keyDown(window, { key: "End" });
+		expect(onMoveChange).toHaveBeenCalledWith(9);
+	});
+
+	it("prevents default browser behavior for navigation keys", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		const event = new KeyboardEvent("keydown", { key: "ArrowLeft" });
+		const preventDefaultSpy = vi.spyOn(event, "preventDefault");
+		fireEvent(window, event);
+
+		expect(preventDefaultSpy).toHaveBeenCalled();
+	});
+
+	it("renders slider with correct range attributes", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={5}
+				totalMoves={10}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		const slider = screen.getByRole("slider") as HTMLInputElement;
+		expect(slider).toHaveAttribute("min", "-1");
+		expect(slider).toHaveAttribute("max", "9");
+		expect(slider.value).toBe("5");
+	});
+
+	it("handles single move scenario", () => {
+		render(
+			<MoveNavigator
+				currentMoveIndex={-1}
+				totalMoves={1}
+				isPlaying={false}
+				onMoveChange={onMoveChange}
+				onTogglePlay={onTogglePlay}
+			/>
+		);
+
+		fireEvent.keyDown(window, { key: "ArrowRight" });
+		expect(onMoveChange).toHaveBeenCalledWith(0);
+
+		fireEvent.keyDown(window, { key: "ArrowRight" });
+		expect(onMoveChange).toHaveBeenCalledTimes(1);
+	});
 });

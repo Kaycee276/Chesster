@@ -63,6 +63,47 @@ function calculateVariance(values) {
 }
 
 /**
+ * Compute Z-score for each move duration: (value - mean) / stddev.
+ * Z-scores > 2.5 or < -2.5 indicate statistical outliers.
+ * Returns an array of Z-scores parallel to the input durations.
+ * @param {Array<number>} moveDurationsMs - Move durations in milliseconds
+ * @returns {Array<number>} Z-scores for each duration
+ */
+function computeMoveDurationZScores(moveDurationsMs) {
+	if (!moveDurationsMs || moveDurationsMs.length < 2) return [];
+	const avg = mean(moveDurationsMs);
+	const stddev = standardDeviation(moveDurationsMs);
+	if (stddev === 0) return moveDurationsMs.map(() => 0);
+	return moveDurationsMs.map((duration) => (duration - avg) / stddev);
+}
+
+/**
+ * Detect outlier move durations using Z-score threshold.
+ * Returns indices and Z-scores of moves exceeding the threshold (default ±2.5).
+ * @param {Array<number>} moveDurationsMs - Move durations in milliseconds
+ * @param {number} [threshold=2.5] - Z-score threshold for outlier detection
+ * @returns {{indices: Array<number>, zScores: Array<number>, outlierCount: number}}
+ */
+function detectMoveDurationOutliers(moveDurationsMs, threshold = 2.5) {
+	const zScores = computeMoveDurationZScores(moveDurationsMs);
+	const indices = [];
+	const outlierZScores = [];
+
+	zScores.forEach((z, idx) => {
+		if (Math.abs(z) > threshold) {
+			indices.push(idx);
+			outlierZScores.push(Number(z.toFixed(4)));
+		}
+	});
+
+	return {
+		indices,
+		zScores: outlierZScores,
+		outlierCount: indices.length,
+	};
+}
+
+/**
  * Pearson correlation coefficient R between two equal-length arrays.
  * Returns 0 if either array has zero variance or if lengths < 2.
  */
@@ -774,6 +815,8 @@ module.exports.calculateVariance = calculateVariance;
 module.exports.evaluateMoveComplexity = evaluateMoveComplexity;
 module.exports.evaluateTacticalResponse = evaluateTacticalResponse;
 module.exports.detectInstantTacticalRefutations = detectInstantTacticalRefutations;
+module.exports.computeMoveDurationZScores = computeMoveDurationZScores;
+module.exports.detectMoveDurationOutliers = detectMoveDurationOutliers;
 module.exports.TACTICAL_BURST_FLAG = TACTICAL_BURST_FLAG;
 module.exports.TACTICAL_BURST_MAX_MS = TACTICAL_BURST_MAX_MS;
 module.exports.TACTICAL_EVAL_SWING_CP = TACTICAL_EVAL_SWING_CP;
