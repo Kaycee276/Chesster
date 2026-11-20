@@ -50,6 +50,7 @@ const {
   checkSlowMode,
   enforceChatRateLimit,
   clearChatRateLimit,
+  canSpectatorSendMessage,
 } = require("./services/chatService");
 const { JWT_SECRET } = require("./middleware/authMiddleware");
 const { createSocketRateLimiter } = require("./middleware/socketRateLimiter");
@@ -720,30 +721,31 @@ io.on("connection", (socket) => {
   }));
 
   /**
-   * Spectator chat message handler (Issue #304).
-   * 
-   * Enforces 5-second per-IP slow-mode cooldown to prevent spectator chat floods
-   * that could distract players or leak move suggestions. Messages are sanitized
-   * using the same moderation filter as player chat for consistency.
-   * 
+   * Spectator chat message handler (Issue #678).
+   *
+   * Enforces 3-second per-spectator throttling to prevent spectator chat floods
+   * that could distract players or leak move suggestions. Uses Redis for persistent
+   * throttling across multiple server instances. Messages are sanitized using the
+   * same moderation filter as player chat for consistency.
+   *
    * Critical isolation: spectator messages are broadcast ONLY to the spectator_chat room,
    * never to the player game room. This ensures active players are shielded from
    * spectator chatter.
    */
-  socket.on("spectator_message", validateSocketPayload(SpectatorMessageSchema, ({ gameCode, message }) => {
+  socket.on("spectator_message", validateSocketPayload(SpectatorMessageSchema, async ({ gameCode, message }) => {
     if (!gameCode || !message) return;
 
     // Extract IP from socket.io handshake (matches HTTP rate-limiter convention)
     const clientIp = socket.handshake.address || socket.ip || "unknown";
 
-    // Check slow-mode cooldown (5 seconds per IP, per issue #304)
-    const slowModeCheck = checkSlowMode(clientIp, 5000);
-    if (!slowModeCheck.allowed) {
+    // Check Redis-backed throttle (3 seconds per spectator per game, Issue #678)
+    const throttleCheck = await canSpectatorSendMessage(gameCode, clientIp);
+    if (!throttleCheck.allowed) {
       return socket.emit("chat_error", {
         gameCode,
-        message: `Slow mode active. Please wait ${slowModeCheck.nextAvailableIn}s before sending another message.`,
-        error: "slow_mode_active",
-        nextAvailableInSeconds: slowModeCheck.nextAvailableIn,
+        message: `Please wait ${throttleCheck.nextAvailableIn}s before sending another message.`,
+        error: "spectator_throttle_active",
+        nextAvailableInSeconds: throttleCheck.nextAvailableIn,
       });
     }
 
@@ -758,7 +760,7 @@ io.on("connection", (socket) => {
     }
 
     // Broadcast ONLY to spectator_chat room, never to player game room
-    // This is the core isolation guarantee (Issue #304 acceptance criteria)
+    // This is the core isolation guarantee (Issue #678 acceptance criteria)
     io.to(`spectator_chat:${gameCode}`).emit("new_spectator_message", {
       gameCode,
       message: moderation.message,

@@ -1988,7 +1988,12 @@ function ChessBoardInner() {
                     touchAction: "none",
                   } as React.CSSProperties
                 }
-                onContextMenu={(e) => e.preventDefault()}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  if (queuedPremove) {
+                    clearPremove();
+                  }
+                }}
                 onMouseUp={handleBoardMouseUp}
                 onMouseLeave={() => {
                   rightDragRef.current = null;
@@ -2211,6 +2216,7 @@ function ChessBoardInner() {
                   playerColor={playerColor}
                   highlights={highlights}
                   arrows={arrows}
+                  premove={queuedPremove}
                 />
               </div>
             )}

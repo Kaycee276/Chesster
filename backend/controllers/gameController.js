@@ -290,6 +290,56 @@ class GameController {
 		}
 	}
 
+	/**
+	 * Handle abandonment forfeit when a disconnected player fails to reconnect
+	 * within the grace period (Issue #677).
+	 *
+	 * @param {string} gameCode - The game code
+	 * @param {string} forfeitedPlayerAddress - Address of the player who abandoned
+	 * @param {object} [io] - Optional socket.io instance for broadcasting
+	 * @returns {Promise<object>} Updated game object
+	 */
+	async handleForfeitByAbandonment(gameCode, forfeitedPlayerAddress, io = null) {
+		try {
+			const game = await gameModel.getGame(gameCode);
+			if (!game) throw new Error("Game not found");
+			if (game.status !== "active") throw new Error("Game is not active");
+
+			const forfeitedPlayerColor = game.player_white_address === forfeitedPlayerAddress ? "white" : "black";
+			const winningPlayerColor = forfeitedPlayerColor === "white" ? "black" : "white";
+
+			// Use resignGame logic to end the match
+			const updatedGame = await gameModel.resignGame(gameCode, forfeitedPlayerColor);
+			this.publishGameEnded(updatedGame, "abandonment");
+
+			timerService.clearTimer(gameCode);
+			timerService.clearClock(gameCode);
+			await userModel.invalidateProfilesForGame(updatedGame);
+
+			// If tournament match concluded, advance round
+			try {
+				const tournamentModel = require("../models/tournamentModel");
+				const tournamentService = require("../services/tournamentService");
+				const match = await tournamentModel.getMatchByGameCode(gameCode);
+				const winnerAddress = updatedGame.winner === "white"
+					? updatedGame.player_white_address
+					: updatedGame.player_black_address;
+				if (match && winnerAddress) {
+					tournamentService.advanceRound(match.tournament_id, match.id, winnerAddress).catch(() => {});
+				}
+			} catch { /* non-critical */ }
+
+			if (io) {
+				io.to(gameCode).emit("game-update", updatedGame);
+			}
+
+			return updatedGame;
+		} catch (error) {
+			console.error(`[GameController] handleForfeitByAbandonment failed for ${gameCode}:`, error.message);
+			throw error;
+		}
+	}
+
 	async offerDraw(req, res) {
 		try {
 			const { gameCode } = req.params;
