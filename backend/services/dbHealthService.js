@@ -86,6 +86,115 @@ function getPoolMetrics(pool = getPool()) {
 	};
 }
 
+async function checkPostgresLatency(timeoutMs = 2000) {
+	const start = process.hrtime.bigint();
+	try {
+		const { data, error } = await supabase
+			.from("players")
+			.select("id")
+			.limit(1);
+
+		if (error) {
+			return {
+				status: "unhealthy",
+				service: "PostgreSQL",
+				latencyMs: Math.round(Number(process.hrtime.bigint() - start) / 1e6 * 100) / 100,
+				error: error.message,
+			};
+		}
+
+		const latencyMs = Math.round(Number(process.hrtime.bigint() - start) / 1e6 * 100) / 100;
+		return {
+			status: "ok",
+			service: "PostgreSQL",
+			latencyMs,
+		};
+	} catch (err) {
+		const latencyMs = Math.round(Number(process.hrtime.bigint() - start) / 1e6 * 100) / 100;
+		return {
+			status: "unhealthy",
+			service: "PostgreSQL",
+			latencyMs,
+			error: err.message,
+		};
+	}
+}
+
+async function checkRedisLatency(timeoutMs = 2000) {
+	if (!process.env.REDIS_URL) {
+		return {
+			status: "ok",
+			service: "Redis",
+			latencyMs: 0,
+			configured: false,
+		};
+	}
+
+	const start = process.hrtime.bigint();
+	try {
+		const client = await require("../config/redis").getRedisConnection(timeoutMs);
+		if (!client) {
+			return {
+				status: "unhealthy",
+				service: "Redis",
+				latencyMs: Math.round(Number(process.hrtime.bigint() - start) / 1e6 * 100) / 100,
+				error: `Redis connection timed out after ${timeoutMs}ms`,
+			};
+		}
+
+		const timeoutPromise = new Promise((_, reject) => {
+			const timer = setTimeout(() => reject(new Error(`Redis ping timed out`)), timeoutMs);
+			return timer;
+		});
+
+		await Promise.race([client.ping(), timeoutPromise]);
+		const latencyMs = Math.round(Number(process.hrtime.bigint() - start) / 1e6 * 100) / 100;
+		return {
+			status: "ok",
+			service: "Redis",
+			latencyMs,
+		};
+	} catch (err) {
+		const latencyMs = Math.round(Number(process.hrtime.bigint() - start) / 1e6 * 100) / 100;
+		return {
+			status: "unhealthy",
+			service: "Redis",
+			latencyMs,
+			error: err.message,
+		};
+	}
+}
+
+async function checkSorobanRpcLatency(timeoutMs = 2000) {
+	const start = process.hrtime.bigint();
+	try {
+		const { rpc, Networks } = require("@stellar/stellar-sdk");
+		const RPC_URL = process.env.STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
+		const server = new rpc.Server(RPC_URL);
+
+		const timeoutPromise = new Promise((_, reject) => {
+			const timer = setTimeout(() => reject(new Error("Soroban RPC timeout")), timeoutMs);
+			return timer;
+		});
+
+		await Promise.race([server.getLatestLedger(), timeoutPromise]);
+		const latencyMs = Math.round(Number(process.hrtime.bigint() - start) / 1e6 * 100) / 100;
+		return {
+			status: "ok",
+			service: "Soroban RPC",
+			latencyMs,
+		};
+	} catch (err) {
+		const latencyMs = Math.round(Number(process.hrtime.bigint() - start) / 1e6 * 100) / 100;
+		return {
+			status: "unhealthy",
+			service: "Soroban RPC",
+			latencyMs,
+			error: err.message,
+		};
+	}
+}
+
 module.exports = {
   checkDbHealth,
   clearDbHealthCache,
@@ -93,4 +202,7 @@ module.exports = {
   SLOW_QUERY_THRESHOLD_MS,
   DB_HEALTH_CACHE_TTL_MS,
   getPoolMetrics,
+  checkPostgresLatency,
+  checkRedisLatency,
+  checkSorobanRpcLatency,
 };
