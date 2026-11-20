@@ -102,6 +102,8 @@ export default function OfflineGameViewer() {
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [resultFilter, setResultFilter] = useState<"all" | "1-0" | "0-1" | "1/2-1/2">("all");
   const fileInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     let active = true;
@@ -176,6 +178,18 @@ export default function OfflineGameViewer() {
     }
   }
 
+  const filteredGames = useMemo(() => {
+    return games.filter((game) => {
+      const matchesQuery = !searchQuery ||
+        game.whitePlayer.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        game.blackPlayer.toLowerCase().includes(searchQuery.toLowerCase());
+
+      const matchesResult = resultFilter === 'all' || game.result === resultFilter;
+
+      return matchesQuery && matchesResult;
+    });
+  }, [games, searchQuery, resultFilter]);
+
   return (
     <main className="min-h-dvh bg-(--bg) text-(--text) p-4 sm:p-8">
       <div className="mx-auto max-w-5xl flex flex-col gap-6">
@@ -247,9 +261,44 @@ export default function OfflineGameViewer() {
             No saved games yet. Import a PGN or JSON backup to get started.
           </p>
         )}
+        {!busy && games.length > 0 && (
+          <div className="flex flex-col gap-4 md:flex-row">
+            <input
+              type="text"
+              placeholder="Search by player name…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Search games by player name"
+              className="flex-1 px-3 py-2 rounded-lg border border-(--border) bg-(--bg) text-(--text) focus-visible:outline-2 focus-visible:outline-(--accent-primary)"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery("")}
+                className="px-3 py-2 rounded-lg bg-(--bg-tertiary) hover:bg-(--bg-secondary) text-sm font-semibold"
+                aria-label="Clear search"
+              >
+                Clear
+              </button>
+            )}
+            <select
+              value={resultFilter}
+              onChange={(e) => setResultFilter(e.target.value as "all" | "1-0" | "0-1" | "1/2-1/2")}
+              aria-label="Filter by game result"
+              className="px-3 py-2 rounded-lg border border-(--border) bg-(--bg) text-(--text) focus-visible:outline-2 focus-visible:outline-(--accent-primary)"
+            >
+              <option value="all">All Results</option>
+              <option value="1-0">Wins (1-0)</option>
+              <option value="0-1">Losses (0-1)</option>
+              <option value="1/2-1/2">Draws (1/2-1/2)</option>
+            </select>
+          </div>
+        )}
         <div className="grid gap-8 md:grid-cols-2">
-          <ul className="divide-y divide-(--border) min-w-0">
-            {games.map((game) => (
+          {filteredGames.length === 0 && !busy && games.length > 0 ? (
+            <p className="py-8 text-(--text-secondary)">No games match your search.</p>
+          ) : (
+            <ul className="divide-y divide-(--border) min-w-0">
+              {filteredGames.map((game) => (
               <li key={game.id} className="flex items-start gap-3 py-3">
                 <input
                   type="checkbox"
@@ -276,8 +325,9 @@ export default function OfflineGameViewer() {
                   </span>
                 </button>
               </li>
-            ))}
-          </ul>
+              ))}
+            </ul>
+          )}
           {viewing && <Replay key={viewing.id} game={viewing} />}
         </div>
       </div>
