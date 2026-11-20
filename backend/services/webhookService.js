@@ -185,6 +185,8 @@ const DLQ_STATUS = {
   PENDING: "pending",
   REPLAYING: "replaying",
   REPLAYED: "replayed",
+  RESOLVED: "resolved",
+  EXHAUSTED: "exhausted",
 };
 
 // 4xx responses that signal a transient condition and are worth retrying.
@@ -696,6 +698,9 @@ class WebhookService {
    */
   async _logToDeadLetterQueue(url, payload, failure) {
     try {
+      const delayMs = computeBackoffDelay(failure.attempts);
+      const nextRetryAt = new Date(Date.now() + delayMs);
+
       const row = await this.deadLetterStore.insert({
         url,
         event_type: payload.event,
@@ -704,6 +709,7 @@ class WebhookService {
         last_error: failure.error,
         last_status_code: failure.statusCode,
         status: DLQ_STATUS.PENDING,
+        next_retry_at: nextRetryAt.toISOString(),
       });
       logger.warn("Webhook delivery moved to dead-letter queue", {
         deadLetterId: row.id,
@@ -711,6 +717,7 @@ class WebhookService {
         event: payload.event,
         attempts: failure.attempts,
         error: failure.error,
+        nextRetryAt: nextRetryAt.toISOString(),
       });
       return row.id;
     } catch (err) {
@@ -804,6 +811,82 @@ class WebhookService {
 
   async onPayoutConfirmed(payout) {
     return this.dispatch(EVENT_TYPES.MATCH_PAYOUT_CONFIRMED, payout);
+  }
+
+  // -------------------------------------------------------------------
+  // Automatic replay of dead-lettered webhooks
+  // -------------------------------------------------------------------
+
+  /**
+   * Replays pending webhooks whose retry window has elapsed. Called periodically
+   * by the cron service to implement exponential backoff on dead-lettered payloads.
+   *
+   * @returns {Promise<object>} replay results
+   */
+  async replayDeadLetterWebhooks() {
+    const MAX_REPLAY_ATTEMPTS = 5;
+    const now = new Date();
+
+    try {
+      const { data: pending, error } = await this.deadLetterStore._client()
+        .from(DLQ_TABLE)
+        .select("*")
+        .eq("status", DLQ_STATUS.PENDING)
+        .lte("next_retry_at", now.toISOString())
+        .limit(100);
+
+      if (error) throw error;
+      if (!pending || pending.length === 0) return { success: true, replayed: 0 };
+
+      const results = [];
+      for (const record of pending) {
+        try {
+          const result = await this._deliverWithRetry(record.url, record.payload, { deadLetter: false });
+
+          if (result.success) {
+            await this.deadLetterStore.update(record.id, {
+              status: DLQ_STATUS.RESOLVED,
+              resolved_at: now.toISOString(),
+              replay_count: (record.replay_count || 0) + 1,
+            });
+            results.push({ id: record.id, status: "resolved", url: record.url });
+          } else {
+            const nextAttempt = (record.attempts || 0) + 1;
+            if (nextAttempt >= MAX_REPLAY_ATTEMPTS) {
+              await this.deadLetterStore.update(record.id, {
+                status: DLQ_STATUS.EXHAUSTED,
+                resolved_at: now.toISOString(),
+                attempts: nextAttempt,
+              });
+              results.push({ id: record.id, status: "exhausted", url: record.url });
+            } else {
+              const delayMs = computeBackoffDelay(nextAttempt);
+              const nextRetryAt = new Date(Date.now() + delayMs);
+              await this.deadLetterStore.update(record.id, {
+                attempts: nextAttempt,
+                last_error: result.error,
+                last_status_code: result.statusCode,
+                next_retry_at: nextRetryAt.toISOString(),
+                replay_count: (record.replay_count || 0) + 1,
+              });
+              results.push({ id: record.id, status: "pending", url: record.url, nextRetryAt });
+            }
+          }
+        } catch (err) {
+          logger.error("Failed to replay dead-letter webhook", {
+            recordId: record.id,
+            url: record.url,
+            error: err.message,
+          });
+          results.push({ id: record.id, status: "error", error: err.message });
+        }
+      }
+
+      return { success: true, replayed: pending.length, results };
+    } catch (err) {
+      logger.error("Dead-letter webhook replay batch failed:", err.message);
+      return { success: false, error: err.message };
+    }
   }
 
   // -------------------------------------------------------------------
