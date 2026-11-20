@@ -1,0 +1,15 @@
+# Advisories ignored by scripts/pnpm-audit.sh (one GitHub advisory ID per line).
+#
+# Everything here was already present in the lockfiles when the blocking audit
+# was introduced (issue #635). Each entry is technical debt: remove it once the
+# dependency is upgraded to the patched version. Do not add new entries without
+# a short justification and a link to the tracking issue or upgrade PR.
+#
+# Format: GHSA-xxxx-xxxx-xxxx   # package (patched version) - where it comes from
+
+GHSA-ggr8-5vv4-36mx   # deepmerge-ts (>=8.0.0) - backend, via @prisma/config
+GHSA-mrhx-c7xc-m3w5   # zod (>=4.6.6) - backend (direct, 3.25.x) and frontend (via @reown/appkit)
+GHSA-27r3-jxmh-p828   # body-parser (>=2.4.0) - backend, via express 5.3.0
+GHSA-mrwp-f3q8-3g9p   # follow-redirects (>=1.16.2) - backend (axios) and frontend (axios via @coinbase/cdp-sdk)
+GHSA-7589-6fvf-x4pw   # effect (>=3.22.1) - backend, via @prisma/config
+GHSA-587h-7wmj-h5pm   # vite (>=7.3.7) - frontend, via @tailwindcss/vite
