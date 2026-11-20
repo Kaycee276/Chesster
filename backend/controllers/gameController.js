@@ -9,6 +9,7 @@ const zlib = require("zlib");
 const REPLAY_HEARTBEAT_MS = 15000;
 const auditService = require("../services/auditService");
 const leaderboardService = require("../services/leaderboardService");
+const analyticsService = require("../services/analyticsService");
 const pgnService = require("../services/pgnService");
 
 const AUDIT_FORMATS = new Set(["json", "csv"]);
@@ -737,6 +738,16 @@ class GameController {
 			res.json({ success: true, data: leaderboard });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });
+		}
+	}
+
+	async getRolling24HourVolume(req, res) {
+		try {
+			const volume = await analyticsService.getRolling24HourVolume();
+			res.setHeader("Cache-Control", "public, max-age=60");
+			res.json(volume);
+		} catch (error) {
+			res.status(500).json({ success: false, error: "Failed to fetch 24-hour volume" });
 		}
 	}
 }

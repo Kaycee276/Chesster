@@ -89,6 +89,21 @@ router.get('/leaderboard', gameController.getLeaderboard);
 
 /**
  * @openapi
+ * /api/analytics/volume-24h:
+ *   get:
+ *     summary: Rolling 24-hour wager volume by asset
+ *     description: Returns match count, unique players, total and average wager per token asset for the trailing 24 hours. Cached for 5 minutes.
+ *     tags: [Analytics]
+ *     responses:
+ *       200:
+ *         description: Aggregated volume per asset
+ *       500:
+ *         description: Failed to compute volume
+ */
+router.get('/analytics/volume-24h', gameController.getRolling24HourVolume);
+
+/**
+ * @openapi
  * /api/games/pending:
  *   get:
  *     summary: Get pending open games in lobby
