@@ -344,4 +344,89 @@ router.get("/status/stellar", async (req, res) => {
   }
 });
 
+/**
+ * GET /api/health/deep (and /health/deep)
+ * Deep health probe with comprehensive service latency reporting.
+ * Reports detailed metrics for database, redis, and stellar RPC including
+ * individual probe latencies, connection pool stats, and overall system health.
+ */
+router.get(["/health/deep", "/deep"], async (req, res) => {
+  try {
+    const probeStartTime = Date.now();
+
+    // Collect individual probe latencies in parallel
+    const probes = {
+      database: { start: Date.now() },
+      redis: { start: Date.now() },
+      stellar: { start: Date.now() },
+    };
+
+    const [databaseHealth, redisHealth, stellarRpcHealth] = await Promise.all([
+      checkDbHealth({ timeoutMs: 2000 }),
+      checkRedisHealth(2000),
+      checkStellarRpcHealth(),
+    ]);
+
+    // Calculate individual probe latencies
+    probes.database.latencyMs = Date.now() - probes.database.start;
+    probes.redis.latencyMs = Date.now() - probes.redis.start;
+    probes.stellar.latencyMs = Date.now() - probes.stellar.start;
+
+    // Determine overall system health
+    const allHealthy =
+      databaseHealth.status === "healthy" &&
+      redisHealth.status === "healthy" &&
+      stellarRpcHealth.status === "healthy";
+
+    const overallHealth = allHealthy ? "healthy" : "degraded";
+    const totalDurationMs = Date.now() - probeStartTime;
+
+    // Get pool metrics if available
+    let poolMetrics = null;
+    try {
+      poolMetrics = getPoolMetrics();
+    } catch {
+      poolMetrics = null;
+    }
+
+    const response = {
+      status: overallHealth,
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      memoryUsage: process.memoryUsage(),
+      probes: {
+        database: {
+          ...databaseHealth,
+          probeLatencyMs: probes.database.latencyMs,
+        },
+        redis: {
+          ...redisHealth,
+          probeLatencyMs: probes.redis.latencyMs,
+        },
+        stellar: {
+          ...stellarRpcHealth,
+          probeLatencyMs: probes.stellar.latencyMs,
+        },
+      },
+      latencies: {
+        databaseMs: probes.database.latencyMs,
+        redisMs: probes.redis.latencyMs,
+        stellarMs: probes.stellar.latencyMs,
+        totalMs: totalDurationMs,
+      },
+      poolMetrics: poolMetrics ? { database: poolMetrics } : null,
+    };
+
+    const statusCode = overallHealth === "healthy" ? 200 : 503;
+    res.status(statusCode).json(response);
+  } catch (error) {
+    logger.error("Deep health probe failed", error);
+    res.status(503).json({
+      status: "error",
+      timestamp: new Date().toISOString(),
+      error: error.message,
+    });
+  }
+});
+
 module.exports = router;

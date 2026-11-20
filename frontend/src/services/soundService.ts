@@ -420,6 +420,7 @@ class SoundService {
     type: OscType = "sine",
     volume = 0.25,
     delay = 0,
+    ply?: number,
   ) {
     const ctx = this.getCtx();
     if (!ctx) return;
@@ -429,9 +430,11 @@ class SoundService {
       osc.connect(gain);
       gain.connect(ctx.destination);
 
+      // Apply ply-based pitch modulation: each ply raises the base frequency by 1 semitone
+      const finalFreq = ply !== undefined && ply >= 0 ? this.modulatePitchByPly(freq, ply) : freq;
       const scaledVolume = volume * this._volume;
       osc.type = type;
-      osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
+      osc.frequency.setValueAtTime(finalFreq, ctx.currentTime + delay);
       gain.gain.setValueAtTime(0, ctx.currentTime + delay);
       gain.gain.linearRampToValueAtTime(scaledVolume, ctx.currentTime + delay + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
@@ -442,64 +445,71 @@ class SoundService {
     }
   }
 
-  private playSoundEffect(effectKey: keyof SoundProfile) {
+  private modulatePitchByPly(freq: number, ply: number): number {
+    // Raise pitch by 1 semitone per ply; wrap every 12 plies (1 octave)
+    const normalizedPly = ply % 12;
+    const semitoneRatio = Math.pow(2, normalizedPly / 12);
+    return freq * semitoneRatio;
+  }
+
+  private playSoundEffect(effectKey: keyof SoundProfile, ply?: number) {
     const profile = SOUND_PROFILES[this._soundPack];
     const tones = profile[effectKey];
     tones.forEach((tone) => {
-      this.tone(tone.freq, tone.duration, tone.type, tone.volume, tone.delay);
+      this.tone(tone.freq, tone.duration, tone.type, tone.volume, tone.delay, ply);
     });
   }
 
   // ── Sound effects ─────────────────────────────────────────────────────────
 
   /** Piece moved to an empty square */
-  move() {
-    this.playSoundEffect("move");
+  move(ply?: number) {
+    this.playSoundEffect("move", ply);
   }
 
   /** Piece captured another */
-  capture() {
-    this.playSoundEffect("capture");
+  capture(ply?: number) {
+    this.playSoundEffect("capture", ply);
   }
 
   /** King is in check */
-  check() {
-    this.playSoundEffect("check");
+  check(ply?: number) {
+    this.playSoundEffect("check", ply);
   }
 
   /** Castling move */
-  castle() {
-    this.playSoundEffect("castle");
+  castle(ply?: number) {
+    this.playSoundEffect("castle", ply);
   }
 
   /** Pawn promotion */
-  promote() {
-    this.playSoundEffect("promote");
+  promote(ply?: number) {
+    this.playSoundEffect("promote", ply);
   }
 
   /** Both players joined — game is starting */
-  gameStart() {
-    this.playSoundEffect("gameStart");
+  gameStart(ply?: number) {
+    this.playSoundEffect("gameStart", ply);
   }
 
   /** Game ended (win/loss) */
-  gameEnd() {
-    this.playSoundEffect("gameEnd");
+  gameEnd(ply?: number) {
+    this.playSoundEffect("gameEnd", ply);
   }
 
   /** Game ended in a draw */
-  draw() {
-    this.playSoundEffect("draw");
+  draw(ply?: number) {
+    this.playSoundEffect("draw", ply);
   }
 
   /** Low time warning tick (active player under 10 seconds) */
-  lowTimeTick() {
-    this.playSoundEffect("lowTimeTick");
+  lowTimeTick(ply?: number) {
+    this.playSoundEffect("lowTimeTick", ply);
   }
 
   /** Brilliant move celebratory sound cue */
-  brilliant() {
-    this.playSoundEffect("brilliant");
+  brilliant(ply?: number) {
+    this.playSoundEffect("brilliant", ply);
   }
 
   /** Clock has dropped into the "urgent" low-time zone */
