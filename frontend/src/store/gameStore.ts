@@ -114,6 +114,9 @@ interface GameStore {
   // Move confirmation for high-stakes games (Issue #493)
   isMoveConfirmationEnabled: boolean;
   toggleMoveConfirmation: () => void;
+  // Auto-queen promotion preference (Issue #671)
+  autoQueen: boolean;
+  toggleAutoQueen: () => void;
   // Piece set preference for rendering (Issue #495)
   pieceSet: PieceSetKey | "classic";
   setPieceSet: (set: PieceSetKey | "classic") => void;
@@ -205,6 +208,7 @@ export const useGameStore = create<GameStore>()(
       isStreamerMode: false,
       isHapticsEnabled: true,
       isMoveConfirmationEnabled: false,
+      autoQueen: false,
       pieceSet: "classic" as "classic" | "neo" | "wood",
       masterVolume: soundService.getVolume(),
       isSettingsOpen: false,
@@ -225,6 +229,8 @@ export const useGameStore = create<GameStore>()(
         set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
       toggleMoveConfirmation: () =>
         set((s) => ({ isMoveConfirmationEnabled: !s.isMoveConfirmationEnabled })),
+      toggleAutoQueen: () =>
+        set((s) => ({ autoQueen: !s.autoQueen })),
       setPieceSet: (set_value: PieceSetKey | "classic") =>
         set({ pieceSet: set_value }),
       setMasterVolume: (volume: number) => {

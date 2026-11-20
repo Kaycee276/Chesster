@@ -870,11 +870,21 @@ function ChessBoardInner() {
   // Shared by tap-to-move and drag-and-drop: attempts to move the piece on
   // `from` to `to`, opening the promotion modal if needed and giving a
   // short haptic tick on supported devices once the move lands (#253).
-  const commitMove = async (from: [number, number], to: [number, number], promotion?: string) => {
+  const commitMove = async (
+    from: [number, number],
+    to: [number, number],
+    promotion?: string,
+    forcePromotionModal?: boolean
+  ) => {
     const piece = board[from[0]][from[1]];
     const isPromotion = piece.toLowerCase() === "p" && (to[0] === 0 || to[0] === 7);
 
     if (isPromotion && !promotion) {
+      const autoQueen = useGameStore.getState().autoQueen;
+      if (autoQueen && !forcePromotionModal) {
+        await commitMove(from, to, "q");
+        return;
+      }
       setPromotionMove({ from, to });
       return;
     }
@@ -942,7 +952,7 @@ function ChessBoardInner() {
     safeHaptic("error");
   };
 
-  const handleSquareClick = async (row: number, col: number) => {
+  const handleSquareClick = async (row: number, col: number, event?: React.MouseEvent | React.KeyboardEvent) => {
     // A plain left-click always clears any drawn arrows/highlights (#252).
     clearAnnotations();
 
@@ -999,7 +1009,8 @@ function ChessBoardInner() {
         safeHaptic("error");
       }
 
-      await commitMove(selectedSquare, [row, col]);
+      const altKey = event && "altKey" in event ? event.altKey : false;
+      await commitMove(selectedSquare, [row, col], undefined, altKey);
     }
   };
 
@@ -1123,7 +1134,7 @@ function ChessBoardInner() {
       return;
     }
 
-    await commitMove(from, [toRow, toCol]);
+    await commitMove(from, [toRow, toCol], undefined, e.altKey);
   };
 
   // ── Native mobile touch event handlers with -30px offset (#439) ─────────
@@ -2089,7 +2100,7 @@ function ChessBoardInner() {
                             ? { animation: "captureFlash 0.4s ease-out forwards" }
                             : undefined
                         }
-                        onClick={() => handleSquareClick(actualRow, actualCol)}
+                        onClick={(e) => handleSquareClick(actualRow, actualCol, e)}
                         onKeyDown={(e) => {
                           // Arrow keys move the square cursor (#315); the cursor is
                           // clamped to the grid so screen-reader users never lose
@@ -2114,7 +2125,7 @@ function ChessBoardInner() {
                             e.preventDefault();
                             setCursor([actualRow, actualCol]);
                             announceCursor(actualRow, actualCol, false);
-                            handleSquareClick(actualRow, actualCol);
+                            handleSquareClick(actualRow, actualCol, e);
                           }
                         }}
                         onTouchStart={(e) => handleTouchStart(e, actualRow, actualCol)}

@@ -112,7 +112,7 @@ model Move {
 
   // Monthly partitions are managed by SQL migration 031 and archivalService.
   @@id([id, created_at])
-  @@index([game_id, move_number], map: "idx_moves_game")
+  @@index([game_id, move_number(sort: Asc)], map: "idx_moves_game_id_move_number")
   @@map("moves")
 }
 
@@ -518,12 +518,15 @@ model WebhookDeadLetterQueue {
   last_status_code Int?
   status           String    @default("pending") @db.VarChar(20)
   replay_count     Int       @default(0)
+  next_retry_at    DateTime? @db.Timestamptz(6)
   last_replayed_at DateTime? @db.Timestamptz(6)
   replayed_at      DateTime? @db.Timestamptz(6)
+  resolved_at      DateTime? @db.Timestamptz(6)
   created_at       DateTime  @default(now()) @db.Timestamptz(6)
   updated_at       DateTime  @default(now()) @db.Timestamptz(6)
 
   @@index([status, created_at], map: "idx_webhook_dlq_status_created")
+  @@index([status, next_retry_at], map: "idx_webhook_dlq_status_retry")
   @@index([event_type], map: "idx_webhook_dlq_event_type")
   @@map("webhook_dead_letter_queue")
 }
