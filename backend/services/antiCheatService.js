@@ -34,6 +34,12 @@ const TACTICAL_MIN_BURSTS = 2;
 const TACTICAL_BURST_SCORE_STEP = 10;
 const TACTICAL_BURST_SCORE_MAX = 40;
 
+// Mouse trajectory biometric verification (Issue #682).
+const MOUSE_TRAJECTORY_FLAG = "SYNTHETIC_INPUT_FLAG";
+const MIN_TRAJECTORY_POINTS = 5;
+const SYNTHETIC_LINEARITY_THRESHOLD = 0.999;
+const MICRO_JITTER_THRESHOLD = 0.05;
+const HUMAN_MAX_VELOCITY_PX_S = 5000;
 // Move duration outlier Z-score analysis (Issue #700). Detect unnatural timing homogeneity
 // where move durations are suspiciously uniform across all moves (bot hallmark).
 const TIMING_HOMOGENEITY_FLAG = "TIMING_HOMOGENEITY_FLAG";
@@ -812,6 +818,100 @@ class AntiCheatService {
 	}
 
 	/**
+	 * Analyze cursor telemetry for synthetic input signatures. Detects bot automation
+	 * by measuring trajectory linearity, micro-jitter variance, and instant jumps.
+	 * Returns flags and suspicion score for accumulation in Game.anti_cheat_flags.
+	 */
+	analyzeCursorTelemetry(points, isMobileTouch = false) {
+		if (!points || points.length < MIN_TRAJECTORY_POINTS) {
+			return { isSynthetic: false, linearity: 0, avgJitter: 0, flagReason: null };
+		}
+
+		// Mobile touch events bypass cursor linearity tests (distinct tap signatures).
+		if (isMobileTouch) {
+			return { isSynthetic: false, linearity: 0, avgJitter: 0, flagReason: "mobile_touch_bypass" };
+		}
+
+		const linearity = this.calculateTrajectoryLinearity(points);
+		const jitter = this.calculateMicroJitter(points);
+		const hasInstantJump = this.detectInstantTeleportation(points);
+
+		const isSynthetic = linearity > SYNTHETIC_LINEARITY_THRESHOLD && jitter < MICRO_JITTER_THRESHOLD && !hasInstantJump;
+
+		return {
+			isSynthetic,
+			linearity: Number(linearity.toFixed(4)),
+			avgJitter: Number(jitter.toFixed(4)),
+			hasInstantJump,
+			flagReason: isSynthetic ? MOUSE_TRAJECTORY_FLAG : null,
+		};
+	}
+
+	calculateTrajectoryLinearity(points) {
+		if (points.length < 3) return 0;
+
+		// Fit a straight line through the points and calculate R² (coefficient of determination).
+		const xs = points.map((p) => p.x);
+		const ys = points.map((p) => p.y);
+
+		const n = xs.length;
+		const sumX = xs.reduce((a, b) => a + b, 0);
+		const sumY = ys.reduce((a, b) => a + b, 0);
+		const sumXY = xs.reduce((sum, x, i) => sum + x * ys[i], 0);
+		const sumX2 = xs.reduce((sum, x) => sum + x * x, 0);
+		const sumY2 = ys.reduce((sum, y) => sum + y * y, 0);
+
+		const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+		const intercept = (sumY - slope * sumX) / n;
+
+		const ssRes = ys.reduce((sum, y, i) => {
+			const predicted = slope * xs[i] + intercept;
+			return sum + (y - predicted) ** 2;
+		}, 0);
+
+		const ssTot = ys.reduce((sum, y) => sum + (y - sumY / n) ** 2, 0);
+
+		return ssTot === 0 ? 0 : 1 - ssRes / ssTot;
+	}
+
+	calculateMicroJitter(points) {
+		if (points.length < 3) return 0;
+
+		let totalJitterVariance = 0;
+		for (let i = 2; i < points.length; i++) {
+			const dx1 = points[i - 1].x - points[i - 2].x;
+			const dy1 = points[i - 1].y - points[i - 2].y;
+			const dx2 = points[i].x - points[i - 1].x;
+			const dy2 = points[i].y - points[i - 1].y;
+
+			const accel1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+			const accel2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+			totalJitterVariance += Math.abs(accel2 - accel1);
+		}
+
+		return totalJitterVariance / (points.length - 2);
+	}
+
+	detectInstantTeleportation(points) {
+		if (points.length < 2) return false;
+
+		for (let i = 1; i < points.length; i++) {
+			const dx = points[i].x - points[i - 1].x;
+			const dy = points[i].y - points[i - 1].y;
+			const distance = Math.sqrt(dx * dx + dy * dy);
+
+			const timeDeltaMs = (points[i].t || 0) - (points[i - 1].t || 0);
+			const timeInSeconds = timeDeltaMs / 1000;
+
+			if (timeInSeconds > 0 && distance / timeInSeconds > HUMAN_MAX_VELOCITY_PX_S) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Full post-game inspection: runs the analysis (persisting scores, review
 	 * flags and anti_cheat_flags) and dispatches an audit alert for every
 	 * player with a move time entropy violation.
@@ -868,6 +968,11 @@ module.exports.LOW_ENTROPY_THRESHOLD = LOW_ENTROPY_THRESHOLD;
 module.exports.HIGH_ENTROPY_THRESHOLD = HIGH_ENTROPY_THRESHOLD;
 module.exports.MIN_ENTROPY_SAMPLES = MIN_ENTROPY_SAMPLES;
 module.exports.OPENING_BOOK_MOVES = OPENING_BOOK_MOVES;
+module.exports.MOUSE_TRAJECTORY_FLAG = MOUSE_TRAJECTORY_FLAG;
+module.exports.MIN_TRAJECTORY_POINTS = MIN_TRAJECTORY_POINTS;
+module.exports.SYNTHETIC_LINEARITY_THRESHOLD = SYNTHETIC_LINEARITY_THRESHOLD;
+module.exports.MICRO_JITTER_THRESHOLD = MICRO_JITTER_THRESHOLD;
+module.exports.HUMAN_MAX_VELOCITY_PX_S = HUMAN_MAX_VELOCITY_PX_S;
 module.exports.computeTimingMetrics = computeTimingMetrics;
 module.exports.calculateTimingHomogeneity = calculateTimingHomogeneity;
 module.exports.TIMING_HOMOGENEITY_FLAG = TIMING_HOMOGENEITY_FLAG;
