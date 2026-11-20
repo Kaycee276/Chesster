@@ -3,6 +3,7 @@ const userModel = require("../models/userModel");
 const timerService = require("../services/timerService");
 const eventBus = require("../services/eventBus");
 const replayService = require("../services/replayService");
+const zlib = require("zlib");
 
 // Comment line sent periodically so proxies don't drop an idle replay stream.
 const REPLAY_HEARTBEAT_MS = 15000;
@@ -228,7 +229,17 @@ class GameController {
 				"Content-Type": "application/x-chess-pgn",
 				"Content-Disposition": `attachment; filename=game-${game.game_code || game.id}.pgn`,
 			});
-			return res.send(pgn);
+
+			const acceptEncoding = req.headers['accept-encoding'] || '';
+			if (acceptEncoding.includes('gzip')) {
+				res.setHeader('Content-Encoding', 'gzip');
+				zlib.gzip(pgn, (err, buffer) => {
+					if (err) return res.status(500).json({ success: false, error: err.message });
+					res.send(buffer);
+				});
+			} else {
+				return res.send(pgn);
+			}
 		} catch (error) {
 			return res.status(500).json({ success: false, error: error.message });
 		}
