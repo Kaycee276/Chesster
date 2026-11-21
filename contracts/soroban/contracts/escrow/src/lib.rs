@@ -283,6 +283,31 @@ pub enum OrganizerTier {
     Gold = 3,
 }
 
+/// Multi-token collateral fee discount tier assigned to a player (Issue #739).
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum TierLevel {
+    /// Baseline fee schedule (0% discount).
+    Standard = 0,
+    /// Bronze collateral tier: 10% fee discount.
+    Bronze = 1,
+    /// Silver collateral tier: 25% fee discount.
+    Silver = 2,
+    /// Gold collateral tier: 50% fee discount.
+    Gold = 3,
+}
+
+/// Stored collateral tier assignment and expiration timestamp for a player (Issue #739).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlayerTierInfo {
+    /// Active fee discount tier level.
+    pub tier: TierLevel,
+    /// Ledger timestamp (inclusive) until which the tier discount remains valid.
+    pub expires_at: u64,
+}
+
 /// Aggregate spectator side pool for a match (Issue #459). Individual stakes live under
 /// `DataKey::SideBetStake` so that placing, settling and claiming never iterate over bettors.
 #[contracttype]
@@ -1093,6 +1118,10 @@ pub enum DataKey {
     IsPaused,
     /// Protocol fee discount tier of an organizer (Issue #578).
     OrganizerTier(Address),
+    /// Multi-token collateral fee discount tier info for a player (Issue #739).
+    PlayerTier(Address),
+    /// Authorized operator allowed to assign player collateral tiers (Issue #739).
+    TierOperator,
 }
 
 /// Aggregated operational metrics for off-chain indexing and monitoring (Issue #288).
@@ -1641,6 +1670,71 @@ impl ChessterEscrow {
         }
         let (discount, _) = mul_div_bps(env, standard_fee, discount_bps);
         checked_sub(env, standard_fee, discount)
+    }
+
+    /// Designates an authorized tier operator able to manage player collateral tiers
+    /// in addition to the coordinator (Coordinator/admin only) (Issue #739).
+    pub fn set_tier_operator(env: Env, operator: Address) {
+        let coordinator = Self::get_coordinator(env.clone());
+        coordinator.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::TierOperator, &operator);
+    }
+
+    /// Returns the currently designated tier operator, if configured (Issue #739).
+    pub fn get_tier_operator(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::TierOperator)
+    }
+
+    /// Sets or updates a player's multi-token collateral fee discount tier and
+    /// expiration timestamp (Coordinator or designated TierOperator only) (Issue #739).
+    pub fn set_player_tier(
+        env: Env,
+        operator: Address,
+        player: Address,
+        tier: TierLevel,
+        expires_at: u64,
+    ) {
+        operator.require_auth();
+        let coordinator = Self::get_coordinator(env.clone());
+        let is_authorized = operator == coordinator
+            || Self::get_tier_operator(env.clone())
+                .map(|op| op == operator)
+                .unwrap_or(false);
+        if !is_authorized {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+
+        let key = DataKey::PlayerTier(player.clone());
+        let info = PlayerTierInfo { tier, expires_at };
+        env.storage().persistent().set(&key, &info);
+        Self::bump_entry_ttl(&env, &key);
+    }
+
+    /// Retrieves a player's stored collateral fee discount tier info, if any (Issue #739).
+    pub fn get_player_tier(env: Env, player: Address) -> Option<PlayerTierInfo> {
+        env.storage().persistent().get(&DataKey::PlayerTier(player))
+    }
+
+    /// Calculates the discounted protocol fee in basis points for a player based on
+    /// their active (non-expired) multi-token collateral tier (Issue #739).
+    pub fn calculate_discounted_fee_bps(env: Env, player: Address, base_fee_bps: u32) -> u32 {
+        if let Some(info) = env
+            .storage()
+            .persistent()
+            .get::<_, PlayerTierInfo>(&DataKey::PlayerTier(player))
+        {
+            if env.ledger().timestamp() <= info.expires_at {
+                return match info.tier {
+                    TierLevel::Gold => base_fee_bps / 2,
+                    TierLevel::Silver => (base_fee_bps.saturating_mul(75)) / 100,
+                    TierLevel::Bronze => (base_fee_bps.saturating_mul(90)) / 100,
+                    TierLevel::Standard => base_fee_bps,
+                };
+            }
+        }
+        base_fee_bps
     }
 
     /// Retrieves current match creation nonce counter (Issue #34).
@@ -4461,7 +4555,9 @@ impl ChessterEscrow {
         // a window where the match still looks unresolved. ---
         let admin_fee: i128 = if let Some(ref w) = winner {
             let admin_bps = Self::get_effective_fee_bps(env.clone(), w.clone());
-            let standard_fee = Self::normalized_fee(env, &m.token, m.total_staked, admin_bps);
+            let discounted_bps =
+                Self::calculate_discounted_fee_bps(env.clone(), w.clone(), admin_bps);
+            let standard_fee = Self::normalized_fee(env, &m.token, m.total_staked, discounted_bps);
             // Issue #578: apply the tier discount of the match creator
             // (`player1`), the match organizer, to the standard protocol fee.
             Self::organizer_discounted_fee(env, standard_fee, &m.player1)

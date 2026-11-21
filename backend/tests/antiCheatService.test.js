@@ -364,3 +364,148 @@ describe("auditService.recordAntiCheatAlert (Issue #461)", () => {
 		await expect(recordAntiCheatAlert({ gameId: "game-1" }, db)).rejects.toThrow("rls denied");
 	});
 });
+
+describe("FIDE centipawn loss (ACPL) distribution profiling (Issue #744)", () => {
+	const {
+		calculateACPL,
+		profileACPLDistribution,
+		ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY,
+	} = require("../services/antiCheatService");
+
+	it("yields high ACPL and does not flag a blunder-heavy human game", () => {
+		const moves = Array.from({ length: 24 }, (_, idx) => ({
+			ply: idx + 9,
+			bestEval: 150,
+			playedEval: idx % 3 === 0 ? -120 : 80,
+			isTop1: idx % 5 === 0,
+		}));
+
+		const acpl = calculateACPL(moves);
+		const profile = profileACPLDistribution(moves);
+
+		expect(acpl).toBeGreaterThan(100);
+		expect(profile.acpl).toBe(acpl);
+		expect(profile.stdDev).toBeGreaterThan(0);
+		expect(profile.top1MatchRate).toBeLessThan(0.5);
+		expect(profile.sampleSize).toBe(24);
+		expect(profile.flagged).toBe(false);
+		expect(profile.flagType).toBeNull();
+	});
+
+	it("flags near-perfect engine play (< 12 ACPL, > 90% top-1 match, >= 20 non-book plies) as SUSPICIOUS_ENGINE_ACCURACY", () => {
+		const moves = Array.from({ length: 22 }, (_, idx) => ({
+			ply: idx + 9,
+			bestScore: 50,
+			playedScore: idx === 0 ? 35 : 48,
+			matchesTopMove: idx !== 0,
+		}));
+
+		const profile = profileACPLDistribution(moves);
+
+		expect(profile.sampleSize).toBe(22);
+		expect(profile.acpl).toBeLessThan(12);
+		expect(profile.top1MatchRate).toBeGreaterThan(0.9);
+		expect(profile.flagged).toBe(true);
+		expect(profile.flagType).toBe(ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY);
+	});
+
+	it("skips short book games, stalemates, and short resignations gracefully", () => {
+		const shortBookGame = Array.from({ length: 8 }, (_, idx) => ({
+			ply: idx + 1,
+			bestEval: 20,
+			playedEval: 20,
+			isTop1: true,
+		}));
+		const shortResignation = Array.from({ length: 10 }, (_, idx) => ({
+			ply: idx + 9,
+			bestEval: 30,
+			playedEval: 30,
+			isTop1: true,
+		}));
+
+		expect(calculateACPL(shortBookGame)).toBeNull();
+		expect(profileACPLDistribution(shortBookGame)).toEqual({
+			acpl: null,
+			stdDev: null,
+			top1MatchRate: null,
+			sampleSize: 0,
+			flagged: false,
+			flagType: null,
+		});
+		expect(profileACPLDistribution(shortResignation)).toEqual({
+			acpl: null,
+			stdDev: null,
+			top1MatchRate: null,
+			sampleSize: 10,
+			flagged: false,
+			flagType: null,
+		});
+	});
+
+	it("excludes opening book moves (plies 1..8) and forced moves (isForced or legalMoveCount <= 1)", () => {
+		const bookMoves = Array.from({ length: 8 }, (_, idx) => ({
+			ply: idx + 1,
+			bestEval: 500,
+			playedEval: 0,
+			isTop1: false,
+		}));
+		const forcedMoves = [
+			{ ply: 9, bestEval: 300, playedEval: 0, isForced: true, isTop1: false },
+			{ ply: 10, bestEval: 300, playedEval: 0, legalMoveCount: 1, isTop1: false },
+		];
+		const validMoves = Array.from({ length: 20 }, (_, idx) => ({
+			ply: idx + 11,
+			bestEval: 100,
+			playedEval: 95,
+			isTop1: true,
+		}));
+
+		const combined = [...bookMoves, ...forcedMoves, ...validMoves];
+		const acpl = calculateACPL(combined);
+		const profile = profileACPLDistribution(combined);
+
+		expect(acpl).toBe(5);
+		expect(profile.sampleSize).toBe(20);
+		expect(profile.acpl).toBe(5);
+		expect(profile.stdDev).toBe(0);
+		expect(profile.top1MatchRate).toBe(1);
+		expect(profile.flagged).toBe(true);
+		expect(profile.flagType).toBe(ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY);
+	});
+
+	it("integrates ACPL profiling into AntiCheatService.buildPlayerAnalysis", () => {
+		const service = new AntiCheatService({ db: {}, games: {} });
+		const humanDelays = [
+			1200, 800, 2500, 600, 3100, 2800, 7200, 1300, 450, 3700,
+			9000, 4300, 2200, 1800, 5600, 3100, 18000, 6400, 700, 11200,
+			2500, 1100, 4900, 13800, 3400, 2100, 8700, 1500, 4200, 6100,
+		];
+		const telemetry = humanDelays.map((move_duration_ms, idx) => ({
+			player_address: "GENGINE",
+			move_duration_ms,
+			event_data: { moveNumber: idx + 1, legalMoveCount: 25 },
+		}));
+		const engineResults = humanDelays.map((_, idx) => ({
+			matchesTopMove: idx !== 12,
+			centipawnLoss: idx === 12 ? 15 : 2,
+		}));
+
+		const analysis = service.buildPlayerAnalysis("white", "GENGINE", telemetry, engineResults, 1900);
+
+		expect(analysis.acplProfile).toEqual(expect.objectContaining({
+			sampleSize: 22,
+			flagged: true,
+			flagType: ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY,
+		}));
+		expect(analysis.flagged).toBe(true);
+		expect(analysis.antiCheatFlags).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				type: ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY,
+				sampleSize: 22,
+			}),
+		]));
+		expect(analysis.reasons).toEqual(expect.arrayContaining([
+			expect.stringContaining("FIDE ACPL"),
+		]));
+	});
+});

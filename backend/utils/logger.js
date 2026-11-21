@@ -32,6 +32,15 @@ class StructuredLogger {
    * @returns {string} Correlation ID
    */
   getCorrelationId() {
+    // Prefer AsyncLocalStorage context if available (per-request)
+    const store = require('../middleware/correlationId').asyncLocalStorage?.getStore();
+    if (store && store.correlationId) {
+      return store.correlationId;
+    }
+    if (!this.correlationId) {
+      this.correlationId = this.generateId();
+    }
+    return this.correlationId;
     if (!this.correlationId) {
       this.correlationId = this.generateId();
     }

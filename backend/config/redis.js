@@ -101,4 +101,50 @@ function getPubSubClients() {
 	return { pubClient, subClient };
 }
 
-module.exports = { getRedisClient, getRedisConnection, closeRedis, getPubSubClients };
+function parseRedisInfoValue(infoText, key) {
+	if (typeof infoText !== "string") return null;
+	const match = infoText.match(new RegExp(`^${key}:(\\d+(?:\\.\\d+)?)`, "m"));
+	if (!match) return null;
+	const value = Number(match[1]);
+	return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Safely collect Redis ping latency, connected clients, and memory usage.
+ * Never throws; returns connected: false when Redis is unavailable or errors.
+ */
+async function getRedisHealthInfo(redisClient = getRedisClient()) {
+	const disconnected = {
+		connected: false,
+		pingLatencyMs: null,
+		connectedClients: null,
+		usedMemoryBytes: null,
+	};
+
+	if (!redisClient || redisClient.status !== "ready") {
+		return disconnected;
+	}
+
+	try {
+		const startNs = process.hrtime.bigint();
+		await redisClient.ping();
+		const elapsedNs = process.hrtime.bigint() - startNs;
+		const pingLatencyMs = Number(elapsedNs) / 1e6;
+
+		const [clientsInfo, memoryInfo] = await Promise.all([
+			redisClient.info("clients"),
+			redisClient.info("memory"),
+		]);
+
+		return {
+			connected: true,
+			pingLatencyMs,
+			connectedClients: parseRedisInfoValue(clientsInfo, "connected_clients"),
+			usedMemoryBytes: parseRedisInfoValue(memoryInfo, "used_memory"),
+		};
+	} catch (_) {
+		return disconnected;
+	}
+}
+
+module.exports = { getRedisClient, getRedisConnection, closeRedis, getPubSubClients, getRedisHealthInfo };
