@@ -246,6 +246,48 @@
 * **platform:** implement openapi specs, release automation, disconnect grace tests, and e2e lobby flow ([#455](https://github.com/Kaycee276/Chesster/issues/455)) ([5c5d40e](https://github.com/Kaycee276/Chesster/commit/5c5d40e486d65dfa29cd80f33c9da495378e2503)), closes [#450](https://github.com/Kaycee276/Chesster/issues/450) [#449](https://github.com/Kaycee276/Chesster/issues/449) [#448](https://github.com/Kaycee276/Chesster/issues/448) [#446](https://github.com/Kaycee276/Chesster/issues/446)
 * **security,db:** resolve issues [#442](https://github.com/Kaycee276/Chesster/issues/442), [#443](https://github.com/Kaycee276/Chesster/issues/443), [#444](https://github.com/Kaycee276/Chesster/issues/444), [#445](https://github.com/Kaycee276/Chesster/issues/445) (closes [#442](https://github.com/Kaycee276/Chesster/issues/442), closes [#443](https://github.com/Kaycee276/Chesster/issues/443), closes [#444](https://github.com/Kaycee276/Chesster/issues/444), closes [#445](https://github.com/Kaycee276/Chesster/issues/445)) ([#454](https://github.com/Kaycee276/Chesster/issues/454)) ([167f37f](https://github.com/Kaycee276/Chesster/commit/167f37fd344cab9fbfd94a947ee1a7e8e458e16c))
 
+## [1.40.0](https://github.com/Kaycee276/Chesster/compare/v1.39.1...v1.40.0) (2026-11-21)
+
+
+### Features
+
+* add custom piece sound packs in ThemeSelector and GameSettings, and configure non-blocking docker scan ([#621](https://github.com/Kaycee276/Chesster/issues/621)) ([687ea0e](https://github.com/Kaycee276/Chesster/commit/687ea0ea841232453adeadc59af02bf09a406980))
+* escrow controls ([#550](https://github.com/Kaycee276/Chesster/issues/550), [#551](https://github.com/Kaycee276/Chesster/issues/551)), SBMM expansion ([#552](https://github.com/Kaycee276/Chesster/issues/552)), anticheat timing ([#553](https://github.com/Kaycee276/Chesster/issues/553)) ([#617](https://github.com/Kaycee276/Chesster/issues/617)) ([5daf140](https://github.com/Kaycee276/Chesster/commit/5daf140cf28011cac035ab79be9374a08b1ce53a))
+* **escrow:** add Organizer Tier Registry with tiered protocol fee discounts ([#619](https://github.com/Kaycee276/Chesster/issues/619)) ([6b9791b](https://github.com/Kaycee276/Chesster/commit/6b9791b4a8bd7470f509f2c7876aabbd983e5ac3))
+* resolve Chesster issues 506 through 509 ([#595](https://github.com/Kaycee276/Chesster/issues/595)) ([a158616](https://github.com/Kaycee276/Chesster/commit/a158616b9b2630059cff3f38f59b6e1ca602627a))
+
+
+### Bug Fixes
+
+* **backend:** add configurable timerService heartbeat intervals and fix socket test presence emission ([6e6e588](https://github.com/Kaycee276/Chesster/commit/6e6e58827575a200f30f7055dd5a81fe48a7278f))
+* **backend:** correct distributed lock concurrency mock and stellar signature buffer conversions ([83026fe](https://github.com/Kaycee276/Chesster/commit/83026fe527a032362b859e9e57dcdc83916ad63c))
+* **backend:** fix rate limiter subnet module resolution, counting semantics and ipUtils test fixtures ([c984d13](https://github.com/Kaycee276/Chesster/commit/c984d1343e6aac302ebb5bfd3fdb50d7372ea042))
+* **backend:** implement matchmaking stress test interface and replace vitest import with jest globals ([af1ef66](https://github.com/Kaycee276/Chesster/commit/af1ef660067eadf5a0085af05260021b7fddd147))
+* **backend:** remove deprecated stellar-sdk and migrate signatureAuth to @stellar/stellar-sdk ([a8a9b1e](https://github.com/Kaycee276/Chesster/commit/a8a9b1e18b865906d9369ac2c4a769db1b07981c))
+* **backend:** resolve audit verification compatibility and audit export headers ([96b8fbe](https://github.com/Kaycee276/Chesster/commit/96b8fbe1f0fef3eaa45cbeb156aa105ca2dfdb23))
+* **contracts:** align error code enum assertions and remove invalid token whitelist check in create_match ([e55fac4](https://github.com/Kaycee276/Chesster/commit/e55fac4636c36c5efbd3ee5cf7384c45db160d77))
+* escrow self-match validation ([#620](https://github.com/Kaycee276/Chesster/issues/620)) ([da6e721](https://github.com/Kaycee276/Chesster/commit/da6e7217dd6f757d6479c083ac2d169f7d486400))
+* **frontend:** ignore stats.html from service worker precaching and increase maximumFileSizeToCacheInBytes ([5f3a1b3](https://github.com/Kaycee276/Chesster/commit/5f3a1b33e7d4253219f4d87fa4be155995ff38ec))
+* **frontend:** provide fallback escrow contract address in test setup and dynamic lookup in stellarService ([e3b6a76](https://github.com/Kaycee276/Chesster/commit/e3b6a7612b7b93066b0e8e2e48ca1a084fb7e86f))
+* **frontend:** resolve eslint issues, move badge accessibility, and mate evaluation formatting ([cdc2025](https://github.com/Kaycee276/Chesster/commit/cdc2025a63dd42c693a62c2588f7a71b04f7483a))
+* **frontend:** resolve test regressions, piece set typing, bundle size budget, and pnpm build config ([a6967e2](https://github.com/Kaycee276/Chesster/commit/a6967e2455f9367b926b47a8f24027da470b1921))
+
+
+### Documentation
+
+* **architecture:** author system architecture overview and escrow sequence diagrams ([#545](https://github.com/Kaycee276/Chesster/issues/545)) ([#618](https://github.com/Kaycee276/Chesster/issues/618)) ([09a5617](https://github.com/Kaycee276/Chesster/commit/09a5617f49db467ce16623f861920d46d931f630))
+* **contributing:** enforce maintainer-created and maintainer-assigned issue policy ([a3a1436](https://github.com/Kaycee276/Chesster/commit/a3a1436ab3dcb56d38f1ac61eb5610de4236c598))
+
+
+### Continuous Integration
+
+* allow pnpm builds in frontend and align backend audit failure gate ([272328b](https://github.com/Kaycee276/Chesster/commit/272328bcd230e640562e85c018888e27e7efb51c))
+* **audit:** ignore transitive soroban crypto-bigint advisory across workflows and cargo config ([7d14622](https://github.com/Kaycee276/Chesster/commit/7d1462262b59fad0bbae95d06ac2b0f5265beca7))
+* configure lighthouserc preview command and ignore transitive soroban crypto-bigint advisory ([1d1b1a9](https://github.com/Kaycee276/Chesster/commit/1d1b1a9d54597e05651f1c245dc76ae3f39c617f))
+* **github:** add assignment guard workflow to prevent unauthorized self-assignments ([ff113cb](https://github.com/Kaycee276/Chesster/commit/ff113cb88f45a58aadc50555f1ae36cfbc065790))
+* **security:** align container vulnerability gate with continue-on-error and updated trivyignores ([26c1dc8](https://github.com/Kaycee276/Chesster/commit/26c1dc881b7b504392c01c44647e60caf2587e27))
+* **security:** configure trivyignore and strip global npm from runner image ([941440e](https://github.com/Kaycee276/Chesster/commit/941440e208d5d0dc39aacbad32294e101c7b45a7))
+
 ## [1.39.1](https://github.com/Kaycee276/Chesster/compare/v1.39.0...v1.39.1) (2026-10-18)
 
 
