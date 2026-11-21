@@ -38,6 +38,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setBindings(DEFAULT_KEYBINDINGS.map((def) => ({
           ...def,
           key: parsed[def.id] || def.defaultKey,

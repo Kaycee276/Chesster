@@ -4,11 +4,12 @@ export interface AnalysisPreferences {
   targetDepth: number;
   multiPv: number;
   isPaused: boolean;
+  lockWhiteBottom?: boolean;
 }
 
 export function loadAnalysisPreferences(): AnalysisPreferences {
   if (typeof window === "undefined" || !window.localStorage) {
-    return { targetDepth: 16, multiPv: 1, isPaused: false };
+    return { targetDepth: 16, multiPv: 1, isPaused: false, lockWhiteBottom: false };
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -18,12 +19,13 @@ export function loadAnalysisPreferences(): AnalysisPreferences {
         targetDepth: Math.max(10, Math.min(24, Number(parsed.targetDepth) || 16)),
         multiPv: Math.max(1, Math.min(3, Number(parsed.multiPv) || 1)),
         isPaused: Boolean(parsed.isPaused),
+        lockWhiteBottom: Boolean(parsed.lockWhiteBottom),
       };
     }
   } catch {
     // ignore json parse error
   }
-  return { targetDepth: 16, multiPv: 1, isPaused: false };
+  return { targetDepth: 16, multiPv: 1, isPaused: false, lockWhiteBottom: false };
 }
 
 export function saveAnalysisPreferences(prefs: Partial<AnalysisPreferences>): void {

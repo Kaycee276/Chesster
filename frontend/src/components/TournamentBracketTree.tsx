@@ -74,14 +74,14 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
 
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+    const zoomFactor = e.deltaY < 0 ? 1.32 : 1 / 1.32;
     setViewState((prev) => ({
       ...prev,
       scale: Math.min(2.5, Math.max(0.4, prev.scale * zoomFactor)),
     }));
   }, []);
 
-  const getTouchDistance = (touches: TouchList): number => {
+  const getTouchDistance = (touches: TouchList | React.TouchList): number => {
     if (touches.length < 2) return 0;
     const dx = touches[0].clientX - touches[1].clientX;
     const dy = touches[0].clientY - touches[1].clientY;
@@ -125,7 +125,7 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
   const zoomIn = () => {
     setViewState((prev) => ({
       ...prev,
-      scale: Math.min(2.5, prev.scale * 1.2),
+      scale: Math.min(2.5, prev.scale * 1.32),
     }));
   };
 
@@ -181,6 +181,7 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
           transformOrigin: '0 0',
           transition: isDragging ? 'none' : 'transform 0.1s ease-out',
         }}
+      >
         {rounds.map((round, rIndex) => (
           <div
             key={round.title || rIndex}

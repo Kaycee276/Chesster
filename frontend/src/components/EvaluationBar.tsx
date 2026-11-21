@@ -6,7 +6,7 @@ interface EvaluationBarProps {
 	/** Signed moves to mate from White's perspective, 0 if already mated, else null. */
 	mate?: number | null;
 	/** Board orientation: the side shown at the bottom of the board. */
-	orientation: "white" | "black";
+	orientation?: "white" | "black";
 	/** Search depth of the displayed evaluation. */
 	depth?: number;
 	/** True until the first evaluation arrives. */
@@ -22,7 +22,7 @@ interface EvaluationBarProps {
 export default function EvaluationBar({
 	scoreCp,
 	mate = null,
-	orientation,
+	orientation = "white",
 	depth,
 	loading = false,
 }: EvaluationBarProps) {

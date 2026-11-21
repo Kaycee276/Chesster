@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge, FileUp } from "lucide-react";
+import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge, FileUp, RotateCw } from "lucide-react";
 import MoveNavigator from "../components/MoveNavigator";
 import EvaluationGraph from "../components/EvaluationGraph";
 import PromotionModal from "../components/PromotionModal";
@@ -15,6 +15,10 @@ import {
   type AccuracySummary,
   type MoveQuality,
 } from "../utils/moveAccuracy";
+import {
+  calculateGameAccuracy,
+  estimatePerformanceRating,
+} from "../utils/capsCalculator";
 import { INITIAL_BOARD, getPossibleMoves, applyMove, squareToAlgebraic } from "../utils/chessUtils";
 import { loadPgn, splitPgnGames, PgnParseError, type ReplayedMove } from "../utils/pgnParser";
 import EvaluationBar from "../components/EvaluationBar";
@@ -291,6 +295,14 @@ export default function AnalysisPage() {
     });
   };
 
+  const handleToggleLockWhiteBottom = () => {
+    setAnalysisPrefs((prev) => {
+      const next = { ...prev, lockWhiteBottom: !prev.lockWhiteBottom };
+      saveAnalysisPreferences(next);
+      return next;
+    });
+  };
+
   const formattedVariations = variations
     .filter((v): v is EngineEvaluation => Boolean(v && v.pv && v.pv.length > 0))
     .map((v) => ({
@@ -542,7 +554,17 @@ export default function AnalysisPage() {
     return rows;
   }, [moves]);
 
-  const isFlipped = false; // analysis board always shown from white's perspective
+  const [isFlipped, setIsFlipped] = useState(false);
+  const activeOrientation: "white" | "black" = analysisPrefs.lockWhiteBottom
+    ? "white"
+    : isFlipped
+      ? "black"
+      : "white";
+
+  const capsAccuracy = useMemo(() => {
+    if (!accuracy.evaluations || accuracy.evaluations.length <= 1) return null;
+    return calculateGameAccuracy(accuracy.evaluations);
+  }, [accuracy.evaluations]);
 
   return (
     <div className="h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg) p-2 gap-2">
@@ -614,6 +636,15 @@ export default function AnalysisPage() {
           >
             <Upload size={13} /> <span className="hidden sm:inline">Paste PGN</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setIsFlipped((f) => !f)}
+            title="Flip board orientation"
+            aria-label="Flip board orientation"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg bg-(--bg) border border-(--border) hover:border-(--accent-primary)/60 text-xs font-semibold transition-colors shrink-0"
+          >
+            <RotateCw size={13} /> <span className="hidden sm:inline">Flip</span>
+          </button>
           <label className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-(--bg) border border-(--border) hover:border-(--accent-primary)/60 text-xs font-semibold transition-colors cursor-pointer shrink-0">
             <FileUp size={13} aria-hidden="true" /> Drop/browse PGN
             <input
@@ -654,7 +685,7 @@ export default function AnalysisPage() {
             <EvaluationBar
               scoreCp={liveEvaluation.scoreCp}
               mate={liveEvaluation.mate}
-              orientation="white"
+              orientation={activeOrientation}
               depth={liveEvaluation.depth}
               loading={!liveEvaluation}
             />
@@ -748,9 +779,11 @@ export default function AnalysisPage() {
             multiPv={analysisPrefs.multiPv}
             isPaused={analysisPrefs.isPaused}
             variations={formattedVariations}
+            lockWhiteBottom={Boolean(analysisPrefs.lockWhiteBottom)}
             onDepthChange={handleDepthChange}
             onMultiPvChange={handleMultiPvChange}
             onTogglePause={handleTogglePause}
+            onToggleLockWhiteBottom={handleToggleLockWhiteBottom}
           />
 
           <MoveNavigator
@@ -795,6 +828,81 @@ export default function AnalysisPage() {
                     ? "Evaluating positions with Stockfish…"
                     : "Engine analysis unavailable."}
                 </p>
+              )}
+
+              {/* CAPS Accuracy Engine circular gauges & rating estimates (#683) */}
+              {capsAccuracy && (
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-(--border)/60">
+                  <div
+                    data-testid="caps-gauge-white"
+                    className="flex items-center gap-2.5 bg-(--bg) p-2 rounded-lg border border-(--border)"
+                  >
+                    <div className="relative w-9 h-9 shrink-0 flex items-center justify-center">
+                      <svg className="w-9 h-9 -rotate-90" viewBox="0 0 36 36">
+                        <path
+                          className="text-(--border)"
+                          strokeWidth="3.5"
+                          stroke="currentColor"
+                          fill="none"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                        <path
+                          className="text-(--accent-primary)"
+                          strokeDasharray={`${Math.round(capsAccuracy.whiteAccuracy)}, 100`}
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          stroke="currentColor"
+                          fill="none"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                      </svg>
+                      <span className="absolute text-[9px] font-mono font-bold">
+                        {Math.round(capsAccuracy.whiteAccuracy)}%
+                      </span>
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-[10px] font-bold text-(--text)">White CAPS</span>
+                      <span className="text-[9px] font-mono text-(--text-tertiary)">
+                        Est. {estimatePerformanceRating(capsAccuracy.whiteAccuracy)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    data-testid="caps-gauge-black"
+                    className="flex items-center gap-2.5 bg-(--bg) p-2 rounded-lg border border-(--border)"
+                  >
+                    <div className="relative w-9 h-9 shrink-0 flex items-center justify-center">
+                      <svg className="w-9 h-9 -rotate-90" viewBox="0 0 36 36">
+                        <path
+                          className="text-(--border)"
+                          strokeWidth="3.5"
+                          stroke="currentColor"
+                          fill="none"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                        <path
+                          className="text-(--accent-primary)"
+                          strokeDasharray={`${Math.round(capsAccuracy.blackAccuracy)}, 100`}
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          stroke="currentColor"
+                          fill="none"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                      </svg>
+                      <span className="absolute text-[9px] font-mono font-bold">
+                        {Math.round(capsAccuracy.blackAccuracy)}%
+                      </span>
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-[10px] font-bold text-(--text)">Black CAPS</span>
+                      <span className="text-[9px] font-mono text-(--text-tertiary)">
+                        Est. {estimatePerformanceRating(capsAccuracy.blackAccuracy)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           )}
