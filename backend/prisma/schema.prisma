@@ -324,14 +324,34 @@ model Tournament {
   reminder_15m_sent_at DateTime? @db.Timestamptz(6)
   reminder_5m_sent_at  DateTime? @db.Timestamptz(6)
   winner_announced_at  DateTime? @db.Timestamptz(6)
+  cancellation_reason  String?
   created_at           DateTime  @default(now()) @db.Timestamptz(6)
   updated_at           DateTime  @default(now()) @db.Timestamptz(6)
 
   participants    TournamentParticipant[]
   bracket_matches BracketMatch[]
+  refund_ledger   TournamentRefundLedger[]
 
   @@index([status], map: "idx_tournaments_status")
   @@map("tournaments")
+}
+
+model TournamentRefundLedger {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tournament_id  String   @db.Uuid
+  wallet_address String
+  amount         Decimal  @db.Decimal(30, 7)
+  status         String   @default("pending") @db.VarChar(20)
+  tx_hash        String?
+  last_error     String?
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  tournament Tournament @relation(fields: [tournament_id], references: [id], onDelete: Cascade)
+
+  @@unique([tournament_id, wallet_address])
+  @@index([tournament_id, status], map: "idx_tournament_refund_ledger_status")
+  @@map("tournament_refund_ledger")
 }
 
 model TournamentParticipant {

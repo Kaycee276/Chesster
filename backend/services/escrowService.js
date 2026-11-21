@@ -1,4 +1,4 @@
-const { Keypair, rpc, TransactionBuilder, Networks, Contract, xdr, scValToNative, nativeToScVal, BASE_FEE } = require("@stellar/stellar-sdk");
+const { Keypair, rpc, TransactionBuilder, Networks, Contract, Operation, Asset, Memo, xdr, scValToNative, nativeToScVal, BASE_FEE } = require("@stellar/stellar-sdk");
 
 const RPC_URL = process.env.STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = process.env.STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -196,7 +196,7 @@ async function estimateFee(sourceAccount, operation) {
  * @param {string} [opts.label] - used only for logging
  * @returns {Promise<object>} the successful transaction response
  */
-async function submitWithRetry(buildOperation, { label = "coordinator transaction" } = {}) {
+async function submitWithRetry(buildOperation, { label = "coordinator transaction", memo = null } = {}) {
 	if (!coordinatorKeypair) throw new Error("Coordinator secret key not configured");
 
 	let lastErr;
@@ -209,13 +209,12 @@ async function submitWithRetry(buildOperation, { label = "coordinator transactio
 			const operation = buildOperation();
 			const fee = await estimateFee(sourceAccount, operation);
 
-			const tx = new TransactionBuilder(sourceAccount, {
+			const builder = new TransactionBuilder(sourceAccount, {
 				fee,
 				networkPassphrase: NETWORK_PASSPHRASE,
-			})
-				.addOperation(operation)
-				.setTimeout(30)
-				.build();
+			}).addOperation(operation);
+			if (memo) builder.addMemo(memo);
+			const tx = builder.setTimeout(30).build();
 
 			const preparedTx = await server.prepareTransaction(tx);
 			preparedTx.sign(coordinatorKeypair);
@@ -238,7 +237,7 @@ async function submitWithRetry(buildOperation, { label = "coordinator transactio
 				if (attempt > 0) {
 					console.log(`[Escrow] ${label} succeeded on retry attempt ${attempt + 1}`);
 				}
-				return txResponse;
+				return { ...txResponse, hash: txResponse.hash || sendResponse.hash };
 			}
 
 			throw new Error(`Transaction failed: ${JSON.stringify(txResponse)}`);
@@ -1137,8 +1136,65 @@ async function settleMatchWithIdempotency(matchId, settlementFn, options = {}) {
 	});
 }
 
+// Serializes coordinator classic payments so concurrent refund batches never
+// race on the same Stellar sequence number (sequence-number lock).
+let paymentLock = Promise.resolve();
+
+function withSequenceLock(task) {
+	const run = paymentLock.then(task, task);
+	paymentLock = run.catch(() => undefined);
+	return run;
+}
+
+/**
+ * Refund a tournament buy-in to a single participant with a native payment
+ * from the coordinator account. Calls are serialized behind a sequence lock.
+ *
+ * @param {string} tournamentId
+ * @param {string} destination - participant Stellar address
+ * @param {string|number} amount - XLM amount
+ * @returns {Promise<{hash: string}>}
+ */
+async function refundTournamentBuyIn(tournamentId, destination, amount) {
+	if (!coordinatorKeypair) throw new Error("Coordinator secret key not configured");
+	if (!destination) throw new Error("Refund destination is required");
+	if (!(Number(amount) > 0)) throw new Error("Refund amount must be positive");
+	const memo = Memo.text(`refund:${String(tournamentId).slice(0, 20)}`);
+	return withSequenceLock(async () => {
+		const response = await submitWithRetry(
+			() => Operation.payment({ destination, asset: Asset.native(), amount: String(amount) }),
+			{ label: `tournament_refund(${tournamentId}, ${destination})`, memo },
+		);
+		return { hash: response.hash || response.txHash || response.id };
+	});
+}
+
+/**
+ * Refund a list of participants in concurrent batches. Never throws for an
+ * individual failure; each result carries its own outcome.
+ */
+async function refundTournamentBatch(tournamentId, entries, { batchSize = 5 } = {}) {
+	const results = [];
+	for (let i = 0; i < entries.length; i += batchSize) {
+		const batch = entries.slice(i, i + batchSize);
+		const settled = await Promise.allSettled(
+			batch.map((e) => refundTournamentBuyIn(tournamentId, e.wallet_address, e.amount)),
+		);
+		settled.forEach((r, idx) => {
+			results.push(
+				r.status === "fulfilled"
+					? { wallet_address: batch[idx].wallet_address, ok: true, hash: r.value.hash }
+					: { wallet_address: batch[idx].wallet_address, ok: false, error: r.reason?.message || String(r.reason) },
+			);
+		});
+	}
+	return results;
+}
+
 module.exports = {
 	init,
+	refundTournamentBuyIn,
+	refundTournamentBatch,
 	resolveMatch,
 	resolveWithWinner,
 	resolveAsDraw,

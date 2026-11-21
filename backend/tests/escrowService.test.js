@@ -40,9 +40,19 @@ jest.mock("@stellar/stellar-sdk", () => {
     Contract: jest.fn().mockImplementation(() => ({
       call: jest.fn().mockReturnValue("mock-operation"),
     })),
+    Operation: {
+      payment: jest.fn().mockImplementation((opts) => ({ type: "payment", ...opts })),
+    },
+    Asset: {
+      native: jest.fn().mockReturnValue({ code: "XLM" }),
+    },
+    Memo: {
+      text: jest.fn().mockImplementation((value) => ({ type: "text", value })),
+    },
     TransactionBuilder: Object.assign(
       jest.fn().mockImplementation(() => ({
         addOperation: jest.fn().mockReturnThis(),
+        addMemo: jest.fn().mockReturnThis(),
         setTimeout: jest.fn().mockReturnThis(),
         build: jest.fn().mockReturnValue("mock-tx"),
       })),
@@ -303,14 +313,14 @@ describe("Escrow Service", () => {
       let resolveFn;
       const fn = jest.fn(() => new Promise(resolve => { resolveFn = resolve; }));
 
-      const promise = escrowService.withRenewableLock(mockRedis, "lock:test", "worker1", 30, fn);
+      const promise = escrowService.withRenewableLock(mockRedis, "lock:test", "worker1", 0.3, fn);
 
-      await new Promise(r => setTimeout(r, 150));
+      await new Promise(r => setTimeout(r, 250));
       resolveFn("done");
 
       await promise;
 
-      expect(mockRedis.expire).toHaveBeenCalledWith("lock:test", 30);
+      expect(mockRedis.expire).toHaveBeenCalledWith("lock:test", 0.3);
       expect(mockRedis.eval).toHaveBeenCalled();
     });
 
@@ -647,6 +657,57 @@ describe("Escrow Service", () => {
         await expect(createSupabaseLedger(found.client).find("G")).resolves.toMatchObject({ status: "confirmed" });
         const none = fakeSupabase({ findResult: { data: null, error: null } });
         await expect(createSupabaseLedger(none.client).find("G")).resolves.toBeNull();
+      });
+    });
+  });
+
+  describe("tournament buy-in refund pipeline (Issue #712)", () => {
+    it("refunds a single tournament buy-in with a native payment operation and memo", async () => {
+      const res = await escrowService.refundTournamentBuyIn("tourn-123", "GPLAYER1", 25);
+      expect(res).toEqual({ hash: "test-hash" });
+      expect(serverInstance.sendTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects invalid refund destination or non-positive amount", async () => {
+      await expect(escrowService.refundTournamentBuyIn("t1", "", 10)).rejects.toThrow(/destination is required/);
+      await expect(escrowService.refundTournamentBuyIn("t1", "GPLAYER1", 0)).rejects.toThrow(/amount must be positive/);
+      await expect(escrowService.refundTournamentBuyIn("t1", "GPLAYER1", -5)).rejects.toThrow(/amount must be positive/);
+    });
+
+    it("serializes concurrent batch payments behind the sequence lock and reports per-entry outcomes", async () => {
+      let inFlight = 0;
+      let maxInFlight = 0;
+      let callCount = 0;
+      serverInstance.sendTransaction.mockImplementation(async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        callCount += 1;
+        await new Promise((r) => setTimeout(r, 2));
+        inFlight -= 1;
+        if (callCount === 3) {
+          throw new Error("HostError: account does not exist");
+        }
+        return { status: "PENDING", hash: `hash-${callCount}` };
+      });
+      serverInstance.getTransaction.mockImplementation(async (hash) => ({
+        status: "SUCCESS",
+        hash,
+      }));
+
+      const entries = Array.from({ length: 7 }, (_, i) => ({
+        wallet_address: `GPLAYER_${i + 1}`,
+        amount: 15,
+      }));
+
+      const results = await escrowService.refundTournamentBatch("tourn-batch", entries, { batchSize: 5 });
+
+      expect(maxInFlight).toBe(1);
+      expect(results).toHaveLength(7);
+      expect(results.filter((r) => r.ok)).toHaveLength(6);
+      expect(results[2]).toMatchObject({
+        wallet_address: "GPLAYER_3",
+        ok: false,
+        error: expect.stringMatching(/account does not exist/),
       });
     });
   });

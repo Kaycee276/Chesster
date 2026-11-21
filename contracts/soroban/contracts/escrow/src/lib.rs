@@ -5596,8 +5596,16 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::Unauthorized);
         }
 
-        let t = if threshold == 0 { STORAGE_TTL_THRESHOLD } else { threshold };
-        let e = if extend_to == 0 { STORAGE_TTL_EXTENDED } else { extend_to };
+        let t = if threshold == 0 {
+            STORAGE_TTL_THRESHOLD
+        } else {
+            threshold
+        };
+        let e = if extend_to == 0 {
+            STORAGE_TTL_EXTENDED
+        } else {
+            extend_to
+        };
 
         env.storage().instance().extend_ttl(t, e);
     }
@@ -5824,12 +5832,7 @@ impl ChessterEscrow {
     /// * `admin` - Admin address authorization.
     /// * `arbiters` - Vector of arbiter addresses.
     /// * `threshold` - Required number of distinct approvals (M in M-of-N).
-    pub fn set_arbiters(
-        env: Env,
-        admin: Address,
-        arbiters: Vec<Address>,
-        threshold: u32,
-    ) {
+    pub fn set_arbiters(env: Env, admin: Address, arbiters: Vec<Address>, threshold: u32) {
         admin.require_auth();
         let _guard = ReentrancyGuard::new(&env);
 
@@ -5837,9 +5840,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::InvalidTournament);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Arbiters, &arbiters);
+        env.storage().instance().set(&DataKey::Arbiters, &arbiters);
         env.storage()
             .instance()
             .set(&DataKey::ArbiterThreshold, &threshold);
@@ -5918,9 +5919,7 @@ impl ChessterEscrow {
                 &mut m,
                 Some(proposal.winner.clone()),
             );
-            env.storage()
-                .instance()
-                .remove(&DataKey::Dispute(match_id));
+            env.storage().instance().remove(&DataKey::Dispute(match_id));
         } else {
             env.storage()
                 .instance()
@@ -5928,7 +5927,7 @@ impl ChessterEscrow {
         }
     }
 
-    fn require_arbiter(env: &Env, arbiter: &Address) -> Result<(), EscrowError> {
+    fn require_arbiter(env: &Env, arbiter: &Address) {
         let arbiters: Vec<Address> = env
             .storage()
             .instance()
@@ -5938,7 +5937,6 @@ impl ChessterEscrow {
         if !arbiters.iter().any(|a| a == *arbiter) {
             panic_with_error!(env, EscrowError::Unauthorized);
         }
-        Ok(())
     }
 
     /// Cleans up settled or refunded matches older than 30 days (`STALE_MATCH_THRESHOLD_SECS`) from storage (Issue #41, #380).

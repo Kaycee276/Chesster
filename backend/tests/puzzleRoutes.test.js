@@ -25,6 +25,15 @@ function buildApp() {
 }
 
 describe("puzzle routes", () => {
+	const dailyPuzzle = {
+		id: "11111111-1111-4111-8111-111111111111",
+		fen: "test fen",
+		side_to_move: "white",
+		rating: 900,
+		date: "2026-09-25",
+		solution_moves: ["e1e8"],
+	};
+
 	beforeEach(() => jest.clearAllMocks());
 
 	test("GET /daily returns puzzle metadata without its solution", async () => {
@@ -46,6 +55,56 @@ describe("puzzle routes", () => {
 			rating: 900,
 		});
 		expect(response.body.data.solution_moves).toBeUndefined();
+	});
+
+	test("GET /daily sets ETag and Cache-Control headers", async () => {
+		puzzleModel.getDailyPuzzle.mockResolvedValue(dailyPuzzle);
+		const response = await request(buildApp()).get("/api/puzzles/daily");
+		expect(response.status).toBe(200);
+		expect(response.headers["cache-control"]).toBe("public, max-age=300, stale-while-revalidate=60");
+		expect(response.headers.etag).toMatch(/^"[0-9a-f]{32}"$/);
+	});
+
+	test("GET /daily returns 304 with empty body for a matching If-None-Match", async () => {
+		puzzleModel.getDailyPuzzle.mockResolvedValue(dailyPuzzle);
+		const first = await request(buildApp()).get("/api/puzzles/daily");
+		const second = await request(buildApp())
+			.get("/api/puzzles/daily")
+			.set("If-None-Match", first.headers.etag);
+		expect(second.status).toBe(304);
+		expect(second.text).toBe("");
+		expect(second.headers.etag).toBe(first.headers.etag);
+		expect(second.headers["cache-control"]).toContain("max-age=300");
+	});
+
+	test("GET /daily accepts weak and list validators", async () => {
+		puzzleModel.getDailyPuzzle.mockResolvedValue(dailyPuzzle);
+		const { headers } = await request(buildApp()).get("/api/puzzles/daily");
+		const weak = await request(buildApp()).get("/api/puzzles/daily").set("If-None-Match", `W/${headers.etag}`);
+		const list = await request(buildApp())
+			.get("/api/puzzles/daily")
+			.set("If-None-Match", `"stale", ${headers.etag}`);
+		expect(weak.status).toBe(304);
+		expect(list.status).toBe(304);
+	});
+
+	test("GET /daily returns 200 with new data for a stale ETag", async () => {
+		puzzleModel.getDailyPuzzle.mockResolvedValue(dailyPuzzle);
+		const first = await request(buildApp()).get("/api/puzzles/daily");
+		puzzleModel.getDailyPuzzle.mockResolvedValue({ ...dailyPuzzle, id: "22222222-2222-4222-8222-222222222222", date: "2026-09-26" });
+		const second = await request(buildApp())
+			.get("/api/puzzles/daily")
+			.set("If-None-Match", first.headers.etag);
+		expect(second.status).toBe(200);
+		expect(second.body.data.id).toBe("22222222-2222-4222-8222-222222222222");
+		expect(second.headers.etag).not.toBe(first.headers.etag);
+	});
+
+	test("GET /daily does not cache a 404", async () => {
+		puzzleModel.getDailyPuzzle.mockResolvedValue(null);
+		const response = await request(buildApp()).get("/api/puzzles/daily");
+		expect(response.status).toBe(404);
+		expect(response.headers["cache-control"]).toBeUndefined();
 	});
 
   test("GET /adaptive returns a rated playable line with promotion colors", async () => {

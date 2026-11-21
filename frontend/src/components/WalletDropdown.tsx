@@ -6,9 +6,22 @@ import { useToastStore } from "../store/toastStore";
 import { ChevronDown, LogOut, RefreshCw, UserRound, Wallet, Gift } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchAccountBalances } from "../services/stellarService";
+import type { SessionStatus } from "../services/walletService";
+
+const STATUS_LABEL: Record<SessionStatus, string> = {
+  connected: "Connected",
+  reauthenticating: "Re-authenticating",
+  disconnected: "Disconnected",
+};
+
+const STATUS_DOT: Record<SessionStatus, string> = {
+  connected: "bg-green-400",
+  reauthenticating: "bg-yellow-400 animate-pulse",
+  disconnected: "bg-red-400",
+};
 
 export default function WalletDropdown() {
-  const { address, walletType, connectWith, disconnect } = useWalletStore();
+  const { address, walletType, sessionStatus, connectWith, disconnect } = useWalletStore();
   const isStreamerMode = useGameStore((s) => s.isStreamerMode);
   const { addToast } = useToastStore();
   const navigate = useNavigate();
@@ -89,6 +102,13 @@ export default function WalletDropdown() {
           </span>
         )}
         <span className="hidden sm:inline text-xs text-(--text-secondary)">{displayBalance}</span>
+        <span
+          data-testid="session-status"
+          data-status={sessionStatus}
+          title={STATUS_LABEL[sessionStatus]}
+          aria-label={STATUS_LABEL[sessionStatus]}
+          className={`inline-block w-2 h-2 rounded-full shrink-0 ${STATUS_DOT[sessionStatus]}`}
+        />
         <span>{displayAddress}</span>
         <ChevronDown
           size={14}
