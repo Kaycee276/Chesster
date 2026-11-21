@@ -414,12 +414,26 @@ class SoundService {
     return this.ctx;
   }
 
+  private addPitchJitter(baseFreq: number, soundType: keyof SoundProfile = "move"): number {
+    const jitterRange = 0.1;
+    const jitter = (Math.random() - 0.5) * 2 * jitterRange;
+
+    if (soundType === "capture") {
+      return baseFreq * (1 + jitter) * 1.2;
+    }
+    if (soundType === "check") {
+      return baseFreq * (1 + jitter) * 0.8;
+    }
+    return baseFreq * (1 + jitter);
+  }
+
   private tone(
     freq: number,
     duration: number,
     type: OscType = "sine",
     volume = 0.25,
     delay = 0,
+    soundType: keyof SoundProfile = "move",
   ) {
     const ctx = this.getCtx();
     if (!ctx) return;
@@ -430,8 +444,10 @@ class SoundService {
       gain.connect(ctx.destination);
 
       const scaledVolume = volume * this._volume;
+      const jitteredFreq = this.addPitchJitter(freq, soundType);
+
       osc.type = type;
-      osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
+      osc.frequency.setValueAtTime(jitteredFreq, ctx.currentTime + delay);
       gain.gain.setValueAtTime(0, ctx.currentTime + delay);
       gain.gain.linearRampToValueAtTime(scaledVolume, ctx.currentTime + delay + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
@@ -446,7 +462,7 @@ class SoundService {
     const profile = SOUND_PROFILES[this._soundPack];
     const tones = profile[effectKey];
     tones.forEach((tone) => {
-      this.tone(tone.freq, tone.duration, tone.type, tone.volume, tone.delay);
+      this.tone(tone.freq, tone.duration, tone.type, tone.volume, tone.delay, effectKey);
     });
   }
 

@@ -123,3 +123,57 @@ describe("Chess Engine", () => {
     });
   });
 });
+
+describe("isValidFenStructure", () => {
+  const START = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+  it("accepts valid FENs", () => {
+    expect(chessEngine.isValidFenStructure(START)).toBe(true);
+    expect(chessEngine.isValidFenStructure("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1")).toBe(true);
+    expect(chessEngine.isValidFenStructure("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR  w - - 0 1")).toBe(true);
+  });
+
+  it("accepts FENs produced by boardToFen", () => {
+    const fen = chessEngine.boardToFen(chessEngine.initBoard(), 'black', 3, 2);
+    expect(chessEngine.isValidFenStructure(fen)).toBe(true);
+  });
+
+  it.each([
+    [null], [undefined], [123], [{}], [""],
+  ])("rejects non-string or empty input %p", (v) => {
+    expect(chessEngine.isValidFenStructure(v)).toBe(false);
+  });
+
+  it("rejects strings over 128 characters", () => {
+    expect(chessEngine.isValidFenStructure(START + " ".repeat(200))).toBe(false);
+    expect(chessEngine.isValidFenStructure("a".repeat(5000))).toBe(false);
+  });
+
+  it("rejects wrong token counts", () => {
+    expect(chessEngine.isValidFenStructure("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq -")).toBe(false);
+    expect(chessEngine.isValidFenStructure(START + " extra")).toBe(false);
+  });
+
+  it("rejects wrong rank count", () => {
+    expect(chessEngine.isValidFenStructure("rnbqkbnr/pppppppp/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")).toBe(false);
+    expect(chessEngine.isValidFenStructure("rnbqkbnr/pppppppp/8/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")).toBe(false);
+  });
+
+  it("rejects invalid active color, castling, en passant and counters", () => {
+    expect(chessEngine.isValidFenStructure(START.replace(" w ", " x "))).toBe(false);
+    expect(chessEngine.isValidFenStructure(START.replace("KQkq", "ZZ"))).toBe(false);
+    expect(chessEngine.isValidFenStructure(START.replace(" - 0 1", " e5 0 1"))).toBe(false);
+    expect(chessEngine.isValidFenStructure(START.replace(" 0 1", " a b"))).toBe(false);
+  });
+
+  it("rejects invalid piece characters", () => {
+    expect(chessEngine.isValidFenStructure("xnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")).toBe(false);
+  });
+
+  it("fenToBoard throws a sanitized error for invalid FEN", () => {
+    expect(() => chessEngine.fenToBoard("garbage")).toThrow("Invalid FEN structure");
+    expect(() => chessEngine.fenToBoard("a".repeat(5000))).toThrow("Invalid FEN structure");
+    expect(() => chessEngine.fenToBoard(START)).not.toThrow();
+  });
+});
+

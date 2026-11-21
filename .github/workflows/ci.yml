@@ -266,6 +266,8 @@ jobs:
   dependency-security-audit:
     name: Dependency Security Audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -283,12 +285,17 @@ jobs:
       - name: Install root dependencies
         run: pnpm install --frozen-lockfile
 
+      # pnpm audit reads the lockfile, so no install is needed. Only production
+      # dependencies are audited. High and critical advisories fail the job unless
+      # they are listed in .github/pnpm-audit-ignore.txt; moderate and low only warn.
       - name: Audit root dependencies
-        run: pnpm audit --audit-level high --prod
+        run: scripts/pnpm-audit.sh .
 
       - name: Audit backend dependencies
-        working-directory: backend
-        run: pnpm install --frozen-lockfile && (pnpm audit --audit-level high --prod || true)
+        run: scripts/pnpm-audit.sh backend
+
+      - name: Audit frontend dependencies
+        run: scripts/pnpm-audit.sh frontend
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -298,3 +305,102 @@ jobs:
 
       - name: Audit Soroban dependencies
         run: cargo audit --file contracts/soroban/Cargo.lock --ignore RUSTSEC-2026-0387
+
+  wasm-size-report:
+    name: Soroban Wasm Size Diff
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.contracts == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      SIZE_DIR: ${{ github.workspace }}/wasm-size
+
+    steps:
+      - name: Checkout PR Head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+
+      - name: Checkout Target Branch Baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            ./head/contracts/soroban
+            ./base/contracts/soroban
+
+      - name: Install stellar-cli
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: stellar-cli
+
+      - name: Build and Measure PR Head
+        working-directory: head/contracts/soroban
+        env:
+          WASM_SIZE_JSON_OUT: ${{ env.SIZE_DIR }}/head.json
+        run: |
+          mkdir -p "$SIZE_DIR"
+          make optimize
+          # The budget itself is enforced by the Soroban Contracts CI job; this job
+          # only reports, so a budget overrun does not stop the comment from posting.
+          ./scripts/check-wasm-size.sh target/wasm32-unknown-unknown/release/escrow.wasm || true
+          test -s "$WASM_SIZE_JSON_OUT"
+
+      # The baseline is measured with the PR's own scripts so both sides use the
+      # same method. A baseline failure (for example a target branch that predates
+      # the contract) downgrades the report to head sizes only.
+      - name: Build and Measure Target Branch Baseline
+        id: baseline
+        continue-on-error: true
+        working-directory: base/contracts/soroban
+        env:
+          WASM_SIZE_JSON_OUT: ${{ env.SIZE_DIR }}/base.json
+        run: |
+          make optimize
+          "$GITHUB_WORKSPACE/head/contracts/soroban/scripts/check-wasm-size.sh" \
+            target/wasm32-unknown-unknown/release/escrow.wasm || true
+          test -s "$WASM_SIZE_JSON_OUT"
+
+      - name: Generate Size Report
+        run: |
+          ./head/contracts/soroban/scripts/wasm-size-report.sh \
+            "$SIZE_DIR/head.json" "$SIZE_DIR/base.json" > "$SIZE_DIR/report.md"
+          cat "$SIZE_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # Pull requests from forks receive a read-only token, so the comment can only
+      # be posted for branches of this repository. Fork PRs still get the job summary.
+      - name: Post or Update PR Comment
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync(`${process.env.SIZE_DIR}/report.md`, 'utf8');
+            const marker = '<!-- wasm-size-report -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find(
+              (c) => c.user && c.user.type === 'Bot' && c.body && c.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

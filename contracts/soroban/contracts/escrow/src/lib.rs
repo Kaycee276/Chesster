@@ -16,6 +16,8 @@ pub const TIMELOCK_DELAY_SECONDS: u64 = 172_800;
 pub const MAX_PROTOCOL_FEE_BPS: u32 = 1_000;
 /// Maximum number of matches resolvable in a single atomic batch transaction.
 pub const MAX_BATCH_RESOLUTIONS: u32 = 10;
+/// Maximum number of recipients in a single atomic tournament payout.
+pub const MAX_PAYOUT_RECIPIENTS: u32 = 32;
 /// Maximum number of expired waiting lobbies refundable in one transaction (Issue #503).
 pub const MAX_BATCH_REFUNDS: u32 = 10;
 /// Maximum number of tournament matches cancellable in one transaction (Issue #458).
@@ -197,6 +199,11 @@ pub enum EscrowErrorExt {
     NoPendingFeeProposal = 63,
     /// Proposed base protocol fee exceeds the 10 percent cap.
     FeeTooHigh = 64,
+    /// Tournament payout recipients are empty, duplicated, zero-weighted, or the
+    /// recipient basis points plus the protocol fee do not equal 10,000.
+    InvalidPayoutDistribution = 65,
+    /// A payout for this tournament id has already been executed.
+    TournamentPayoutAlreadyResolved = 66,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -225,6 +232,16 @@ pub enum MatchStatus {
     Refunded = 3,
     /// Active match emergency-refunded by a player after coordinator inactivity timelock (Issue #433).
     EmergencyRefunded = 4,
+}
+
+/// A single prize recipient in an atomic tournament payout.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutRecipient {
+    /// Address receiving the prize.
+    pub recipient: Address,
+    /// Share of the pool in basis points (5000 = 50%).
+    pub bps: u32,
 }
 
 /// Lifecycle status of a tournament prize pool.
@@ -426,6 +443,18 @@ pub struct Dispute {
     pub status: DisputeStatus,
 }
 
+/// Multi-signature dispute proposal for threshold-based resolution (Issue #681).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeProposal {
+    /// Match ID being disputed.
+    pub match_id: String,
+    /// Proposed winner address.
+    pub winner: Address,
+    /// Set of arbiter addresses that have approved this proposal.
+    pub approvals: Vec<Address>,
+}
+
 /// Match resolution entry for batch resolution transactions.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -462,34 +491,34 @@ pub fn clear_flag(flags: u32, flag: u32) -> u32 {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Match {
-    /// Unique match game code identifier.
-    pub game_code: String,
-    /// Address of match creator (Player 1).
-    pub player1: Address,
-    /// Address of joined opponent (Player 2), if joined.
-    pub player2: Option<Address>,
     /// Individual wager requirement per player.
     pub wager_amount: i128,
     /// Total pooled wager amount currently locked in escrow.
     pub total_staked: i128,
-    /// Creation timestamp of match.
-    pub created_at: u64,
-    /// Current lifecycle status of match.
-    pub status: MatchStatus,
-    /// Winner address if match resolved with a winner.
-    pub winner: Option<Address>,
+    /// Address of match creator (Player 1).
+    pub player1: Address,
     /// Token contract address used for wagering.
     pub token: Address,
+    /// Address of joined opponent (Player 2), if joined.
+    pub player2: Option<Address>,
+    /// Winner address if match resolved with a winner.
+    pub winner: Option<Address>,
+    /// Creation timestamp of match.
+    pub created_at: u64,
     /// Match creation sequence nonce.
     pub nonce: u64,
-    /// Bitmask flags for match state.
-    pub flags: u32,
     /// Custom maximum match duration before abandoned refund in seconds (Issue #287).
     pub max_duration_seconds: u64,
-    /// Address of player who proposed mutual cancellation (Issue #290).
-    pub cancellation_proposed_by: Option<Address>,
     /// Ledger timestamp at which the mutual cancellation was proposed.
     pub cancellation_proposed_at: Option<u64>,
+    /// Bitmask flags for match state.
+    pub flags: u32,
+    /// Current lifecycle status of match.
+    pub status: MatchStatus,
+    /// Address of player who proposed mutual cancellation (Issue #290).
+    pub cancellation_proposed_by: Option<Address>,
+    /// Unique match game code identifier.
+    pub game_code: String,
 }
 
 pub type MatchData = Match;
@@ -1149,6 +1178,12 @@ pub enum DataKey {
     ProposedFee,
     /// Ledger timestamp when the pending protocol fee may be applied.
     FeeUnlockTime,
+    /// Set of trusted dispute arbiters (Issue #681).
+    Arbiters,
+    /// Required approval threshold for dispute resolution (Issue #681).
+    ArbiterThreshold,
+    /// Pending dispute proposal for a match (Issue #681).
+    Dispute(String),
 }
 
 /// Aggregated operational metrics for off-chain indexing and monitoring (Issue #288).
@@ -5557,7 +5592,9 @@ impl ChessterEscrow {
     /// * `extend_to` - New TTL to extend to in ledgers (0 = use default).
     pub fn extend_contract_ttl(env: Env, admin: Address, threshold: u32, extend_to: u32) {
         admin.require_auth();
-        Self::require_admin(&env, &admin);
+        if admin != Self::get_coordinator(env.clone()) {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
 
         let t = if threshold == 0 { STORAGE_TTL_THRESHOLD } else { threshold };
         let e = if extend_to == 0 { STORAGE_TTL_EXTENDED } else { extend_to };
@@ -5778,6 +5815,130 @@ impl ChessterEscrow {
             },
         );
         count
+    }
+
+    /// Sets the list of trusted dispute arbiters and their approval threshold for multi-sig dispute resolution (Issue #681).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `admin` - Admin address authorization.
+    /// * `arbiters` - Vector of arbiter addresses.
+    /// * `threshold` - Required number of distinct approvals (M in M-of-N).
+    pub fn set_arbiters(
+        env: Env,
+        admin: Address,
+        arbiters: Vec<Address>,
+        threshold: u32,
+    ) {
+        admin.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
+
+        if threshold == 0 || threshold > arbiters.len() {
+            panic_with_error!(&env, EscrowError::InvalidTournament);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Arbiters, &arbiters);
+        env.storage()
+            .instance()
+            .set(&DataKey::ArbiterThreshold, &threshold);
+    }
+
+    /// Initiates a multi-signature dispute proposal for a match (Issue #681).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `arbiter` - Arbiter address proposing the resolution.
+    /// * `match_id` - Game code of the disputed match.
+    /// * `winner` - Proposed winner address.
+    pub fn propose_dispute_resolution(
+        env: Env,
+        arbiter: Address,
+        match_id: String,
+        winner: Address,
+    ) {
+        arbiter.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
+
+        Self::require_arbiter(&env, &arbiter);
+
+        let proposal = DisputeProposal {
+            match_id: match_id.clone(),
+            winner: winner.clone(),
+            approvals: {
+                let mut approvals = Vec::new(&env);
+                approvals.push_back(arbiter.clone());
+                approvals
+            },
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Dispute(match_id), &proposal);
+    }
+
+    /// Adds an arbiter approval to an existing dispute proposal. If threshold is reached,
+    /// automatically executes the match resolution (Issue #681).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `arbiter` - Arbiter address approving the proposal.
+    /// * `match_id` - Game code being disputed.
+    pub fn approve_dispute_resolution(env: Env, arbiter: Address, match_id: String) {
+        arbiter.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
+
+        Self::require_arbiter(&env, &arbiter);
+
+        let mut proposal: DisputeProposal = env
+            .storage()
+            .instance()
+            .get(&DataKey::Dispute(match_id.clone()))
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::DisputeNotFound));
+
+        if proposal.approvals.iter().any(|a| a == arbiter) {
+            panic_with_error!(&env, EscrowError::AlreadyApproved);
+        }
+
+        proposal.approvals.push_back(arbiter.clone());
+
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ArbiterThreshold)
+            .unwrap_or(2);
+
+        if proposal.approvals.len() >= threshold {
+            let mut m = Self::load_match(&env, &match_id);
+            Self::settle_match(
+                &env,
+                &arbiter,
+                &match_id,
+                &mut m,
+                Some(proposal.winner.clone()),
+            );
+            env.storage()
+                .instance()
+                .remove(&DataKey::Dispute(match_id));
+        } else {
+            env.storage()
+                .instance()
+                .set(&DataKey::Dispute(match_id), &proposal);
+        }
+    }
+
+    fn require_arbiter(env: &Env, arbiter: &Address) -> Result<(), EscrowError> {
+        let arbiters: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Arbiters)
+            .unwrap_or_else(|| Vec::new(env));
+
+        if !arbiters.iter().any(|a| a == *arbiter) {
+            panic_with_error!(env, EscrowError::Unauthorized);
+        }
+        Ok(())
     }
 
     /// Cleans up settled or refunded matches older than 30 days (`STALE_MATCH_THRESHOLD_SECS`) from storage (Issue #41, #380).
@@ -6182,6 +6343,136 @@ impl ChessterEscrow {
         );
     }
 
+    /// Atomically distributes a tournament prize pool among ranked recipients and
+    /// remits the protocol fee to the treasury (Coordinator only).
+    ///
+    /// The sum of every recipient's `bps` plus the configured tournament fee bps
+    /// must equal exactly 10,000. Each share and the fee are rounded down; the
+    /// rounding remainder is added to the first recipient (1st place), so exactly
+    /// `total_pool` tokens leave the contract and none are orphaned. All transfers
+    /// run in one transaction: if any transfer fails, every transfer is reverted.
+    /// The pool is paid out of the contract's locked (escrowed) balance for `token`.
+    /// A `tournament_id` can be paid out only once.
+    ///
+    /// # Arguments
+    /// * `coordinator` - Coordinator address authorizing the payout.
+    /// * `tournament_id` - Numeric tournament identifier (replay protection key).
+    /// * `token` - Token the pool is denominated in.
+    /// * `total_pool` - Total pool to distribute (prizes plus protocol fee).
+    /// * `recipients` - Ranked recipients; index 0 is 1st place.
+    pub fn resolve_tournament_payout(
+        env: Env,
+        coordinator: Address,
+        tournament_id: u64,
+        token: Address,
+        total_pool: i128,
+        recipients: Vec<PayoutRecipient>,
+    ) {
+        let _guard = ReentrancyGuard::new(&env);
+        coordinator.require_auth();
+        if coordinator != Self::get_coordinator(env.clone()) {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+        if Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::ContractPaused);
+        }
+        if total_pool <= 0 {
+            panic_with_error!(&env, EscrowError::InvalidWager);
+        }
+        if recipients.is_empty() || recipients.len() > MAX_PAYOUT_RECIPIENTS {
+            panic_with_error!(&env, EscrowErrorExt::InvalidPayoutDistribution);
+        }
+
+        let done_key = (Symbol::new(&env, "tpo_done"), tournament_id);
+        if env.storage().persistent().has(&done_key) {
+            panic_with_error!(&env, EscrowErrorExt::TournamentPayoutAlreadyResolved);
+        }
+
+        let mut total_bps: u32 = 0;
+        for i in 0..recipients.len() {
+            let r = recipients.get(i).unwrap();
+            if r.bps == 0 {
+                panic_with_error!(&env, EscrowErrorExt::InvalidPayoutDistribution);
+            }
+            for j in (i + 1)..recipients.len() {
+                if r.recipient == recipients.get(j).unwrap().recipient {
+                    panic_with_error!(&env, EscrowErrorExt::InvalidPayoutDistribution);
+                }
+            }
+            total_bps = total_bps
+                .checked_add(r.bps)
+                .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
+        }
+
+        let fee_bps = Self::get_tournament_fee_bps(env.clone());
+        let combined = total_bps
+            .checked_add(fee_bps)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
+        if combined != 10_000 {
+            panic_with_error!(&env, EscrowErrorExt::InvalidPayoutDistribution);
+        }
+
+        // Payout must be backed by escrowed funds so unrelated balances are untouched.
+        if Self::get_locked(&env, &token) < total_pool {
+            panic_with_error!(&env, EscrowError::InsufficientFunds);
+        }
+
+        let (fee, _) = mul_div_bps(&env, total_pool, fee_bps);
+        let mut amounts: Vec<i128> = Vec::new(&env);
+        let mut distributed: i128 = 0;
+        for r in recipients.iter() {
+            let (share, _) = mul_div_bps(&env, total_pool, r.bps);
+            distributed = distributed
+                .checked_add(share)
+                .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
+            amounts.push_back(share);
+        }
+
+        // Rounding remainder goes to 1st place so the pool is conserved exactly.
+        let remainder = total_pool
+            .checked_sub(distributed)
+            .and_then(|v| v.checked_sub(fee))
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
+        if remainder < 0 {
+            panic_with_error!(&env, EscrowError::InvariantViolated);
+        }
+        let first = amounts
+            .get(0)
+            .unwrap()
+            .checked_add(remainder)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
+        amounts.set(0, first);
+
+        env.storage().persistent().set(&done_key, &true);
+        Self::bump_entry_ttl(&env, &done_key);
+
+        let token_client = token::Client::new(&env, &token);
+        let contract = env.current_contract_address();
+        for i in 0..recipients.len() {
+            let amount = amounts.get(i).unwrap();
+            if amount > 0 {
+                token_client.transfer(&contract, &recipients.get(i).unwrap().recipient, &amount);
+            }
+        }
+        if fee > 0 {
+            let fee_recipient =
+                Self::get_treasury_vault(env.clone()).unwrap_or_else(|| coordinator.clone());
+            token_client.transfer(&contract, &fee_recipient, &fee);
+        }
+
+        Self::sub_locked(&env, &token, total_pool);
+        Self::assert_balance_invariant(&env, &token);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "v1"),
+                symbol_short!("tpo_done"),
+                tournament_id,
+            ),
+            (token, total_pool, fee),
+        );
+    }
+
     /// Cancels tournament and opens the refund window.
     ///
     /// Can be invoked by coordinator at any time prior to completion, or by any participant
@@ -6490,3 +6781,5 @@ impl ChessterEscrow {
 #[cfg(test)]
 mod error_tests;
 mod test;
+#[cfg(test)]
+mod tournament_payout_tests;
