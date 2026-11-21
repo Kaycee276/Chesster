@@ -1,4 +1,4 @@
-const express = require('express');
+const express = require("express");
 const client = require("prom-client");
 
 const router = express.Router();
@@ -38,7 +38,35 @@ const escrowSettlements = new client.Counter({
   registers: [register],
 });
 
+// Issue #659: Custom Prometheus metric collectors
+const matchmakingWaitHistogram = new client.Histogram({
+  name: "chesster_matchmaking_wait_seconds",
+  help: "Duration in seconds players spend waiting in the matchmaking queue",
+  buckets: [2, 5, 10, 20, 30, 60, 120],
+  registers: [register],
+});
+
+const activeGamesGauge = new client.Gauge({
+  name: "chesster_active_games_total",
+  help: "Number of active chess matches currently ongoing",
+  labelNames: ["variant"],
+  registers: [register],
+});
+
+const connectedSpectatorsGauge = new client.Gauge({
+  name: "chesster_connected_spectators_total",
+  help: "Number of connected spectators",
+  registers: [register],
+});
+
+// Initialize default variant counters and spectators
+["standard", "blitz", "bullet"].forEach((variant) => {
+  activeGamesGauge.set({ variant }, 0);
+});
+connectedSpectatorsGauge.set(0);
+
 const activeGameCodes = new Set();
+const activeGameVariants = new Map();
 
 function setConnectedClients(value) {
   const count = Math.max(0, Number(value) || 0);
@@ -46,22 +74,85 @@ function setConnectedClients(value) {
   activeSocketConnections.set(count);
 }
 
-function markGameConnected(gameCode) {
-  if (gameCode) activeGameCodes.add(String(gameCode));
+function _refreshActiveGamesByVariant() {
+  const counts = { standard: 0, blitz: 0, bullet: 0 };
+  for (const variant of activeGameVariants.values()) {
+    counts[variant] = (counts[variant] || 0) + 1;
+  }
+  for (const [variant, count] of Object.entries(counts)) {
+    activeGamesGauge.set({ variant }, count);
+  }
+}
+
+function markGameConnected(gameCode, variant = "standard") {
+  if (gameCode) {
+    const code = String(gameCode);
+    const v = String(variant || "standard").toLowerCase();
+    activeGameCodes.add(code);
+    activeGameVariants.set(code, v);
+  }
   activeGames.set(activeGameCodes.size);
+  _refreshActiveGamesByVariant();
 }
 
 function markGameDisconnected(gameCode) {
-  if (gameCode) activeGameCodes.delete(String(gameCode));
+  if (gameCode) {
+    const code = String(gameCode);
+    activeGameCodes.delete(code);
+    activeGameVariants.delete(code);
+  }
   activeGames.set(activeGameCodes.size);
+  _refreshActiveGamesByVariant();
 }
 
 function observeMoveLatency(startTime) {
-  if (typeof startTime === "number") moveLatency.observe(Math.max(0, (Date.now() - startTime) / 1000));
+  if (typeof startTime === "number")
+    moveLatency.observe(Math.max(0, (Date.now() - startTime) / 1000));
 }
 
 function recordEscrowSettlement(status) {
   if (["success", "failure"].includes(status)) escrowSettlements.inc({ status });
+}
+
+function observeMatchmakingWait(durationInSeconds) {
+  if (typeof durationInSeconds === "number" && !isNaN(durationInSeconds)) {
+    matchmakingWaitHistogram.observe(Math.max(0, durationInSeconds));
+  }
+}
+
+function setActiveGames(variant, count) {
+  const v = String(variant || "standard").toLowerCase();
+  activeGamesGauge.set({ variant: v }, Math.max(0, Number(count) || 0));
+}
+
+function updateActiveGames(variant, count) {
+  setActiveGames(variant, count);
+}
+
+function incrementActiveGames(variant) {
+  const v = String(variant || "standard").toLowerCase();
+  activeGamesGauge.inc({ variant: v });
+}
+
+function decrementActiveGames(variant) {
+  const v = String(variant || "standard").toLowerCase();
+  activeGamesGauge.dec({ variant: v });
+}
+
+let spectatorCount = 0;
+function setConnectedSpectators(value) {
+  spectatorCount = Math.max(0, Number(value) || 0);
+  connectedSpectatorsGauge.set(spectatorCount);
+}
+
+function markSpectatorConnected() {
+  spectatorCount++;
+  connectedSpectatorsGauge.set(spectatorCount);
+}
+
+function markSpectatorDisconnected() {
+  spectatorCount = Math.max(0, spectatorCount - 1);
+  connectedSpectatorsGauge.set(spectatorCount);
 }
 
 router.get("/metrics", async (req, res) => {
@@ -80,5 +171,18 @@ router.markGameConnected = markGameConnected;
 router.markGameDisconnected = markGameDisconnected;
 router.observeMoveLatency = observeMoveLatency;
 router.recordEscrowSettlement = recordEscrowSettlement;
+
+// Issue #659 exports
+router.matchmakingWaitHistogram = matchmakingWaitHistogram;
+router.activeGamesGauge = activeGamesGauge;
+router.connectedSpectatorsGauge = connectedSpectatorsGauge;
+router.observeMatchmakingWait = observeMatchmakingWait;
+router.setActiveGames = setActiveGames;
+router.updateActiveGames = updateActiveGames;
+router.incrementActiveGames = incrementActiveGames;
+router.decrementActiveGames = decrementActiveGames;
+router.setConnectedSpectators = setConnectedSpectators;
+router.markSpectatorConnected = markSpectatorConnected;
+router.markSpectatorDisconnected = markSpectatorDisconnected;
 
 module.exports = router;

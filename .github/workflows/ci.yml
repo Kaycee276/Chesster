@@ -2,9 +2,9 @@ name: Continuous Integration & Code Coverage
 
 on:
   push:
-    branches: [ "master", "main", "dev" ]
+    branches: ["master", "main", "dev"]
   pull_request:
-    branches: [ "master", "main", "dev" ]
+    branches: ["master", "main", "dev"]
 
 jobs:
   changes:
@@ -60,9 +60,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: 'backend/.nvmrc'
-          cache: 'pnpm'
-          cache-dependency-path: 'backend/pnpm-lock.yaml'
+          node-version-file: "backend/.nvmrc"
+          cache: "pnpm"
+          cache-dependency-path: "backend/pnpm-lock.yaml"
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
@@ -70,9 +70,9 @@ jobs:
       - name: Run Backend Tests with Coverage
         run: pnpm run test:coverage
         env:
-          DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/postgres'
-          SOROBAN_RPC_URL: 'https://soroban-testnet.stellar.org'
-          NODE_OPTIONS: '--experimental-vm-modules'
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
+          SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org"
+          NODE_OPTIONS: "--experimental-vm-modules"
 
       - name: Upload Backend Coverage to Codecov
         uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4.6.0
@@ -101,9 +101,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: 'frontend/.nvmrc'
-          cache: 'pnpm'
-          cache-dependency-path: 'frontend/pnpm-lock.yaml'
+          node-version-file: "frontend/.nvmrc"
+          cache: "pnpm"
+          cache-dependency-path: "frontend/pnpm-lock.yaml"
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
@@ -120,6 +120,9 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Verify Bundle Size Budgets
+        run: pnpm run size-check
+
       - name: Run Lighthouse CI
         run: pnpm run lhci
 
@@ -130,9 +133,6 @@ jobs:
           name: lighthouse-reports
           path: frontend/.lighthouseci
           if-no-files-found: warn
-
-      - name: Check Frontend Bundle Size
-        run: pnpm run size-check
 
       - name: Generate Frontend Bundle Stats
         run: pnpm run build:analyze
@@ -222,7 +222,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
@@ -245,23 +245,23 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: chesster-backend:test
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
 
       - name: Upload Trivy Scan Results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: 'trivy-results.sarif'
+          sarif_file: "trivy-results.sarif"
 
       - name: Run Trivy Scan (Table Output for PR Comment)
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: chesster-backend:test
-          format: 'table'
-          severity: 'CRITICAL'
-          exit-code: '0'
+          format: "table"
+          severity: "CRITICAL"
+          exit-code: "0"
 
   dependency-security-audit:
     name: Dependency Security Audit
@@ -278,7 +278,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version-file: '.nvmrc'
+          node-version-file: ".nvmrc"
+          cache: "pnpm"
+          cache-dependency-path: "**/pnpm-lock.yaml"
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
 
       # pnpm audit reads the lockfile, so no install is needed. Only production
       # dependencies are audited. High and critical advisories fail the job unless
