@@ -13,9 +13,11 @@ export interface AnalysisControlBarProps {
   multiPv: number;
   isPaused: boolean;
   variations?: AnalysisVariation[];
+  lockWhiteBottom?: boolean;
   onDepthChange: (depth: number) => void;
   onMultiPvChange: (lines: number) => void;
   onTogglePause: () => void;
+  onToggleLockWhiteBottom?: () => void;
 }
 
 export type { AnalysisPreferences } from "../utils/analysisPreferences";
@@ -27,9 +29,11 @@ export default function AnalysisControlBar({
   multiPv,
   isPaused,
   variations = [],
+  lockWhiteBottom = false,
   onDepthChange,
   onMultiPvChange,
   onTogglePause,
+  onToggleLockWhiteBottom,
 }: AnalysisControlBarProps) {
   const depthPercentage = Math.min(100, Math.max(0, Math.round((currentDepth / targetDepth) * 100)));
   const formattedNps = nps >= 1_000_000
@@ -63,6 +67,26 @@ export default function AnalysisControlBar({
             <Cpu size={12} className="text-(--accent-primary)" />
             Stockfish
           </span>
+
+          {onToggleLockWhiteBottom && (
+            <button
+              type="button"
+              onClick={onToggleLockWhiteBottom}
+              title={
+                lockWhiteBottom
+                  ? "Lock White Bottom: Active (Evaluation bar stays White at bottom)"
+                  : "Lock White Bottom: Inactive (Evaluation bar flips with board)"
+              }
+              aria-label="Toggle lock white bottom"
+              className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border transition-all ${
+                lockWhiteBottom
+                  ? "bg-(--accent-primary)/15 border-(--accent-primary) text-(--text) font-bold"
+                  : "bg-(--bg) border-(--border) text-(--text-tertiary) hover:text-(--text)"
+              }`}
+            >
+              <span>{lockWhiteBottom ? "White Bottom: Locked" : "Flip Bar: Auto"}</span>
+            </button>
+          )}
         </div>
 
         {/* Depth & NPS Gauges */}

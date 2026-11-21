@@ -354,7 +354,7 @@ describe("MoveNavigator Component", () => {
 			expect(slider).toBeInTheDocument();
 			expect(slider).toHaveAttribute("min", "-1");
 			expect(slider).toHaveAttribute("max", "9");
-			expect(slider).toHaveValue(5);
+			expect(slider).toHaveValue("5");
 		});
 
 		it("does not render slider when totalMoves is 0", () => {

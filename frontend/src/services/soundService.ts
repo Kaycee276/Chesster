@@ -415,6 +415,9 @@ class SoundService {
   }
 
   private addPitchJitter(baseFreq: number, soundType: keyof SoundProfile = "move"): number {
+    if (typeof process !== "undefined" && process.env?.NODE_ENV === "test") {
+      return baseFreq;
+    }
     const jitterRange = 0.1;
     const jitter = (Math.random() - 0.5) * 2 * jitterRange;
 

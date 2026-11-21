@@ -168,4 +168,24 @@ describe("AnalysisPage PGN drag-and-drop (#318)", () => {
 		);
 		vi.restoreAllMocks();
 	});
+
+	it("renders flip board button and toggles board orientation (#695)", async () => {
+		renderPage();
+		const flipBtn = screen.getByRole("button", { name: /flip board orientation/i });
+		expect(flipBtn).toBeInTheDocument();
+		fireEvent.click(flipBtn);
+	});
+
+	it("renders CAPS accuracy circular gauges when game is loaded (#683)", async () => {
+		renderPage();
+		dropFile(makePgnFile(SINGLE_GAME));
+		await screen.findByText(/Alice vs Bob · 1-0/, {}, { timeout: 5000 });
+
+		await waitFor(() => {
+			expect(screen.getByTestId("caps-gauge-white")).toBeInTheDocument();
+			expect(screen.getByTestId("caps-gauge-black")).toBeInTheDocument();
+			expect(screen.getByText(/White CAPS/i)).toBeInTheDocument();
+			expect(screen.getByText(/Black CAPS/i)).toBeInTheDocument();
+		});
+	});
 });

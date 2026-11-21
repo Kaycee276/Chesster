@@ -10,6 +10,7 @@ import { useGraceCountdown } from "../hooks/useGraceCountdown";
 import { socketService, type OpponentStatusEvent } from "../api/socket";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "../components/WalletDropdown";
+import MobileDrawer from "../components/MobileDrawer";
 
 interface GameInfo {
   wager_amount?: number | null;
@@ -202,13 +203,17 @@ export default function GamePage() {
     }
   };
 
-  // Already a player → show board
+  // Already a player → show board & responsive layout
   if (storedGameCode === gameCode && playerColor) {
     return (
-      <div className="h-dvh max-h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg)">
+      <div className="h-dvh max-h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg) relative">
         {/* Opponent disconnect/reconnect banner above the board (#317). */}
         <OpponentDisconnectBanner />
-        <ChessBoard />
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          <ChessBoard />
+        </div>
+        {/* Responsive mobile bottom drawer layout (#684) */}
+        <MobileDrawer />
       </div>
     );
   }
