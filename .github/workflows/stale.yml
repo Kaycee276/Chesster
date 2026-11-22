@@ -5,13 +5,14 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch:
 
-permissions:
-  issues: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   stale:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
     steps:
       - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
@@ -19,8 +20,9 @@ jobs:
           days-before-close: 7
           stale-issue-label: "stale"
           stale-pr-label: "stale"
-          exempt-issue-labels: "pinned,security,in-progress"
-          exempt-pr-labels: "pinned,security,in-progress"
+          remove-stale-when-updated: true
+          exempt-issue-labels: "pinned,security,roadmap,in-progress"
+          exempt-pr-labels: "pinned,security,roadmap,in-progress,work-in-progress"
           stale-issue-message: >
             This issue has been automatically marked as stale because it has not had
             recent activity. It will be closed in 7 days if no further activity occurs.
@@ -29,7 +31,8 @@ jobs:
           stale-pr-message: >
             This pull request has been automatically marked as stale because it has not had
             recent activity. It will be closed in 7 days if no further activity occurs.
-            If this PR is still relevant, please leave a comment to keep it open.
+            If this PR is still relevant, please push an update or leave a comment to keep it open.
+            New activity removes the stale label and resets the inactivity timer.
             Thank you for your contributions!
           close-issue-message: >
             This issue has been automatically closed due to inactivity. If you believe

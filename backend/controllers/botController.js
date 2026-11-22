@@ -2,7 +2,7 @@ const botService = require("../services/botService");
 const gameModel = require("../models/gameModel");
 
 // Worker-pool failures are capacity problems, not bad input (Issue #241).
-const BOT_ERROR_STATUS = { BOT_TIMEOUT: 504, BOT_QUEUE_FULL: 503, BOT_POOL_CLOSED: 503 };
+const BOT_ERROR_STATUS = { BOT_TIMEOUT: 504, BOT_QUEUE_FULL: 503, BOT_POOL_CLOSED: 503, BOT_INVALID_INPUT: 400 };
 
 function statusForError(error, fallbackStatus) {
 	return BOT_ERROR_STATUS[error && error.code] || fallbackStatus;
@@ -19,22 +19,28 @@ const INVALID_LEVEL = "level must be an integer from 1 to 8";
 class BotController {
 	/**
 	 * POST /api/bot/move
-	 * Stateless mode: body = { board, turn, lastMove?, level? (1-8), difficulty?, moveCount? }
+	 * Stateless mode: body = { board, turn, lastMove?, level? (1-8), difficulty?, moveCount?, depth?, timeLimitMs? }
+	 * Alternatively supply { fen, level?, difficulty?, depth?, timeLimitMs? }.
 	 * Returns the engine's chosen move without touching the database — lets
 	 * a single-player client keep the board on its own side if it wants to.
 	 */
 	async getMove(req, res) {
 		try {
-			const { board, turn, lastMove, moveCount } = req.body;
-			if (!board || !turn) {
+			const body = req.body || {};
+			const { board, turn, lastMove, moveCount, fen, depth, timeLimitMs } = body;
+			if (fen === undefined && (!board || !turn)) {
 				return res.status(400).json({ success: false, error: "board and turn are required" });
 			}
-			const difficulty = difficultyFrom(req.body);
+			const difficulty = difficultyFrom(body);
 			if (difficulty === null) {
 				return res.status(400).json({ success: false, error: INVALID_LEVEL });
 			}
 
-			const move = await botService.getBestMove(board, turn, lastMove || null, difficulty, moveCount || 0);
+			const args = [board, turn, lastMove === undefined ? null : lastMove, difficulty, moveCount === undefined ? 0 : moveCount];
+			const searchOptions = { depth, timeLimitMs };
+			const move = fen === undefined
+				? await botService.getBestMove(...(depth === undefined && timeLimitMs === undefined ? args : [...args, searchOptions]))
+				: await botService.getBestMoveFromFen(fen, difficulty, searchOptions);
 			if (!move) {
 				return res.status(200).json({ success: true, data: null, message: "No legal moves (checkmate/stalemate)" });
 			}
