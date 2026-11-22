@@ -3814,6 +3814,90 @@ fn test_timelocked_unpause_workflow() {
 }
 
 #[test]
+fn test_cooldown_unpause_confirms_only_after_cooldown() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.set_pause_guardian(&guardian);
+    client.guardian_pause(&guardian);
+    assert!(client.is_paused());
+
+    env.ledger().set_timestamp(1_000);
+    client.request_cooldown_unpause(&coordinator);
+    assert_eq!(client.get_cooldown_unpause_unlock_time(), Some(1_000 + UNPAUSE_COOLDOWN_SECONDS));
+
+    // One second before the cooldown ends, confirmation is rejected and the contract stays paused.
+    env.ledger()
+        .set_timestamp(1_000 + UNPAUSE_COOLDOWN_SECONDS - 1);
+    assert!(client.try_confirm_cooldown_unpause(&coordinator).is_err());
+    assert!(client.is_paused());
+
+    // Exactly at the unlock time, confirmation restores normal operation.
+    env.ledger().set_timestamp(1_000 + UNPAUSE_COOLDOWN_SECONDS);
+    client.confirm_cooldown_unpause(&coordinator);
+    assert!(!client.is_paused());
+    assert_eq!(client.get_cooldown_unpause_unlock_time(), None);
+}
+
+#[test]
+fn test_cooldown_unpause_can_be_aborted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.set_pause_guardian(&guardian);
+    client.guardian_pause(&guardian);
+
+    env.ledger().set_timestamp(1_000);
+    client.request_cooldown_unpause(&coordinator);
+    client.abort_cooldown_unpause(&coordinator);
+    assert_eq!(client.get_cooldown_unpause_unlock_time(), None);
+
+    // With the request aborted, confirming even after the cooldown has no effect.
+    env.ledger()
+        .set_timestamp(1_000 + UNPAUSE_COOLDOWN_SECONDS + 1);
+    assert!(client.try_confirm_cooldown_unpause(&coordinator).is_err());
+    assert!(client.is_paused());
+
+    // Aborting again with nothing pending is rejected.
+    assert!(client.try_abort_cooldown_unpause(&coordinator).is_err());
+}
+
+#[test]
+fn test_cooldown_unpause_rejects_non_admin_and_unpaused_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    // A request on a contract that is not paused is rejected.
+    assert!(client.try_request_cooldown_unpause(&coordinator).is_err());
+
+    client.pause();
+    assert!(client.is_paused());
+
+    // Only the coordinator/admin may request, confirm, or abort.
+    assert!(client.try_request_cooldown_unpause(&attacker).is_err());
+    client.request_cooldown_unpause(&coordinator);
+    assert!(client.try_confirm_cooldown_unpause(&attacker).is_err());
+    assert!(client.try_abort_cooldown_unpause(&attacker).is_err());
+    assert!(client.is_paused());
+}
+
+#[test]
 fn test_set_fee_bps_rejects_values_above_100_percent() {
     let env = Env::default();
     env.mock_all_auths();

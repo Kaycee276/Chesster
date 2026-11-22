@@ -41,6 +41,8 @@ pub const EMERGENCY_DRAIN_TIMELOCK_SECS: u64 = 604_800;
 pub const EMERGENCY_TIMEOUT_SECONDS: u64 = 259_200;
 /// Timelock delay in ledgers for unpause proposal execution (6 hours ~ 43,200 ledgers) (Issue #550).
 pub const UNPAUSE_DELAY_LEDGERS: u32 = 43_200;
+/// Cooldown in seconds between a timed unpause request and when it may be confirmed (6 hours) (Issue #699).
+pub const UNPAUSE_COOLDOWN_SECONDS: u64 = 21_600;
 pub const DEFAULT_MIN_WAGER: i128 = 1;
 /// Default maximum allowable wager amount (maximum positive i128).
 pub const DEFAULT_MAX_WAGER: i128 = i128::MAX;
@@ -204,6 +206,10 @@ pub enum EscrowErrorExt {
     InvalidPayoutDistribution = 65,
     /// A payout for this tournament id has already been executed.
     TournamentPayoutAlreadyResolved = 66,
+    /// A cooldown unpause cannot be confirmed before its cooldown has elapsed (Issue #699).
+    CooldownActive = 67,
+    /// No cooldown unpause request is pending for this contract (Issue #699).
+    NoPendingUnpause = 68,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -1170,6 +1176,8 @@ pub enum DataKey {
     PausedUntilLedger,
     /// Ledger sequence when admin requested unpause (Issue #550).
     UnpauseRequestedLedger,
+    /// Ledger timestamp after which a cooldown unpause may be confirmed (Issue #699).
+    UnpauseUnlockTime,
     /// Contract pause state boolean key (Issue #550).
     IsPaused,
     /// Protocol fee discount tier of an organizer (Issue #578).
@@ -1378,6 +1386,76 @@ impl ChessterEscrow {
             (Symbol::new(&env, "v1"), symbol_short!("unpause")),
             ContractUnpausedEvent { coordinator },
         );
+    }
+
+    /// Requests a cooldown unpause (coordinator/admin only) (Issue #699).
+    ///
+    /// The contract must be paused. The unlock time is `now + UNPAUSE_COOLDOWN_SECONDS`;
+    /// a repeated request restarts the cooldown. Cancel with `abort_cooldown_unpause`.
+    pub fn request_cooldown_unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        Self::require_coordinator_admin(&env, &admin);
+        if !Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::NotPaused);
+        }
+        let unlock_time = env
+            .ledger()
+            .timestamp()
+            .checked_add(UNPAUSE_COOLDOWN_SECONDS)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
+        env.storage()
+            .instance()
+            .set(&DataKey::UnpauseUnlockTime, &unlock_time);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Confirms a pending cooldown unpause once its cooldown has elapsed (coordinator/admin only) (Issue #699).
+    pub fn confirm_cooldown_unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        Self::require_coordinator_admin(&env, &admin);
+        let unlock_time: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::UnpauseUnlockTime)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::NoPendingUnpause));
+        if env.ledger().timestamp() < unlock_time {
+            panic_with_error!(&env, EscrowErrorExt::CooldownActive);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &false);
+        env.storage().instance().set(&DataKey::IsPaused, &false);
+        env.storage().instance().remove(&DataKey::UnpauseUnlockTime);
+        Self::bump_instance_ttl(&env);
+
+        let coordinator = Self::get_coordinator(env.clone());
+        env.events().publish(
+            (Symbol::new(&env, "v1"), symbol_short!("unpause")),
+            ContractUnpausedEvent { coordinator },
+        );
+    }
+
+    /// Aborts a pending cooldown unpause, leaving the contract paused (coordinator/admin only) (Issue #699).
+    pub fn abort_cooldown_unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        Self::require_coordinator_admin(&env, &admin);
+        if !env.storage().instance().has(&DataKey::UnpauseUnlockTime) {
+            panic_with_error!(&env, EscrowErrorExt::NoPendingUnpause);
+        }
+        env.storage().instance().remove(&DataKey::UnpauseUnlockTime);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Returns the unlock timestamp of a pending cooldown unpause, if any (Issue #699).
+    pub fn get_cooldown_unpause_unlock_time(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DataKey::UnpauseUnlockTime)
+    }
+
+    fn require_coordinator_admin(env: &Env, admin: &Address) {
+        if *admin != Self::get_coordinator(env.clone()) {
+            panic_with_error!(env, EscrowError::Unauthorized);
+        }
     }
 
     /// Returns whether the contract is currently paused.

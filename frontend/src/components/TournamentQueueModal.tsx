@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { MatchReadyEvent } from "../api/socket";
 import { soundService } from "../services/soundService";
+import { startCountdownTicker } from "../services/countdownTicker";
 import { TournamentBracketTree, type TreeMatch, type TreeRound } from "./TournamentBracketTree";
+
+const COUNTDOWN_SECONDS = 60;
 
 export interface TournamentQueueModalProps {
 	matchData?: MatchReadyEvent | null;
@@ -24,7 +27,13 @@ export const TournamentQueueModal: React.FC<TournamentQueueModalProps> = ({
 	onClose,
 }) => {
 	const { t } = useTranslation();
-	const [secondsLeft, setSecondsLeft] = useState(60);
+	const [secondsLeft, setSecondsLeft] = useState(COUNTDOWN_SECONDS);
+	const onEnterMatchRef = useRef(onEnterMatch);
+	const hasEnterHandler = Boolean(onEnterMatch);
+
+	useEffect(() => {
+		onEnterMatchRef.current = onEnterMatch;
+	}, [onEnterMatch]);
 
 	useEffect(() => {
 		if (matchData) {
@@ -32,19 +41,27 @@ export const TournamentQueueModal: React.FC<TournamentQueueModalProps> = ({
 		}
 	}, [matchData]);
 
+	// Each match starts a fresh countdown. Ticks come from a dedicated worker so the
+	// countdown stays accurate while the browser throttles timers in background tabs.
 	useEffect(() => {
-		if (!matchData || !onEnterMatch) return;
-		if (secondsLeft <= 0) {
-			onEnterMatch(matchData.gameCode);
-			return;
-		}
+		if (!matchData || !hasEnterHandler) return;
 
-		const timer = setInterval(() => {
-			setSecondsLeft((prev) => prev - 1);
-		}, 1000);
+		const gameCode = matchData.gameCode;
+		let remaining = COUNTDOWN_SECONDS;
+		setSecondsLeft(remaining);
 
-		return () => clearInterval(timer);
-	}, [secondsLeft, matchData, onEnterMatch]);
+		const stop = startCountdownTicker(() => {
+			remaining -= 1;
+			setSecondsLeft(Math.max(remaining, 0));
+			if (remaining <= 0) {
+				stop();
+				onEnterMatchRef.current?.(gameCode);
+			}
+		});
+
+		// Cleanup stops the worker when the match changes or the modal unmounts.
+		return stop;
+	}, [matchData, hasEnterHandler]);
 
 	if (status === "in_progress") {
 		return (
