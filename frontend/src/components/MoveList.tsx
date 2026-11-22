@@ -1,6 +1,26 @@
-import React from "react";
+import React, { useState } from "react";
 import { MOVE_QUALITY_META, type MoveClassification } from "../utils/moveAccuracy";
 import type { ReplayedMove } from "../utils/pgnParser";
+import { formatMove } from "../utils/figurineNotation";
+
+const FIGURINE_STORAGE_KEY = "chesster:figurineNotation";
+
+/** Reads the saved figurine preference. Storage can be blocked, so any failure means "off". */
+function readFigurinePreference(): boolean {
+  try {
+    return localStorage.getItem(FIGURINE_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeFigurinePreference(value: boolean): void {
+  try {
+    localStorage.setItem(FIGURINE_STORAGE_KEY, String(value));
+  } catch {
+    // Storage unavailable: the choice still applies for this session.
+  }
+}
 
 export interface MoveListProps {
   moves: ReplayedMove[];
@@ -15,6 +35,17 @@ export const MoveList: React.FC<MoveListProps> = ({
   classifications,
   onSelectMove,
 }) => {
+  const [figurine, setFigurine] = useState<boolean>(readFigurinePreference);
+
+  const toggleFigurine = () => {
+    const next = !figurine;
+    setFigurine(next);
+    writeFigurinePreference(next);
+  };
+
+  const displaySan = (move: ReplayedMove) =>
+    formatMove(move.san, move.color === "white" ? "w" : "b", figurine);
+
   const rows: {
     num: number;
     white?: ReplayedMove;
@@ -51,6 +82,19 @@ export const MoveList: React.FC<MoveListProps> = ({
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto rounded-xl bg-(--bg-secondary) border border-(--border)">
+      {moves.length > 0 && (
+        <div className="flex justify-end px-2 pt-1">
+          <button
+            type="button"
+            onClick={toggleFigurine}
+            aria-pressed={figurine}
+            title="Show piece symbols (♘f3) instead of letters (Nf3)"
+            className="text-[10px] px-1.5 py-0.5 rounded border border-(--border) text-(--text-tertiary) hover:text-(--text-primary)"
+          >
+            Figurine {figurine ? "on" : "off"}
+          </button>
+        </div>
+      )}
       {moves.length === 0 ? (
         <p className="text-xs text-(--text-tertiary) text-center p-4">No moves played yet.</p>
       ) : (
@@ -65,7 +109,7 @@ export const MoveList: React.FC<MoveListProps> = ({
                     currentIndex === r.whiteIndex ? "bg-(--accent-dark)/40 font-bold" : ""
                   }`}
                 >
-                  {r.white?.san}
+                  {r.white && displaySan(r.white)}
                   {renderBadge(r.whiteIndex)}
                 </td>
                 <td
@@ -74,7 +118,7 @@ export const MoveList: React.FC<MoveListProps> = ({
                     currentIndex === r.blackIndex ? "bg-(--accent-dark)/40 font-bold" : ""
                   }`}
                 >
-                  {r.black?.san}
+                  {r.black && displaySan(r.black)}
                   {r.black && renderBadge(r.blackIndex)}
                 </td>
               </tr>
