@@ -1,5 +1,16 @@
-import { useEffect } from "react";
-import { ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Play, Pause } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+	ChevronsLeft,
+	ChevronLeft,
+	ChevronRight,
+	ChevronsRight,
+	Play,
+	Pause,
+	Copy,
+	FileText,
+	Check,
+} from "lucide-react";
+import { useToastStore } from "../store/toastStore";
 
 interface MoveNavigatorProps {
 	/** -1 = starting position, otherwise the index of the last played move. */
@@ -8,6 +19,47 @@ interface MoveNavigatorProps {
 	isPlaying: boolean;
 	onMoveChange: (index: number) => void;
 	onTogglePlay: () => void;
+	/** FEN string of the currently viewed board ply. */
+	currentFen?: string | null;
+	/** Full PGN text of the current game. */
+	pgn?: string | null;
+}
+
+/**
+ * Copies text to the system clipboard using the Async Clipboard API with a
+ * textarea + execCommand('copy') fallback for non-secure contexts.
+ */
+async function copyTextToClipboard(text: string): Promise<boolean> {
+	if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+		try {
+			await navigator.clipboard.writeText(text);
+			return true;
+		} catch {
+			// Fall through to legacy execCommand fallback
+		}
+	}
+
+	if (typeof document === "undefined" || typeof document.execCommand !== "function") {
+		return false;
+	}
+
+	const textarea = document.createElement("textarea");
+	textarea.value = text;
+	textarea.setAttribute("readonly", "");
+	textarea.style.position = "fixed";
+	textarea.style.top = "-9999px";
+	textarea.style.left = "-9999px";
+	document.body.appendChild(textarea);
+
+	try {
+		textarea.focus();
+		textarea.select();
+		return document.execCommand("copy");
+	} catch {
+		return false;
+	} finally {
+		document.body.removeChild(textarea);
+	}
 }
 
 /**
@@ -22,9 +74,28 @@ export default function MoveNavigator({
 	isPlaying,
 	onMoveChange,
 	onTogglePlay,
+	currentFen,
+	pgn,
 }: MoveNavigatorProps) {
 	const atStart = currentMoveIndex <= -1;
 	const atEnd = currentMoveIndex >= totalMoves - 1;
+	const addToast = useToastStore((s) => s.addToast);
+	const [copiedKind, setCopiedKind] = useState<"fen" | "pgn" | null>(null);
+
+	const handleCopy = async (kind: "fen" | "pgn", value: string | null | undefined) => {
+		if (!value) return;
+		const label = kind === "fen" ? "FEN" : "PGN";
+		const ok = await copyTextToClipboard(value);
+		if (ok) {
+			addToast(`${label} copied to clipboard!`, "success");
+			setCopiedKind(kind);
+			setTimeout(() => {
+				setCopiedKind((prev) => (prev === kind ? null : prev));
+			}, 1500);
+		} else {
+			addToast(`Failed to copy ${label} to clipboard`, "error");
+		}
+	};
 
 	// Auto-advance one ply at a time while playing; pausing again once the
 	// mainline runs out, via the same callback the pause button uses.
@@ -156,6 +227,39 @@ export default function MoveNavigator({
 					</span>
 				</div>
 			)}
+
+			<div className="flex items-center justify-center gap-2">
+				<button
+					type="button"
+					onClick={() => void handleCopy("fen", currentFen)}
+					disabled={!currentFen}
+					title="Copy FEN to clipboard"
+					aria-label="Copy FEN to clipboard"
+					className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+				>
+					{copiedKind === "fen" ? (
+						<Check size={14} aria-hidden="true" />
+					) : (
+						<Copy size={14} aria-hidden="true" />
+					)}
+					<span>FEN</span>
+				</button>
+				<button
+					type="button"
+					onClick={() => void handleCopy("pgn", pgn)}
+					disabled={!pgn}
+					title="Copy PGN to clipboard"
+					aria-label="Copy PGN to clipboard"
+					className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-(--bg-secondary) border border-(--border) hover:border-(--accent-primary)/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+				>
+					{copiedKind === "pgn" ? (
+						<Check size={14} aria-hidden="true" />
+					) : (
+						<FileText size={14} aria-hidden="true" />
+					)}
+					<span>PGN</span>
+				</button>
+			</div>
 		</div>
 	);
 }
