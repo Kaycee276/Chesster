@@ -773,3 +773,133 @@ describe("auditService retained move archives", () => {
     await expect(auditService.verifyMatchAuditIntegrity(GAME_ID)).rejects.toThrow(/move archive/i);
   });
 });
+
+describe("Tournament Cryptographically Signed Audit Trail (Issue #749)", () => {
+  const { Keypair } = require("@stellar/stellar-sdk");
+  const express = require("express");
+  const request = require("supertest");
+  const tournamentRoutes = require("../routes/tournamentRoutes");
+
+  let keypair;
+  let testMoves;
+
+  beforeEach(() => {
+    keypair = Keypair.random();
+    testMoves = [
+      {
+        idx: 0,
+        ply: 1,
+        uci: "e2e4",
+        timestamp: "2026-11-22T10:00:00.000Z",
+        whiteClock: 300,
+        blackClock: 300,
+      },
+      {
+        idx: 1,
+        ply: 2,
+        uci: "e7e5",
+        timestamp: "2026-11-22T10:00:05.000Z",
+        whiteClock: 300,
+        blackClock: 295,
+      },
+      {
+        idx: 2,
+        ply: 3,
+        uci: "g1f3",
+        timestamp: "2026-11-22T10:00:10.000Z",
+        whiteClock: 295,
+        blackClock: 295,
+      },
+    ];
+  });
+
+  describe("hashLeaf", () => {
+    it("computes deterministic SHA-256 leaf hash from move event", () => {
+      const hash1 = auditService.hashLeaf(testMoves[0], 0);
+      const hash2 = auditService.hashLeaf(testMoves[0], 0);
+      expect(hash1).toBe(hash2);
+      expect(typeof hash1).toBe("string");
+      expect(hash1).toHaveLength(64);
+    });
+
+    it("produces different hashes for different move timestamps or clocks", () => {
+      const modified = { ...testMoves[0], timestamp: "2026-11-22T10:00:01.000Z" };
+      expect(auditService.hashLeaf(testMoves[0], 0)).not.toBe(auditService.hashLeaf(modified, 0));
+    });
+  });
+
+  describe("computeMerkleRoot", () => {
+    it("computes root hash for leaves", () => {
+      const leaves = testMoves.map((m, idx) => auditService.hashLeaf(m, idx));
+      const root = auditService.computeMerkleRoot(leaves);
+      expect(root).toBeDefined();
+      expect(typeof root).toBe("string");
+      expect(root).toHaveLength(64);
+    });
+
+    it("handles empty and single-leaf arrays gracefully", () => {
+      expect(auditService.computeMerkleRoot([])).toBeDefined();
+      const singleLeaf = [auditService.hashLeaf(testMoves[0], 0)];
+      expect(auditService.computeMerkleRoot(singleLeaf)).toBe(singleLeaf[0]);
+    });
+  });
+
+  describe("generateAuditManifest and verifyAuditTrail", () => {
+    it("(a) valid match yields valid signature and passes verification", () => {
+      const match = { id: "match-123", tournamentId: "tourn-456" };
+      const manifest = auditService.generateAuditManifest(match, testMoves, keypair);
+
+      expect(manifest.matchId).toBe("match-123");
+      expect(manifest.tournamentId).toBe("tourn-456");
+      expect(manifest.leavesCount).toBe(3);
+      expect(manifest.publicKey).toBe(keypair.publicKey());
+      expect(manifest.signature).toBeDefined();
+      expect(manifest.merkleRoot).toBeDefined();
+
+      const isValid = auditService.verifyAuditTrail(manifest, keypair.publicKey());
+      expect(isValid).toBe(true);
+    });
+
+    it("(b) tampering with a single move timestamp fails Merkle root verification", () => {
+      const match = { id: "match-123", tournamentId: "tourn-456" };
+      const manifest = auditService.generateAuditManifest(match, testMoves, keypair);
+
+      // Tamper with move timestamp
+      const tamperedMoves = JSON.parse(JSON.stringify(testMoves));
+      tamperedMoves[1].timestamp = "2026-11-22T10:00:06.000Z";
+      const tamperedManifest = { ...manifest, moves: tamperedMoves };
+
+      const isValid = auditService.verifyAuditTrail(tamperedManifest, keypair.publicKey());
+      expect(isValid).toBe(false);
+    });
+
+    it("(c) wrong public key rejects signature", () => {
+      const match = { id: "match-123", tournamentId: "tourn-456" };
+      const manifest = auditService.generateAuditManifest(match, testMoves, keypair);
+
+      const attackerKeypair = Keypair.random();
+      const isValid = auditService.verifyAuditTrail(manifest, attackerKeypair.publicKey());
+      expect(isValid).toBe(false);
+    });
+  });
+
+  describe("GET /api/tournaments/:tournamentId/matches/:matchId/audit-trail", () => {
+    it("returns 200 with structured audit manifest and cryptographic signature", async () => {
+      const app = express();
+      app.use(express.json());
+      app.use("/api", tournamentRoutes);
+
+      const res = await request(app).get("/api/tournaments/tourn-1/matches/match-1/audit-trail");
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.merkleRoot).toBeDefined();
+      expect(res.body.signature).toBeDefined();
+      expect(res.body.publicKey).toBeDefined();
+      expect(res.body.matchId).toBe("match-1");
+      expect(res.body.tournamentId).toBe("tourn-1");
+
+      const isValid = auditService.verifyAuditTrail(res.body);
+      expect(isValid).toBe(true);
+    });
+  });
+});

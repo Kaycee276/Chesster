@@ -1137,6 +1137,35 @@ async function settleMatchWithIdempotency(matchId, settlementFn, options = {}) {
 	});
 }
 
+/**
+ * Enqueue a failed escrow transaction intent for dead-letter retry processing.
+ *
+ * @param {object} item - { matchId, action, winner, attempts, lastError, ... }
+ * @param {object} [customRedis] - Optional injected redis client
+ * @returns {Promise<boolean>} whether enqueueing succeeded
+ */
+async function enqueueEscrowRetry(item, customRedis = null) {
+	try {
+		const { getRedisClient } = require("../config/redis");
+		const redis = customRedis || getRedisClient();
+		if (!redis || typeof redis.rpush !== "function") {
+			console.warn(`[Escrow] Redis unavailable, cannot enqueue retry for match: ${item?.matchId}`);
+			return false;
+		}
+		const payload = JSON.stringify({
+			...item,
+			attempts: item.attempts || 0,
+			enqueuedAt: Date.now(),
+		});
+		await redis.rpush("queue:escrow:retry", payload);
+		console.log(`[Escrow] Successfully enqueued retry for match ${item?.matchId}`);
+		return true;
+	} catch (err) {
+		console.error(`[Escrow] Failed to enqueue retry for match ${item?.matchId}:`, err.message);
+		return false;
+	}
+}
+
 module.exports = {
 	init,
 	resolveMatch,
@@ -1148,6 +1177,7 @@ module.exports = {
 	getMatch,
 	estimateFee,
 	isRetryableError,
+	enqueueEscrowRetry,
 	DRAW_ADDRESS,
 	getHorizonTransactions,
 	verifyDepositTransaction,
