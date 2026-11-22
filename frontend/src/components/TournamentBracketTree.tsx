@@ -24,6 +24,14 @@ interface ViewState {
   y: number;
 }
 
+/** Bracket zoom bounds (#755): 0.5x overview to 2.0x card inspection. */
+export const MIN_BRACKET_SCALE = 0.5;
+export const MAX_BRACKET_SCALE = 2;
+const ZOOM_STEP = 1.32;
+
+const clampScale = (scale: number) =>
+  Math.min(MAX_BRACKET_SCALE, Math.max(MIN_BRACKET_SCALE, scale));
+
 export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
   matches = [],
   rounds: initialRounds,
@@ -72,13 +80,25 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
     setIsDragging(false);
   }, []);
 
+  // Ctrl/Cmd + wheel (and plain wheel) zooms around the pointer so the
+  // match under the cursor stays put while the bracket scales (#755).
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
     e.preventDefault();
-    const zoomFactor = e.deltaY < 0 ? 1.32 : 1 / 1.32;
-    setViewState((prev) => ({
-      ...prev,
-      scale: Math.min(2.5, Math.max(0.4, prev.scale * zoomFactor)),
-    }));
+    const zoomFactor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+    const pointerX = e.clientX - rect.left;
+    const pointerY = e.clientY - rect.top;
+
+    setViewState((prev) => {
+      const scale = clampScale(prev.scale * zoomFactor);
+      const ratio = scale / prev.scale;
+      return {
+        scale,
+        x: pointerX - (pointerX - prev.x) * ratio,
+        y: pointerY - (pointerY - prev.y) * ratio,
+      };
+    });
   }, []);
 
   const getTouchDistance = (touches: TouchList | React.TouchList): number => {
@@ -101,10 +121,10 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
     if (e.touches.length === 2) {
       const newDistance = getTouchDistance(e.touches);
       if (touchDistance > 0) {
-        const zoomFactor = newDistance / touchDistance > 1 ? 1.1 : 0.9;
+        const zoomFactor = newDistance / touchDistance;
         setViewState((prev) => ({
           ...prev,
-          scale: Math.min(2.5, Math.max(0.4, prev.scale * zoomFactor)),
+          scale: clampScale(prev.scale * zoomFactor),
         }));
       }
       setTouchDistance(newDistance);
@@ -125,14 +145,14 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
   const zoomIn = () => {
     setViewState((prev) => ({
       ...prev,
-      scale: Math.min(2.5, prev.scale * 1.32),
+      scale: clampScale(prev.scale * ZOOM_STEP),
     }));
   };
 
   const zoomOut = () => {
     setViewState((prev) => ({
       ...prev,
-      scale: Math.max(0.4, prev.scale / 1.2),
+      scale: clampScale(prev.scale / 1.2),
     }));
   };
 
@@ -152,7 +172,7 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
       const scale = Math.min(scaleX, scaleY, 1);
 
       setViewState({
-        scale: Math.max(0.4, Math.min(2.5, scale)),
+        scale: clampScale(scale),
         x: 0,
         y: 0,
       });
@@ -175,6 +195,7 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
     >
       <div
         ref={contentRef}
+        data-testid="bracket-content"
         className="flex gap-12 min-w-max items-center justify-start py-4"
         style={{
           transform: `translate(${viewState.x}px, ${viewState.y}px) scale(${viewState.scale})`,
@@ -335,7 +356,10 @@ export const TournamentBracketTree: React.FC<TournamentBracketTreeProps> = ({
       </div>
 
       {/* Zoom Level Display */}
-      <div className="absolute bottom-4 right-4 bg-slate-800 px-2 py-1 rounded border border-slate-700 text-xs text-slate-400 font-mono">
+      <div
+        aria-live="polite"
+        className="absolute bottom-4 right-4 bg-slate-800 px-2 py-1 rounded border border-slate-700 text-xs text-slate-400 font-mono"
+      >
         {Math.round(viewState.scale * 100)}%
       </div>
     </div>
