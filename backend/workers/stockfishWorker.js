@@ -1,6 +1,7 @@
 const { parentPort, workerData, isMainThread } = require("worker_threads");
 const { spawn } = require("child_process");
-const { parseUciMove, toUciMove, pickHeuristicMove } = require("../services/botHeuristics");
+const chessEngine = require("../services/chessEngine");
+const { parseUciMove, toUciMove, pickHeuristicMove, getLegalMoves } = require("../services/botHeuristics");
 
 /**
  * Stockfish worker thread (Issue #241).
@@ -32,6 +33,39 @@ function timeoutError(message) {
 	const err = new Error(message);
 	err.code = "ENGINE_TIMEOUT";
 	return err;
+}
+
+/** Standard castling needs FEN rights that the board-only move enumerator does not track. */
+function isLegalCastlingMove(task, move) {
+	if (!move || move.promotion !== null || !["white", "black"].includes(task.turn)) return false;
+	const homeRow = task.turn === "white" ? 7 : 0;
+	const king = task.turn === "white" ? "K" : "k";
+	const rook = task.turn === "white" ? "R" : "r";
+	const destination = move.to[1];
+	if (move.from[0] !== homeRow || move.from[1] !== 4 || move.to[0] !== homeRow ||
+		![2, 6].includes(destination)) return false;
+	const kingSide = destination === 6;
+	const rookCol = kingSide ? 7 : 0;
+	const right = task.turn === "white" ? (kingSide ? "K" : "Q") : (kingSide ? "k" : "q");
+	const rights = typeof task.fen === "string" ? (task.fen.trim().split(/\s+/)[2] || "") : "";
+	const board = task.board;
+	if (!rights.includes(right) || board[homeRow][4] !== king || board[homeRow][rookCol] !== rook) return false;
+	// Queenside b-file must also be clear for the rook, although the king does not cross it.
+	const clearCols = kingSide ? [5, 6] : [1, 2, 3];
+	if (clearCols.some((col) => board[homeRow][col] !== ".") || chessEngine.isKingInCheck(board, task.turn)) return false;
+	const crossedCols = kingSide ? [5, 6] : [3, 2];
+	return crossedCols.every((kingCol) => {
+		const finalPosition = kingCol === destination;
+		const rookTarget = kingSide ? 5 : 3;
+		const checkBoard = board.map((rank, row) => rank.map((piece, col) => {
+			if (row !== homeRow) return piece;
+			if (col === 4 || (finalPosition && col === rookCol)) return ".";
+			if (col === kingCol) return king;
+			if (finalPosition && col === rookTarget) return rook;
+			return piece;
+		}));
+		return !chessEngine.isKingInCheck(checkBoard, task.turn);
+	});
 }
 
 /**
@@ -237,10 +271,16 @@ function createMoveHandler({ enginePath, engineArgs = [], onEnginePid } = {}) {
 					return { move: null, uci: null, engine: "stockfish", elapsedMs: Date.now() - startedAt };
 				}
 				const move = parseUciMove(uci);
-				if (move) {
+				const castle = move && move.from[0] === move.to[0] && Math.abs(move.to[1] - move.from[1]) === 2 &&
+					task.board[move.from[0]][move.from[1]].toLowerCase() === "k";
+				const legal = move && (castle ? isLegalCastlingMove(task, move) : getLegalMoves(task.board, task.turn, task.lastMove || null).some((candidate) =>
+					JSON.stringify(candidate.from) === JSON.stringify(move.from) &&
+					JSON.stringify(candidate.to) === JSON.stringify(move.to) &&
+					(candidate.promotion === move.promotion || candidate.promotion === "q" && /^[qrbn]$/.test(move.promotion))));
+				if (legal) {
 					return { move, uci, engine: "stockfish", elapsedMs: Date.now() - startedAt };
 				}
-				fallbackReason = `unparseable engine move "${uci}"`;
+				fallbackReason = move ? `illegal engine move "${uci}"` : `unparseable engine move "${uci}"`;
 			} catch (err) {
 				fallbackReason = err.message;
 				discardEngine(err);
@@ -305,4 +345,4 @@ if (!isMainThread && parentPort) {
 	parentPort.on("close", () => handler.dispose());
 }
 
-module.exports = { UciEngine, createMoveHandler, ENGINE_RETRY_COOLDOWN_MS };
+module.exports = { UciEngine, createMoveHandler, isLegalCastlingMove, ENGINE_RETRY_COOLDOWN_MS };

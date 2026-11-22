@@ -78,6 +78,11 @@ class TournamentModel {
 		return data || null;
 	}
 
+	/** HTTP controller compatibility alias for the existing tournament lookup. */
+	async getTournamentById(tournamentId) {
+		return this.getTournament(tournamentId);
+	}
+
 	/**
 	 * Lists tournaments with optional status filtering.
 	 *
@@ -224,6 +229,28 @@ class TournamentModel {
 	 */
 	async getParticipants(tournamentId) {
 		return this.listParticipants(tournamentId);
+	}
+
+	/** Count registrations without loading their full rows. */
+	async countParticipants(tournamentId) {
+		const { count, error } = await supabase
+			.from("tournament_participants")
+			.select("id", { count: "exact", head: true })
+			.eq("tournament_id", tournamentId);
+		if (error) throw error;
+		return count || 0;
+	}
+
+	/** Check one wallet's registration within this tournament. */
+	async isParticipant(tournamentId, walletAddress) {
+		const { data, error } = await supabase
+			.from("tournament_participants")
+			.select("wallet_address")
+			.eq("tournament_id", tournamentId)
+			.eq("wallet_address", walletAddress)
+			.maybeSingle();
+		if (error) throw error;
+		return Boolean(data);
 	}
 
 	/**

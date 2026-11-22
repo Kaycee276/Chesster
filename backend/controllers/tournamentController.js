@@ -47,7 +47,10 @@ class TournamentController {
 				return res.status(404).json({ success: false, error: "Tournament not found" });
 			}
 
-			const participants = await tournamentModel.getParticipants(id);
+			const [participants, bracketMatches] = await Promise.all([
+				tournamentModel.getParticipants(id),
+				tournamentModel.getBracketMatches(id),
+			]);
 
 			res.json({
 				success: true,
@@ -55,6 +58,7 @@ class TournamentController {
 					...tournament,
 					participantCount: participants.length,
 					participants,
+					bracket_matches: bracketMatches || [],
 				},
 			});
 		} catch (error) {
