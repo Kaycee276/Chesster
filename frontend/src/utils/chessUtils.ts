@@ -1,3 +1,5 @@
+import { Chess } from "chess.js";
+
 export function getPossibleMoves(
 	board: string[][],
 	from: [number, number],
@@ -306,11 +308,23 @@ export function applyMove(
 	return { board: next, piece, isCapture: capturedOnDest || isEnPassant, isCastle, isEnPassant };
 }
 
+export interface FenOptions {
+	turn?: "white" | "black";
+	/** Castling availability in FEN order, e.g. "KQkq" or "-". */
+	castling?: string;
+	/** En passant target square, e.g. "e3", or "-". */
+	enPassant?: string;
+	halfmoveClock?: number;
+	fullmoveNumber?: number;
+}
+
 /**
- * Converts the current board array to a FEN position string.
- * Omits castling rights and en passant (not tracked client-side).
+ * Converts a board array into a complete FEN string. Every field can be
+ * supplied, so the board editor can preserve castling, en passant and clock
+ * metadata. `boardToFen` is the minimal board + side-to-move form used by
+ * the live game and analysis engine.
  */
-export function boardToFen(board: string[][], turn: "white" | "black"): string {
+export function buildFen(board: string[][], options: FenOptions = {}): string {
 	const rows: string[] = [];
 	for (const row of board) {
 		let fenRow = "";
@@ -319,15 +333,128 @@ export function boardToFen(board: string[][], turn: "white" | "black"): string {
 			if (sq === ".") {
 				empty++;
 			} else {
-				if (empty > 0) { fenRow += empty; empty = 0; }
+				if (empty > 0) {
+					fenRow += empty;
+					empty = 0;
+				}
 				fenRow += sq;
 			}
 		}
 		if (empty > 0) fenRow += empty;
 		rows.push(fenRow);
 	}
-	const activeColor = turn === "white" ? "w" : "b";
-	return `${rows.join("/")} ${activeColor} - - 0 1`;
+	const turn = options.turn ?? "white";
+	const castling = options.castling?.trim() || "-";
+	const enPassant = options.enPassant?.trim() || "-";
+	const halfmove = Math.max(0, Math.trunc(options.halfmoveClock ?? 0));
+	const fullmove = Math.max(1, Math.trunc(options.fullmoveNumber ?? 1));
+	return `${rows.join("/")} ${turn === "white" ? "w" : "b"} ${castling} ${enPassant} ${halfmove} ${fullmove}`;
+}
+
+/** Converts the current board array to a minimal FEN position string. */
+export function boardToFen(board: string[][], turn: "white" | "black"): string {
+	return buildFen(board, { turn });
+}
+
+export interface ParsedFen {
+	board: string[][];
+	turn: "white" | "black";
+	castling: string;
+	enPassant: string;
+	halfmoveClock: number;
+	fullmoveNumber: number;
+}
+
+/** Parses a FEN string into the app's board representation. Throws on
+ * malformed FEN (missing fields, bad placement, illegal material). */
+export function parseFen(fen: string): ParsedFen {
+	const chess = new Chess(fen);
+	const board = chess.board().map((rank) =>
+		rank.map((square) => {
+			if (!square) return ".";
+			return square.color === "w" ? square.type.toUpperCase() : square.type;
+		}),
+	);
+	const [, turnField, castlingField, enPassantField, halfField, fullField] = fen
+		.trim()
+		.split(/\s+/);
+	return {
+		board,
+		turn: turnField === "b" ? "black" : "white",
+		castling: castlingField === "-" ? "" : (castlingField ?? ""),
+		enPassant: enPassantField === "-" ? "" : (enPassantField ?? ""),
+		halfmoveClock: Number(halfField) || 0,
+		fullmoveNumber: Number(fullField) || 1,
+	};
+}
+
+export interface FenValidation {
+	valid: boolean;
+	error?: string;
+}
+
+/**
+ * Validates a custom position using chess.js plus the editor-specific rules
+ * chess.js permits: pawns may not sit on the first/eighth rank, both sides
+ * need exactly one king, and the side that just moved may not be in check.
+ */
+export function validateFenPosition(fen: string): FenValidation {
+	let chess: Chess;
+	try {
+		chess = new Chess(fen);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "Invalid FEN";
+		return { valid: false, error: message.replace(/^Invalid FEN:\s*/i, "") };
+	}
+
+	const board = chess.board();
+	const kings: Record<"w" | "b", { row: number; col: number }[]> = { w: [], b: [] };
+
+	for (let row = 0; row < board.length; row++) {
+		for (let col = 0; col < board[row].length; col++) {
+			const square = board[row][col];
+			if (!square) continue;
+			if (square.type === "k") kings[square.color].push({ row, col });
+			if (square.type === "p" && (row === 0 || row === 7)) {
+				return {
+					valid: false,
+					error: `Pawns cannot be placed on rank ${row === 0 ? 8 : 1}`,
+				};
+			}
+		}
+	}
+
+	if (kings.w.length !== 1 || kings.b.length !== 1) {
+		const missing =
+			kings.w.length !== 1 && kings.b.length !== 1
+				? "both kings"
+				: kings.w.length !== 1
+					? "the white king"
+					: "the black king";
+		return { valid: false, error: `Position must contain exactly one king per side (missing ${missing})` };
+	}
+
+	const whiteKing = kings.w[0];
+	const blackKing = kings.b[0];
+	if (Math.abs(whiteKing.row - blackKing.row) <= 1 && Math.abs(whiteKing.col - blackKing.col) <= 1) {
+		return { valid: false, error: "Kings cannot be on adjacent squares" };
+	}
+
+	// If the side that just moved is in check, the position is unreachable.
+	const fields = fen.trim().split(/\s+/);
+	fields[1] = fields[1] === "w" ? "b" : "w";
+	// En passant depends on the side to move, so drop it for the check probe.
+	fields[3] = "-";
+	try {
+		const swapped = new Chess(fields.join(" "));
+		if (swapped.isCheck()) {
+			return { valid: false, error: "The side that just moved cannot be in check" };
+		}
+	} catch {
+		return { valid: false, error: "Invalid position metadata" };
+	}
+
+	return { valid: true };
 }
 
 /**
