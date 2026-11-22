@@ -207,6 +207,7 @@ export default function OfflineGameViewer() {
             collection, or leave all unchecked to export everything.
           </p>
           <div className="flex flex-wrap gap-2">
+            <Link to="/offline-play" className={buttonClass}>Play offline against Stockfish</Link>
             <button
               className={buttonClass}
               disabled={busy || !games.length}

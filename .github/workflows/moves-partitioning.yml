@@ -8,6 +8,9 @@ on:
       - 'backend/prisma/schema.prisma'
       - 'backend/services/archivalService.js'
       - 'backend/tests/movesPartitioning.integration.test.js'
+      - 'backend/tests/moveArchival.integration.test.js'
+      - 'backend/services/moveArchive.js'
+      - 'backend/tests/archivalService.test.js'
       - '.github/workflows/moves-partitioning.yml'
   push:
     branches: [dev]
@@ -50,6 +53,7 @@ jobs:
           cache-dependency-path: backend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - name: Verify migration and transparent monthly inserts
-        run: pnpm test movesPartitioning.integration.test.js --runInBand
+        run: pnpm test movesPartitioning.integration.test.js moveArchival.integration.test.js --runInBand
         env:
           PARTITION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chesster_partition_tests
+          MOVE_ARCHIVE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chesster_partition_tests
