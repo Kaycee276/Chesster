@@ -11,6 +11,7 @@ import { socketService, type OpponentStatusEvent } from "../api/socket";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "../components/WalletDropdown";
 import MobileDrawer from "../components/MobileDrawer";
+import KeyboardShortcutsModal from "../components/KeyboardShortcutsModal";
 
 interface GameInfo {
   wager_amount?: number | null;
@@ -137,6 +138,7 @@ export default function GamePage() {
   const [gameInfo, setGameInfo] = useState<GameInfo | null>(null);
   const [fetchingInfo, setFetchingInfo] = useState(true);
   const [joinStep, setJoinStep] = useState<JoinStep>("idle");
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
 
   // Fetch game info on mount (for wager display + validity check)
   useEffect(() => {
@@ -210,10 +212,15 @@ export default function GamePage() {
         {/* Opponent disconnect/reconnect banner above the board (#317). */}
         <OpponentDisconnectBanner />
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          <ChessBoard />
+          <ChessBoard onOpenShortcuts={() => setIsShortcutsOpen(true)} />
         </div>
         {/* Responsive mobile bottom drawer layout (#684) */}
         <MobileDrawer />
+        {/* Keyboard shortcut helper (#750) */}
+        <KeyboardShortcutsModal
+          isOpen={isShortcutsOpen}
+          onClose={() => setIsShortcutsOpen(false)}
+        />
       </div>
     );
   }
