@@ -3,6 +3,7 @@ import { useToastStore } from "../store/toastStore";
 import type { DragState, PendingDrag, BoardSquare } from "../types/chess";
 import { isSameSquare, isLegalDragTarget, DRAG_SNAP_CLASSES, GHOST_SCALE } from "../utils/dragSnap";
 import { soundService, type SoundPack } from "../services/soundService";
+import { SOUND_PACKS } from "../services/soundPacks";
 import { friendlyError } from "../utils/errorMessages";
 import {
   Copy,
@@ -38,13 +39,6 @@ import {
 } from "lucide-react";
 import { BOARD_THEMES, PIECE_SETS, useThemeStore, type PieceSetKey } from "../store/themeStore";
 
-const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> = [
-  { key: "wood", name: "Wood", description: "Classic wooden piece sounds" },
-  { key: "plastic", name: "Plastic", description: "Modern plastic piece sounds" },
-  { key: "arcade", name: "Arcade", description: "Retro arcade synth sounds" },
-  { key: "retro", name: "Retro 8-bit", description: "Classic chiptune sounds" },
-];
-
 const NATIVE_XLM = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 const EXPLORER_BASE = "https://stellar.expert/explorer/testnet/tx/";
 
@@ -73,6 +67,8 @@ import GameResultModal from "./GameResultModal";
 import TurnTimer from "./TurnTimer";
 import ChatPanel from "./ChatPanel";
 import MoveInputBar from "./MoveInputBar";
+import MoveHighlightPicker from "./MoveHighlightPicker";
+import { getMoveHighlightStyles } from "../utils/moveHighlights";
 
 
 // Piece set configurations for different visual styles
@@ -446,38 +442,24 @@ function ChessBoardInner() {
   };
 
   const boardTheme = useThemeStore((s) => s.boardTheme);
+  const moveHighlightColor = useThemeStore((s) => s.moveHighlightColor);
+  const moveHighlightStyles = getMoveHighlightStyles(moveHighlightColor);
   const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
   const pieceSet = useGameStore((s) => s.pieceSet) || "classic";
   const setPieceSet = useGameStore((s) => s.setPieceSet);
   const colorMode = useThemeStore((s) => s.colorMode);
   const setColorMode = useThemeStore((s) => s.setColorMode);
-  const [soundPack, setSoundPack] = useState<SoundPack>(() => {
-    return typeof soundService?.getSoundPack === "function" ? soundService.getSoundPack() : "wood";
-  });
+  const soundPack = useThemeStore((s) => s.soundPack);
+  const setSoundPack = useThemeStore((s) => s.setSoundPack);
 
-  const handleSoundPackChange = (pack: SoundPack) => {
-    setSoundPack(pack);
-    if (typeof soundService?.setSoundPack === "function") {
-      soundService.setSoundPack(pack);
-    }
-  };
+  const handleSoundPackChange = (pack: SoundPack) => setSoundPack(pack);
 
   const handleSoundPreview = (pack: SoundPack) => {
-    if (
-      typeof soundService?.getSoundPack !== "function" ||
-      typeof soundService?.setSoundPack !== "function"
-    ) {
+    if (typeof soundService?.previewSound === "function") {
+      soundService.previewSound("move", pack);
+    } else {
       soundService?.move?.();
-      return;
     }
-    const originalPack = soundService.getSoundPack();
-    soundService.setSoundPack(pack);
-    soundService.move?.();
-    setTimeout(() => {
-      if (typeof soundService?.setSoundPack === "function") {
-        soundService.setSoundPack(originalPack);
-      }
-    }, 200);
   };
 
   const movePairs = useMemo(() => {
@@ -1376,6 +1358,8 @@ function ChessBoardInner() {
         </div>
       </div>
 
+      <MoveHighlightPicker />
+
       {/* Piece Sets */}
       <div className="flex flex-col gap-2">
         <span className="font-semibold text-(--text-secondary) flex items-center gap-1.5">
@@ -1415,6 +1399,9 @@ function ChessBoardInner() {
               }`}
             >
               <button
+                type="button"
+                aria-label={`Select ${pack.name} sound pack`}
+                aria-pressed={soundPack === pack.key}
                 onClick={() => handleSoundPackChange(pack.key)}
                 className="flex-1 text-left flex flex-col min-w-0"
               >
@@ -1424,6 +1411,8 @@ function ChessBoardInner() {
                 </span>
               </button>
               <button
+                type="button"
+                aria-label={`Preview ${pack.name} sound`}
                 onClick={() => handleSoundPreview(pack.key)}
                 title="Preview sound"
                 className="p-1.5 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors shrink-0"
@@ -2163,8 +2152,10 @@ function ChessBoardInner() {
                         {/* Legal-move marker: dot on empty squares, ring on captures (#123) */}
                         {possible && !capture && (
                           <div
-                            className="legal-move-dot absolute rounded-full bg-black/30 dark:bg-white/25 pointer-events-none"
+                            aria-hidden="true"
+                            className="legal-move-dot absolute rounded-full pointer-events-none"
                             style={{
+                              ...moveHighlightStyles.dot,
                               width: "calc(var(--board-size) / 8 * 0.32)",
                               height: "calc(var(--board-size) / 8 * 0.32)",
                             }}
@@ -2172,8 +2163,10 @@ function ChessBoardInner() {
                         )}
                         {capture && (
                           <div
-                            className="legal-move-ring absolute rounded-full border-[3px] border-yellow-400/90 pointer-events-none"
+                            aria-hidden="true"
+                            className="legal-move-ring absolute rounded-full border-[3px] pointer-events-none"
                             style={{
+                              ...moveHighlightStyles.capture,
                               width: "calc(var(--board-size) / 8 * 0.72)",
                               height: "calc(var(--board-size) / 8 * 0.72)",
                             }}

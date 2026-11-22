@@ -8,6 +8,7 @@ import {
   type ColorMode,
 } from "../store/themeStore";
 import { soundService, type SoundPack } from "../services/soundService";
+import { SOUND_PACKS } from "../services/soundPacks";
 import { getPreviewBoard } from "../services/pieceThemeService";
 
 // Re-apply the persisted theme whenever this component mounts (covers cases
@@ -23,12 +24,6 @@ function useApplyThemeOnMount() {
   }, [boardTheme]);
 }
 
-const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> = [
-  { key: "classic-wood", name: "Classic Wood", description: "Warm mellow woody tones" },
-  { key: "modern-digital", name: "Modern Digital", description: "Crisp synthesized digital sounds" },
-  { key: "lofi-soft", name: "Low-Fi Soft", description: "Muted subtle organic tones" },
-];
-
 export default function ThemeSelector({ hideFloating = false }: { hideFloating?: boolean } = {}) {
   const boardTheme = useThemeStore((s) => s.boardTheme);
   const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
@@ -39,7 +34,8 @@ export default function ThemeSelector({ hideFloating = false }: { hideFloating?:
   const isThemePickerOpen = useThemeStore((s) => s.isThemePickerOpen);
   const setThemePickerOpen = useThemeStore((s) => s.setThemePickerOpen);
   const [localOpen, setLocalOpen] = useState(false);
-  const [soundPack, setSoundPack] = useState<SoundPack>(soundService.getSoundPack());
+  const soundPack = useThemeStore((s) => s.soundPack);
+  const setSoundPack = useThemeStore((s) => s.setSoundPack);
 
   const open = isThemePickerOpen || localOpen;
   const setOpen = (val: boolean) => {
@@ -54,20 +50,10 @@ export default function ThemeSelector({ hideFloating = false }: { hideFloating?:
     setOpen(false);
   };
 
-  const handleSoundPackChange = (pack: SoundPack) => {
-    setSoundPack(pack);
-    soundService.setSoundPack(pack);
-  };
+  const handleSoundPackChange = (pack: SoundPack) => setSoundPack(pack);
 
   const handleSoundPreview = (pack: SoundPack) => {
-    // Temporarily play the sound with the target pack
-    const originalPack = soundService.getSoundPack();
-    soundService.setSoundPack(pack);
-    soundService.previewSound("move");
-    // Restore the previous pack after a brief delay
-    setTimeout(() => {
-      soundService.setSoundPack(originalPack);
-    }, 200);
+    soundService.previewSound("move", pack);
   };
 
   let isGameRoute = false;

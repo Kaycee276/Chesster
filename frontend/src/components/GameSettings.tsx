@@ -2,7 +2,9 @@ import { useState } from "react";
 import { Settings, Volume2, Play } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 import { BOARD_THEMES, useThemeStore } from "../store/themeStore";
-import { soundService, type SoundPack } from "../services/soundService";
+import { soundService } from "../services/soundService";
+import { isSoundPack, SOUND_PACKS } from "../services/soundPacks";
+import MoveHighlightPicker from "./MoveHighlightPicker";
 
 export default function GameSettings({ hideFloating = false }: { hideFloating?: boolean } = {}) {
   const isBlindfoldMode = useGameStore((s) => s.isBlindfoldMode);
@@ -30,7 +32,8 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
   const isSettingsOpen = useGameStore((s) => s.isSettingsOpen);
   const setSettingsOpen = useGameStore((s) => s.setSettingsOpen);
   const [localOpen, setLocalOpen] = useState(false);
-  const [soundPack, setSoundPack] = useState<SoundPack>(() => soundService.getSoundPack());
+  const soundPack = useThemeStore((s) => s.soundPack);
+  const setSoundPack = useThemeStore((s) => s.setSoundPack);
 
   const open = isSettingsOpen || localOpen;
   const setOpen = (val: boolean) => {
@@ -174,52 +177,29 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
             </div>
 
             <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold">Sound Theme</span>
-                <span className="text-xs text-(--text-tertiary)">Piece audio pack</span>
-              </div>
-              <div className="grid grid-cols-1 gap-2">
-                {[
-                  { key: "classic-wood" as const, name: "Classic Wood", description: "Warm, resonant wooden board impacts" },
-                  { key: "modern-digital" as const, name: "Modern Digital", description: "Crisp, synthesized click and chime cues" },
-                  { key: "lofi-soft" as const, name: "Low-Fi Soft", description: "Muted, subtle organic taps" },
-                ].map((pack) => (
-                  <div
-                    key={pack.key}
-                    className={`flex items-center justify-between p-2 rounded-lg border text-xs transition-colors ${
-                      soundPack === pack.key
-                        ? "border-(--accent-primary) ring-2 ring-(--accent-primary)/40 bg-(--bg-tertiary)"
-                        : "border-(--border) hover:border-(--accent-primary)/60"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSoundPack(pack.key);
-                        soundService.setSoundPack(pack.key);
-                      }}
-                      className="flex flex-col text-left flex-1 cursor-pointer"
-                    >
-                      <span className="font-semibold text-xs text-(--text)">{pack.name}</span>
-                      <span className="text-[11px] text-(--text-tertiary)">{pack.description}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const original = soundService.getSoundPack();
-                        soundService.setSoundPack(pack.key);
-                        soundService.previewSound("move");
-                        setTimeout(() => soundService.setSoundPack(original), 200);
-                      }}
-                      className="p-1.5 rounded-md hover:bg-(--bg-secondary) text-(--text-secondary) hover:text-(--text) transition-colors cursor-pointer"
-                      title={`Preview ${pack.name} sound`}
-                      aria-label={`Preview ${pack.name} sound`}
-                    >
-                      <Play size={14} />
-                    </button>
-                  </div>
+              <label htmlFor="sound-pack" className="text-sm font-semibold">Sound pack</label>
+              <select
+                id="sound-pack"
+                value={soundPack}
+                onChange={(event) => {
+                  if (isSoundPack(event.target.value)) setSoundPack(event.target.value);
+                }}
+                className="w-full rounded-lg border border-(--border) bg-(--bg-tertiary) p-2 text-sm text-(--text)"
+              >
+                {SOUND_PACKS.map((pack) => (
+                  <option key={pack.key} value={pack.key}>{pack.name}</option>
                 ))}
-              </div>
+              </select>
+              <p className="text-xs text-(--text-tertiary)">
+                {SOUND_PACKS.find((pack) => pack.key === soundPack)?.description}
+              </p>
+              <button
+                type="button"
+                onClick={() => soundService.previewSound("move", soundPack)}
+                className="flex items-center justify-center gap-2 rounded-lg border border-(--border) p-2 text-sm hover:bg-(--bg-tertiary)"
+              >
+                <Play size={14} aria-hidden="true" /> Test sound
+              </button>
             </div>
 
             <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
@@ -248,6 +228,10 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <MoveHighlightPicker />
             </div>
 
             <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
