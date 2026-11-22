@@ -5,7 +5,8 @@ import EvaluationBar from "../components/EvaluationBar";
 import { useStockfishEvaluation } from "../hooks/useStockfishEvaluation";
 import { toEngineFen } from "../utils/engineEvaluation";
 import { api } from "../api/gameApi";
-import { socketService, type SpectatorReaction } from "../api/socket";
+import { socketService, type SpectatorPresence, type SpectatorReaction } from "../api/socket";
+import SpectatorListModal from "../components/SpectatorListModal";
 import type { GameState } from "../types/game";
 
 type Orientation = "white" | "black";
@@ -156,7 +157,10 @@ export default function SpectatorPage() {
   const [gameLoaded, setGameLoaded] = useState(false);
   const [orientation, setOrientation] = useState<Orientation>("white");
   const [moveHistory] = useState<string[]>([]);
-  const [spectatorCount] = useState(1);
+  const [spectators, setSpectators] = useState<SpectatorPresence[]>([]);
+  const [isSpectatorListOpen, setSpectatorListOpen] = useState(false);
+  // The viewer is always watching, so the count never drops below one.
+  const spectatorCount = Math.max(spectators.length, 1);
   const [reactions, setReactions] = useState<SpectatorReaction[]>([]);
 
   const fen = useMemo(() => toEngineFen(board, turn), [board, turn]);
@@ -211,6 +215,19 @@ export default function SpectatorPage() {
       }, 2000);
     });
 
+    socketService.onSpectatorJoined((spectator) => {
+      if (!active) return;
+      setSpectators((current) =>
+        current.some((item) => item.address === spectator.address)
+          ? current
+          : [...current, spectator]
+      );
+    });
+    socketService.onSpectatorLeft(({ address }) => {
+      if (!active) return;
+      setSpectators((current) => current.filter((item) => item.address !== address));
+    });
+
     // The API uses snake_case for persisted game fields.
     api
       .getGame(gameCode)
@@ -225,6 +242,7 @@ export default function SpectatorPage() {
       active = false;
       socketService.offGameUpdate();
       socketService.offReaction();
+      socketService.offSpectatorPresence();
       socketService.leaveGame(gameCode);
       socket.disconnect();
     };
@@ -254,12 +272,25 @@ export default function SpectatorPage() {
             <ArrowUpDown size={14} />
             <span className="hidden sm:inline">Flip</span>
           </button>
-          <div className="flex items-center gap-1 text-xs text-(--text-secondary)">
+          <button
+            type="button"
+            onClick={() => setSpectatorListOpen(true)}
+            className="flex items-center gap-1 text-xs text-(--text-secondary) hover:text-(--text) transition-colors"
+            title="Show spectators"
+            aria-label={`Show spectators (${spectatorCount})`}
+          >
             <Users size={14} />
             {spectatorCount}
-          </div>
+          </button>
         </div>
       </div>
+
+      {isSpectatorListOpen && (
+        <SpectatorListModal
+          spectators={spectators}
+          onClose={() => setSpectatorListOpen(false)}
+        />
+      )}
 
       {/* Main content */}
       <div className="flex-1 flex flex-col lg:flex-row items-center justify-center p-4 gap-4">

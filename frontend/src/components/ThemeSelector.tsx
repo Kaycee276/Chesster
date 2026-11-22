@@ -8,6 +8,7 @@ import {
   type ColorMode,
 } from "../store/themeStore";
 import { soundService, type SoundPack } from "../services/soundService";
+import { getPreviewBoard } from "../services/pieceThemeService";
 
 // Re-apply the persisted theme whenever this component mounts (covers cases
 // where the store module was re-evaluated and the on-load application was missed).
@@ -216,34 +217,27 @@ export default function ThemeSelector({ hideFloating = false }: { hideFloating?:
                     }`}
                     aria-pressed={active}
                   >
-                    <div className="flex gap-0.5 text-lg leading-none">
-                      <span
-                        className="text-white"
-                        style={{
-                          textShadow:
-                            "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-                        }}
-                      >
-                        {ps.pieces.K}
-                      </span>
-                      <span
-                        className="text-white"
-                        style={{
-                          textShadow:
-                            "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-                        }}
-                      >
-                        {ps.pieces.Q}
-                      </span>
-                      <span
-                        className="text-white"
-                        style={{
-                          textShadow:
-                            "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-                        }}
-                      >
-                        {ps.pieces.R}
-                      </span>
+                    <div
+                      className="grid grid-cols-2 gap-px w-12 rounded-md overflow-hidden border border-(--border) text-base leading-none"
+                      aria-hidden="true"
+                      data-testid="piece-set-preview"
+                    >
+                      {getPreviewBoard(ps.key).flatMap((row, rowIndex) =>
+                        row.map((glyph, colIndex) => (
+                          <span
+                            key={`${rowIndex}-${colIndex}`}
+                            className={`flex items-center justify-center aspect-square text-white ${
+                              (rowIndex + colIndex) % 2 === 0 ? "bg-(--sq-light)" : "bg-(--sq-dark)"
+                            }`}
+                            style={{
+                              textShadow:
+                                "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
+                            }}
+                          >
+                            {glyph}
+                          </span>
+                        )),
+                      )}
                     </div>
                     <div className="flex items-center justify-between w-full">
                       <span className="text-sm font-semibold">{ps.name}</span>
