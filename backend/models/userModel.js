@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const { classifyOpening, OPENING_PREFIX_PLIES } = require("../services/openingClassification");
 const supabase = require("../config/supabase");
 const eventBus = require("../services/eventBus");
 const { executeWithRetry, OptimisticLockError } = require("../database/transactionRetry");
@@ -17,7 +18,7 @@ const { getRedisClient } = require("../config/redis");
 const PROFILE_CACHE_TTL_SECONDS = 600;
 const RECENT_MATCHES_LIMIT = 10;
 const RECENT_MATCH_COLUMNS =
-	"game_code, status, winner, end_reason, player_white_address, player_black_address, wager_amount, move_count, created_at, updated_at";
+	"id, game_code, game_type, variant, status, winner, end_reason, player_white_address, player_black_address, wager_amount, move_count, time_control_preset, created_at, updated_at";
 
 function profileCacheKey(address) {
 	return `cache:profile:${address}`;
@@ -36,6 +37,7 @@ function toRecentMatch(game, address) {
 
 	return {
 		gameCode: game.game_code,
+		mode: game.time_control_preset || null,
 		color,
 		opponent: color === "white" ? game.player_black_address : game.player_white_address,
 		result,
@@ -44,6 +46,20 @@ function toRecentMatch(game, address) {
 		moveCount: game.move_count ?? 0,
 		endedAt: game.updated_at || game.created_at || null,
 	};
+}
+
+// Keep the public profile payload small: read only six coordinate pairs for
+// each of the ten recent games, and return the inferred family rather than logs.
+async function openingForMatch(game) {
+	if (!game.id || (game.variant && game.variant !== "standard") ||
+	    (game.game_type && game.game_type !== "chess")) return classifyOpening([]);
+	const { data, error } = await supabase.from("moves")
+	  .select("move_number, from_position, to_position")
+	  .eq("game_id", game.id)
+	  .order("move_number", { ascending: true })
+	  .limit(OPENING_PREFIX_PLIES);
+	if (error) throw error;
+	return classifyOpening(data || []);
 }
 
 /**
@@ -192,10 +208,13 @@ class UserModel {
 		const draws = stats.draws || 0;
 		const gamesPlayed = stats.games_played || wins + losses + draws;
 
-		const recentMatches = [...(asWhite.data || []), ...(asBlack.data || [])]
+		const recentGames = [...(asWhite.data || []), ...(asBlack.data || [])]
 			.sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")))
-			.slice(0, RECENT_MATCHES_LIMIT)
-			.map((game) => toRecentMatch(game, address));
+			.slice(0, RECENT_MATCHES_LIMIT);
+		const recentMatches = await Promise.all(recentGames.map(async (game) => ({
+			...toRecentMatch(game, address),
+			...await openingForMatch(game),
+		})));
 
 		return {
 			...user,

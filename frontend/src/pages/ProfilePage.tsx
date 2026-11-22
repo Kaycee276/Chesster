@@ -9,6 +9,7 @@ import {
   type RecentGame,
 } from "../api/profileApi";
 import RatingChart from "../components/RatingChart";
+import OpeningPerformanceChart from "../components/OpeningPerformanceChart";
 import WalletDropdown from "../components/WalletDropdown";
 import { useWalletStore } from "../store/walletStore";
 import {
@@ -348,6 +349,20 @@ export default function ProfilePage() {
                 <StatCard label="Draws" value={view.stats.draws} />
                 <StatCard label="Losses" value={view.stats.losses} accent="text-red-400" />
                 <StatCard label="Win rate" value={formatWinRate(view.stats)} />
+              </section>
+
+              {/* Opening performance */}
+              <section className="flex flex-col gap-2" aria-label="Opening performance">
+                <h2 className="text-sm font-bold uppercase tracking-wider text-(--text-tertiary)">
+                  Opening performance
+                </h2>
+                {view.openingSampleSize > 0 && (
+                  <p className="text-xs text-(--text-secondary)">
+                    Top five openings from {view.openingSampleSize} recent completed {view.openingSampleSize === 1 ? "game" : "games"}.
+                    {" "}Opening families are inferred from the first moves when ECO metadata is unavailable.
+                  </p>
+                )}
+                <OpeningPerformanceChart stats={view.openingStats} />
               </section>
 
               {/* Rating history */}

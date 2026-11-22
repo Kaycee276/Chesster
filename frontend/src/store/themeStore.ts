@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { DEFAULT_MOVE_HIGHLIGHT, isMoveHighlightColor, normalizeMoveHighlightColor, type MoveHighlightColor } from "../utils/moveHighlights";
+import { isSoundPack, readLegacySoundPack, saveLegacySoundPack, type SoundPack } from "../services/soundPacks";
 
 export type BoardThemeKey = "classic" | "wood" | "neon" | "marble" | "high-contrast";
 export type PieceSetKey = "standard" | "neo" | "wood" | "pixel";
@@ -128,6 +130,10 @@ interface ThemeState {
 	boardTheme: BoardThemeKey;
 	pieceSet: PieceSetKey;
 	colorMode: ColorMode;
+	moveHighlightColor: MoveHighlightColor;
+	setMoveHighlightColor: (color: MoveHighlightColor) => void;
+	soundPack: SoundPack;
+	setSoundPack: (pack: SoundPack) => void;
 	isThemePickerOpen: boolean;
 	setBoardTheme: (key: BoardThemeKey) => void;
 	setPieceSet: (key: PieceSetKey) => void;
@@ -141,6 +147,17 @@ export const useThemeStore = create<ThemeState>()(
 			boardTheme: DEFAULT_BOARD_THEME,
 			pieceSet: "standard" as PieceSetKey,
 			colorMode: "system" as ColorMode,
+			moveHighlightColor: DEFAULT_MOVE_HIGHLIGHT,
+			setMoveHighlightColor: (color) => {
+				if (!isMoveHighlightColor(color)) return;
+				set({ moveHighlightColor: normalizeMoveHighlightColor(color) });
+			},
+			soundPack: readLegacySoundPack(),
+			setSoundPack: (pack) => {
+				if (!isSoundPack(pack)) return;
+				saveLegacySoundPack(pack);
+				set({ soundPack: pack });
+			},
 			isThemePickerOpen: false,
 			setBoardTheme: (key) => {
 				applyBoardTheme(key);
@@ -155,10 +172,27 @@ export const useThemeStore = create<ThemeState>()(
 		}),
 		{
 			name: "chesster_theme",
+			merge: (persistedState, currentState) => {
+				const saved = persistedState && typeof persistedState === "object"
+					? persistedState as Partial<ThemeState> : {};
+				return {
+					...currentState,
+					boardTheme: BOARD_THEMES.some((theme) => theme.key === saved.boardTheme)
+						? saved.boardTheme! : currentState.boardTheme,
+					pieceSet: PIECE_SETS.some((set) => set.key === saved.pieceSet)
+						? saved.pieceSet! : currentState.pieceSet,
+					colorMode: saved.colorMode === "system" || saved.colorMode === "dark" || saved.colorMode === "light"
+						? saved.colorMode : currentState.colorMode,
+					moveHighlightColor: normalizeMoveHighlightColor(saved.moveHighlightColor),
+					soundPack: isSoundPack(saved.soundPack) ? saved.soundPack : currentState.soundPack,
+				};
+			},
 			partialize: (state) => ({
 				boardTheme: state.boardTheme,
 				pieceSet: state.pieceSet,
 				colorMode: state.colorMode,
+				moveHighlightColor: state.moveHighlightColor,
+				soundPack: state.soundPack,
 			}),
 		},
 	),

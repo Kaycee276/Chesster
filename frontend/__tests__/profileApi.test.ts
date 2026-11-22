@@ -109,6 +109,36 @@ describe("normalizeProfile", () => {
 		expect(profile.modes).toEqual({});
 	});
 
+	it("reads the backend recentMatches payload and preserves opening metadata", () => {
+    const profile = normalizeProfile({
+      recentMatches: [
+        { gameCode: "S", result: "win", color: "black", status: "finished", opening_name: " Sicilian Defense ", opening_eco: "b20" },
+        { gameCode: "A", result: "win", status: "active", openingName: "French Defense" },
+        { gameCode: "U", result: "draw", openingEco: "not-an-eco" },
+      ],
+    }, ADDRESS);
+    expect(profile.recentGames).toHaveLength(2);
+    expect(profile.recentGames[0]).toMatchObject({ result: "win", color: "black", openingName: "Sicilian Defense", openingEco: "B20" });
+    expect(profile.recentGames[1].openingEco).toBeUndefined();
+  });
+
+	it.each([
+    ["bullet", "bullet"], ["bullet2", "bullet"], ["blitz", "blitz"],
+    ["blitz5", "blitz"], ["rapid", "rapid"], ["rapid15", "rapid"],
+  ])("normalizes the real %s clock preset as %s", (preset, family) => {
+    const profile = normalizeProfile({
+      recentMatches: [{ gameCode: "G", result: "win", time_control_preset: preset }],
+    }, ADDRESS);
+    expect(profile.recentGames[0].mode).toBe(family);
+  });
+
+  it.each(["custom", "bullet3", "constructor"])("keeps unsupported %s presets unclassified", (preset) => {
+    const profile = normalizeProfile({
+      recentMatches: [{ gameCode: "G", result: "win", mode: preset }],
+    }, ADDRESS);
+    expect(profile.recentGames[0].mode).toBeNull();
+  });
+
 	it("handles a non-object payload", () => {
 		const profile = normalizeProfile(null, ADDRESS);
 		expect(profile.stats).toEqual({ games: 0, wins: 0, draws: 0, losses: 0 });
