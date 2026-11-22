@@ -30,6 +30,9 @@ pub const MAX_BATCH_GC_MATCHES: u32 = 25;
 pub const MAX_GC_BATCH_SIZE: u32 = MAX_BATCH_GC_MATCHES;
 /// Default duration (in seconds) after which a pending or active match expires (1 hour).
 pub const MATCH_EXPIRATION_SECS: u64 = 3_600;
+/// Seconds after creation (24 hours) before the creator of an unjoined match may cancel it
+/// unilaterally and reclaim the wager, without coordinator involvement (Issue #666).
+pub const CREATOR_CANCEL_WINDOW_SECS: u64 = 86_400;
 /// Minimum allowable match duration in seconds (2 minutes) (Issue #287).
 pub const MIN_MATCH_DURATION_SECS: u64 = 120;
 /// Maximum allowable match duration in seconds (24 hours) (Issue #287).
@@ -210,6 +213,8 @@ pub enum EscrowErrorExt {
     CooldownActive = 67,
     /// No cooldown unpause request is pending for this contract (Issue #699).
     NoPendingUnpause = 68,
+    /// The creator-cancel window for an unjoined match has not elapsed yet (Issue #666).
+    MatchNotExpired = 69,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -4317,28 +4322,59 @@ impl ChessterEscrow {
         player1.require_auth();
         let _guard = ReentrancyGuard::new(&env);
 
-        let mut m = Self::load_match(&env, &game_code);
+        let m = Self::load_match(&env, &game_code);
 
         if m.player1 != player1 {
             panic_with_error!(&env, EscrowError::Unauthorized);
         }
+        Self::refund_unjoined_match(&env, &game_code, m, Symbol::new(&env, "cancelled"));
+    }
+
+    /// Lets the creator of a match that nobody has joined cancel it and reclaim the wager once
+    /// `CREATOR_CANCEL_WINDOW_SECS` (24 hours) has passed since creation (Issue #666). This keeps
+    /// funds from staying locked when the coordinator is unavailable.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `creator` - Address of the match creator (must be `player1`).
+    /// * `game_code` - Unique match game code.
+    pub fn creator_cancel_expired_match(env: Env, creator: Address, game_code: String) {
+        creator.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
+
+        let m = Self::load_match(&env, &game_code);
+
+        if m.player1 != creator {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+        let unlock_at = m.created_at.saturating_add(CREATOR_CANCEL_WINDOW_SECS);
+        if env.ledger().timestamp() < unlock_at {
+            panic_with_error!(&env, EscrowErrorExt::MatchNotExpired);
+        }
+        Self::refund_unjoined_match(&env, &game_code, m, Symbol::new(&env, "expired"));
+    }
+
+    /// Refunds the creator's wager on a match that has not been joined, marks it `Refunded`,
+    /// and emits a `MatchCancelledEvent` with `reason`. Callers must already have required the
+    /// creator's auth and checked that the caller is the match creator.
+    fn refund_unjoined_match(env: &Env, game_code: &String, mut m: Match, reason: Symbol) {
         if m.status != MatchStatus::Pending {
-            panic_with_error!(&env, EscrowError::MatchNotPending);
+            panic_with_error!(env, EscrowError::MatchNotPending);
         }
         if m.player2.is_some() {
-            panic_with_error!(&env, EscrowError::AlreadyJoined);
+            panic_with_error!(env, EscrowError::AlreadyJoined);
         }
 
-        Self::assert_balance_invariant(&env, &m.token);
-        let token_client = token::Client::new(&env, &m.token);
+        Self::assert_balance_invariant(env, &m.token);
+        let token_client = token::Client::new(env, &m.token);
         token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
 
-        Self::sub_locked(&env, &m.token, m.total_staked);
-        Self::settle_side_bets(&env, &game_code, &m, None);
-        Self::assert_balance_invariant(&env, &m.token);
+        Self::sub_locked(env, &m.token, m.total_staked);
+        Self::settle_side_bets(env, game_code, &m, None);
+        Self::assert_balance_invariant(env, &m.token);
 
         m.status = MatchStatus::Refunded;
-        Self::remove_from_active_lists(&env, &game_code, &m);
+        Self::remove_from_active_lists(env, game_code, &m);
 
         // Update platform metrics (Issue #288)
         let mut metrics = env
@@ -4353,12 +4389,12 @@ impl ChessterEscrow {
             });
         metrics.active_matches_count = metrics.active_matches_count.saturating_sub(1);
         env.storage().persistent().set(&DataKey::Metrics, &metrics);
-        Self::bump_entry_ttl(&env, &DataKey::Metrics);
+        Self::bump_entry_ttl(env, &DataKey::Metrics);
 
-        env.storage().persistent().set(&game_code, &m);
-        Self::bump_entry_ttl(&env, &game_code);
+        env.storage().persistent().set(game_code, &m);
+        Self::bump_entry_ttl(env, game_code);
 
-        Self::emit_match_cancelled(&env, &game_code, &m, Symbol::new(&env, "cancelled"));
+        Self::emit_match_cancelled(env, game_code, &m, reason);
     }
 
     /// Requests a cooperative mutual draw for an active match (Issue #20).
@@ -6858,6 +6894,8 @@ impl ChessterEscrow {
 
 #[cfg(test)]
 mod error_tests;
+#[cfg(test)]
+mod extended_tests;
 mod test;
 #[cfg(test)]
 mod tournament_payout_tests;

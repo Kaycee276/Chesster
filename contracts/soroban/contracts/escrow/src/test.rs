@@ -10096,6 +10096,77 @@ fn test_cancel_pending_match_emits_match_cancelled_event() {
 }
 
 #[test]
+fn test_creator_cancel_expired_match_refunds_creator_after_window() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CREATOR_EXP1");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    let balance_after_deposit = s.token.balance(&s.p1);
+    let created_at = s.client.get_match(&gc).created_at;
+
+    env.ledger().set_timestamp(created_at + CREATOR_CANCEL_WINDOW_SECS);
+    s.client.creator_cancel_expired_match(&gc, &s.p1);
+
+    assert_eq!(s.token.balance(&s.p1), balance_after_deposit + 100);
+    assert_eq!(s.client.get_match(&gc).status, MatchStatus::Refunded);
+    let events = collect_cancelled_events(&env, &s.contract_id);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].reason, Symbol::new(&env, "expired"));
+}
+
+#[test]
+fn test_creator_cancel_expired_match_rejects_before_window() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CREATOR_EXP2");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    let created_at = s.client.get_match(&gc).created_at;
+
+    env.ledger()
+        .set_timestamp(created_at + CREATOR_CANCEL_WINDOW_SECS - 1);
+    let res = s.client.try_creator_cancel_expired_match(&gc, &s.p1);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(contract_error(EscrowErrorExt::MatchNotExpired as u32))
+    );
+    assert_eq!(s.client.get_match(&gc).status, MatchStatus::Pending);
+}
+
+#[test]
+fn test_creator_cancel_expired_match_rejects_joined_match() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CREATOR_EXP3");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    s.client.join_match(&gc, &s.p2);
+    let created_at = s.client.get_match(&gc).created_at;
+
+    env.ledger().set_timestamp(created_at + CREATOR_CANCEL_WINDOW_SECS);
+    let res = s.client.try_creator_cancel_expired_match(&gc, &s.p1);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(contract_error(EscrowError::MatchNotPending as u32))
+    );
+}
+
+#[test]
+fn test_creator_cancel_expired_match_rejects_non_creator() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CREATOR_EXP4");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    let created_at = s.client.get_match(&gc).created_at;
+
+    env.ledger().set_timestamp(created_at + CREATOR_CANCEL_WINDOW_SECS);
+    let res = s.client.try_creator_cancel_expired_match(&gc, &s.p2);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(contract_error(EscrowError::Unauthorized as u32))
+    );
+    assert_eq!(s.client.get_match(&gc).status, MatchStatus::Pending);
+}
+
+#[test]
 fn test_mutual_cancellation_emits_event_per_refunded_player() {
     let env = Env::default();
     let s = setup_cancel_event_test(&env);
