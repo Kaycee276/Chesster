@@ -5,6 +5,15 @@ const supabase = require("../config/supabase");
 
 const ARCHIVE_BATCH_SIZE = 5000;
 
+const { prepareMoveArchive, restoreArchivedMoves } = require("./moveArchive");
+
+const MOVE_ARCHIVE_ELIGIBILITY = `g.status IN ('finished', 'completed')
+  AND COALESCE(g.ended_at, g.updated_at) < $1 AND g.updated_at < $1
+  AND g.deleted_at IS NULL AND g.moves_archived_at IS NULL
+  AND NOT COALESCE(g.cheat_flagged, false)
+  AND NOT EXISTS (SELECT 1 FROM public.player_flags f WHERE f.game_id = g.id AND f.status = 'pending')
+  AND EXISTS (SELECT 1 FROM public.moves m WHERE m.game_id = g.id)`;
+
 function gzipJson(value) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -151,6 +160,82 @@ class ArchivalService {
     }
   }
 
+  /** Preserve move rows on the parent before pruning old terminal games. */
+  async archiveOldGameMoves({ olderThanDays = 90, batchSize = 500, dryRun = false } = {}) {
+    if (!Number.isInteger(olderThanDays) || olderThanDays < 1 || olderThanDays > 36500) {
+      throw new Error("olderThanDays must be an integer from 1 to 36500");
+    }
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 5000) {
+      throw new Error("batchSize must be an integer from 1 to 5000");
+    }
+    if (typeof dryRun !== "boolean") throw new Error("dryRun must be a boolean");
+    const now = this.now();
+    if (!(now instanceof Date) || Number.isNaN(now.valueOf())) throw new Error("A valid archival reference date is required");
+    const cutoff = new Date(now.valueOf() - olderThanDays * 86400000);
+    const pool = this.db.getPool();
+    const { rows } = await pool.query(
+      `SELECT g.* FROM public.games g WHERE ${MOVE_ARCHIVE_ELIGIBILITY}
+       ORDER BY COALESCE(g.ended_at, g.updated_at), g.id LIMIT $2`,
+      [cutoff.toISOString(), batchSize],
+    );
+    if (dryRun) return { candidates: rows.length, processed: 0, movesPruned: 0, skipped: 0, dryRun, gameIds: rows.map((game) => game.id) };
+    let processed = 0;
+    let movesPruned = 0;
+    let skipped = 0;
+    for (const candidate of rows) {
+      const result = await this.archiveMoveGame(pool, candidate.id, cutoff, now);
+      processed += result.processed;
+      movesPruned += result.movesPruned;
+      skipped += result.skipped;
+    }
+    return { candidates: rows.length, processed, movesPruned, skipped, dryRun };
+  }
+
+  async archiveMoveGame(pool, gameId, cutoff, archivedAt) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL lock_timeout = '2s'");
+      await client.query("SET LOCAL statement_timeout = '15s'");
+      // The parent FOR UPDATE lock also blocks new FK-linked move inserts.
+      const { rows: games } = await client.query(
+        `SELECT g.* FROM public.games g WHERE g.id = $2 AND ${MOVE_ARCHIVE_ELIGIBILITY}
+         FOR UPDATE OF g SKIP LOCKED`,
+        [cutoff.toISOString(), gameId],
+      );
+      if (!games.length) {
+        await client.query("COMMIT");
+        return { processed: 0, movesPruned: 0, skipped: 1 };
+      }
+      const game = games[0];
+      const { rows: moves } = await client.query(
+        "SELECT * FROM public.moves WHERE game_id = $1 ORDER BY move_number FOR UPDATE",
+        [gameId],
+      );
+      const archive = await prepareMoveArchive(game, moves);
+      if (!archive) {
+        await client.query("COMMIT");
+        return { processed: 0, movesPruned: 0, skipped: 1 };
+      }
+      const saved = await client.query(
+        "UPDATE public.games SET pgn = $2, move_archive = $3, moves_archived_at = $4 WHERE id = $1 RETURNING *",
+        [gameId, archive.pgn, archive.moveArchive, archivedAt.toISOString()],
+      );
+      if (saved.rows.length !== 1 || saved.rows[0].pgn !== archive.pgn ||
+          JSON.stringify(restoreArchivedMoves(saved.rows[0], [])) !== JSON.stringify(moves)) throw new Error("Move archive read-back verification failed");
+      const deleted = await client.query("DELETE FROM public.moves WHERE game_id = $1", [gameId]);
+      if (deleted.rowCount !== moves.length) throw new Error("Move count changed during archival");
+      await client.query("COMMIT");
+      return { processed: 1, movesPruned: deleted.rowCount, skipped: 0 };
+    } catch (error) {
+      try { await client.query("ROLLBACK"); }
+      catch (rollbackError) { throw new AggregateError([error, rollbackError], "Move archival and rollback failed"); }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   getS3Client() {
     if (this.s3Client) return this.s3Client;
     const config = { region: process.env.AWS_REGION || "us-east-1" };
@@ -213,7 +298,6 @@ class ArchivalService {
 
     return { success: true, archived, archives };
   }
-}
 
   async purgeExpiredSoftDeletedGames(retentionDays = 90, batchSize = 500) {
     if (!(retentionDays > 0)) throw new Error("Retention days must be positive");

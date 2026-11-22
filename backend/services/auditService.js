@@ -1,3 +1,4 @@
+const { restoreArchivedMoves } = require("./moveArchive");
 const crypto = require("crypto");
 const supabase = require("../config/supabase");
 const { boardToFEN } = require("./botService");
@@ -107,14 +108,14 @@ async function getGame(idOrCode) {
 	return data || null;
 }
 
-async function getMoves(gameId) {
+async function getMoves(game) {
 	const { data, error } = await supabase
 		.from("moves")
 		.select("*")
-		.eq("game_id", gameId)
+		.eq("game_id", game.id)
 		.order("move_number", { ascending: true });
 	if (error) throw new Error(error.message);
-	return data || [];
+	return restoreArchivedMoves(game, data || []);
 }
 
 async function getAuditLogs(gameId) {
@@ -247,7 +248,7 @@ function signOutcome(outcome) {
  * Moves are ordered by move number and events chronologically.
  */
 async function buildAuditPackage(game) {
-	const [moveRows, logRows] = await Promise.all([getMoves(game.id), getAuditLogs(game.id)]);
+	const [moveRows, logRows] = await Promise.all([getMoves(game), getAuditLogs(game.id)]);
 
 	// Sort audit logs chronologically for hash chain verification
 	const sortedLogRows = logRows
@@ -537,7 +538,7 @@ async function verifyMatchAuditIntegrity(gameId) {
 	const game = await getGame(gameId);
 	if (!game) throw new Error("Game not found");
 
-	const moves = await getMoves(gameId);
+	const moveRows = await getMoves(game);
 	const pkg = await buildAuditPackage(game);
 
 	if (!pkg || !pkg.integrity) {
@@ -545,6 +546,7 @@ async function verifyMatchAuditIntegrity(gameId) {
 	}
 
 	const expectedHash = pkg.integrity.outcome.movesDigest;
+	const moves = buildMoves(game, moveRows, pkg.events);
 	const calculatedHash = sha256(canonicalJson(moves));
 	const verified = expectedHash === calculatedHash;
 

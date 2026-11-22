@@ -47,7 +47,7 @@ function tokenLabel(addr: string | null | undefined): string {
   if (addr === NATIVE_XLM) return "XLM";
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useId } from "react";
 import { useNavigate } from "react-router-dom";
 import type { AnnotationArrow, AnnotationColor, SquareHighlight } from "../types/chess";
 import { BoardAnnotations } from "./BoardAnnotations";
@@ -59,7 +59,8 @@ import {
   movesToPgn,
 } from "../utils/chessUtils";
 import { getGameOutcome } from "../utils/gameResult";
-import { squareAriaLabel } from "../utils/boardA11y";
+import { getNextBoardSquare, getSquareAriaLabel, squareAriaLabel, squareName } from "../utils/boardA11y";
+import { useBoardAnnouncements } from "../hooks/useBoardAnnouncements";
 import { socketService } from "../api/socket";
 import PromotionModal from "./PromotionModal";
 import ConfirmModal from "./ConfirmModal";
@@ -413,6 +414,7 @@ function ChessBoardInner() {
   );
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [flipped, setFlipped] = useState(false);
+  const isBoardRotated = (playerColor === "black") !== flipped;
   const [isPeeking, setIsPeeking] = useState(false);
   const peekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -492,6 +494,8 @@ function ChessBoardInner() {
   // SAN command bar. Announcements go through a polite live region.
   const [cursor, setCursor] = useState<[number, number] | null>(null);
   const [boardAnnouncement, setBoardAnnouncement] = useState("");
+  const keyboardHelpId = useId();
+  const gameAnnouncements = useBoardAnnouncements();
   const moveInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Piece move animation ───────────────────────────────────────────────────
@@ -666,6 +670,7 @@ function ChessBoardInner() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
+      if (e.defaultPrevented || target?.closest("[role=dialog], button, a, select")) return;
       if (
         target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
@@ -691,7 +696,11 @@ function ChessBoardInner() {
         if (e.shiftKey) {
           toggleFullscreen();
         } else {
+          const focusedSquare = target?.closest("[role=gridcell]")?.getAttribute("data-testid");
           setFlipped((prev) => !prev);
+          if (focusedSquare) requestAnimationFrame(() => {
+            boardGridRef.current?.querySelector<HTMLElement>(`[data-testid="${focusedSquare}"]`)?.focus();
+          });
         }
         return;
       }
@@ -713,7 +722,7 @@ function ChessBoardInner() {
       if (e.key === " " || e.key === "Spacebar") {
         // Focus the board so arrow keys and square activation work.
         e.preventDefault();
-        boardGridRef.current?.focus();
+        boardGridRef.current?.querySelector<HTMLElement>('[role="gridcell"][tabindex="0"]')?.focus();
         return;
       }
 
@@ -846,6 +855,7 @@ function ChessBoardInner() {
     const clampedRow = Math.max(0, Math.min(7, row));
     const clampedCol = Math.max(0, Math.min(7, col));
     setCursor([clampedRow, clampedCol]);
+    boardGridRef.current?.querySelector<HTMLElement>(`[data-testid="square-${clampedRow}-${clampedCol}"]`)?.focus();
     announceCursor(clampedRow, clampedCol, false);
   };
 
@@ -989,6 +999,8 @@ function ChessBoardInner() {
 
       if (!isPossibleMove(row, col)) {
         safeHaptic("error");
+        setBoardAnnouncement("Illegal destination. Choose a legal target or press Escape to cancel.");
+        return;
       }
 
       const altKey = event && "altKey" in event ? event.altKey : false;
@@ -1015,8 +1027,8 @@ function ChessBoardInner() {
     if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null;
     const colIndex = Math.min(7, Math.floor((x / rect.width) * 8));
     const rowIndex = Math.min(7, Math.floor((y / rect.height) * 8));
-    const actualRow = playerColor === "black" ? 7 - rowIndex : rowIndex;
-    const actualCol = playerColor === "black" ? 7 - colIndex : colIndex;
+    const actualRow = isBoardRotated ? 7 - rowIndex : rowIndex;
+    const actualCol = isBoardRotated ? 7 - colIndex : colIndex;
     return [actualRow, actualCol];
   };
 
@@ -1257,8 +1269,8 @@ function ChessBoardInner() {
     if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null;
     const colIndex = Math.min(7, Math.floor((x / rect.width) * 8));
     const rowIndex = Math.min(7, Math.floor((y / rect.height) * 8));
-    const row = playerColor === "black" ? 7 - rowIndex : rowIndex;
-    const col = playerColor === "black" ? 7 - colIndex : colIndex;
+    const row = isBoardRotated ? 7 - rowIndex : rowIndex;
+    const col = isBoardRotated ? 7 - colIndex : colIndex;
     return [row, col];
   };
 
@@ -1322,7 +1334,7 @@ function ChessBoardInner() {
   };
 
   const displayBoard =
-    (playerColor === "black") !== flipped
+    isBoardRotated
       ? [...viewingBoard].reverse().map((row) => [...row].reverse())
       : viewingBoard;
 
@@ -1632,7 +1644,8 @@ function ChessBoardInner() {
 
   return (
     <div className="h-full w-full max-h-dvh max-w-dvw overflow-hidden flex flex-col bg-(--bg) select-none p-1 sm:p-2 gap-1 sm:gap-2">
-      {promotionMove && <PromotionModal onSelect={handlePromotion} color={playerColor!} />}
+      {promotionMove && <PromotionModal onSelect={handlePromotion} color={playerColor!}
+        onCancel={() => { setPromotionMove(null); selectSquare(null); setBoardAnnouncement("Promotion cancelled."); }} />}
 
       {confirmAction && (
         <ConfirmModal
@@ -1762,9 +1775,10 @@ function ChessBoardInner() {
       )}
 
       {/* ── Screen-reader announcements (#315) ── */}
-      <div role="status" aria-live="polite" className="sr-only">
-        {boardAnnouncement}
-      </div>
+      <p id={keyboardHelpId} className="sr-only">Use arrow keys to move between squares. Enter or Space selects a piece and moves it to a legal destination. Escape cancels selection. F flips the board. Z reviews the previous move.</p>
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">{boardAnnouncement}</div>
+      <div data-testid="board-move-announcement" aria-live="polite" aria-atomic="true" className="sr-only">{gameAnnouncements.move}</div>
+      <div aria-live="polite" aria-atomic="true" className="sr-only">{gameAnnouncements.clock}</div>
 
       {/* ── Top Header Bar ── */}
       <header className="shrink-0 h-11 sm:h-12 px-2.5 sm:px-3 rounded-xl bg-(--bg-secondary) border border-(--border) flex items-center justify-between gap-2 min-w-0 overflow-hidden shadow-xs">
@@ -1975,14 +1989,18 @@ function ChessBoardInner() {
                 ref={boardGridRef}
                 role="grid"
                 tabIndex={-1}
-                aria-label={`Chess board, ${moveHistory.length} moves played. Use the move input bar to type moves, arrow keys to move the square cursor, Enter to pick up or place, Z to step back, F to flip the board.`}
+                aria-label="Chessboard"
+                aria-roledescription="interactive chessboard"
+                aria-describedby={keyboardHelpId}
+                aria-rowcount={8}
+                aria-colcount={8}
                 className={`relative rounded-sm overflow-hidden shadow-2xl transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 ${isMoving ? "opacity-70" : "opacity-100"} ${dragPiece ? "cursor-grabbing" : ""}`}
                 style={
                   {
                     width: boardPx,
                     height: boardPx,
                     display: "grid",
-                    gridTemplateColumns: "repeat(8, 1fr)",
+                    gridTemplateColumns: "1fr",
                     gridTemplateRows: "repeat(8, 1fr)",
                     "--board-size": `${boardPx}px`,
                     touchAction: "none",
@@ -2003,10 +2021,12 @@ function ChessBoardInner() {
                 onPointerCancel={handlePointerCancel}
                 onTouchMove={handleTouchMove}
               >
-                {displayBoard.map((row, rowIndex) =>
-                  row.map((piece, colIndex) => {
-                    const actualRow = playerColor === "black" ? 7 - rowIndex : rowIndex;
-                    const actualCol = playerColor === "black" ? 7 - colIndex : colIndex;
+                {displayBoard.map((row, rowIndex) => (
+                  <div key={rowIndex} role="row" aria-rowindex={rowIndex + 1}
+                    style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", minHeight: 0 }}>
+                  {row.map((piece, colIndex) => {
+                    const actualRow = isBoardRotated ? 7 - rowIndex : rowIndex;
+                    const actualCol = isBoardRotated ? 7 - colIndex : colIndex;
                     const isLight = (actualRow + actualCol) % 2 === 0;
                     const selected = isSelected(actualRow, actualCol);
                     const possible = isPossibleMove(actualRow, actualCol);
@@ -2065,15 +2085,17 @@ function ChessBoardInner() {
 
                     return (
                       <div
-                        key={`${rowIndex}-${colIndex}`}
+                        key={`${actualRow}-${actualCol}`}
                         data-testid={`square-${actualRow}-${actualCol}`}
                         data-premove={isPremoveSource ? "source" : isPremoveDest ? "dest" : undefined}
                         data-drag-hover={isSnapTarget ? "legal" : undefined}
                         role="gridcell"
-                        tabIndex={0}
-                        aria-label={squareAriaLabel(piece, actualRow, actualCol)}
-                        aria-selected={selected === true || isCursor}
-                        className={`board-square relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-blue-400 focus-visible:-outline-offset-2 ${
+                        tabIndex={isCursor || (cursor === null && rowIndex === 0 && colIndex === 0) ? 0 : -1}
+                        aria-colindex={colIndex + 1}
+                        aria-label={getSquareAriaLabel(squareName(actualRow, actualCol), piece, selected === true, possible && !reviewing)}
+                        aria-selected={selected === true}
+                        onFocus={() => setCursor(previous => isSameSquare(previous, [actualRow, actualCol]) ? previous : [actualRow, actualCol])}
+                        className={`board-square relative flex items-center justify-center cursor-pointer transition-[filter] hover:brightness-110 focus-visible:outline-2 focus-visible:outline-black focus-visible:-outline-offset-4 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white ${
                           isLight ? "bg-(--sq-light)" : "bg-(--sq-dark)"
                         } ${selected ? "square-selected bg-yellow-400/75" : ""} ${
                           isKingInCheck ? "square-check bg-red-500/80" : ""
@@ -2089,8 +2111,9 @@ function ChessBoardInner() {
                             ? { animation: "captureFlash 0.4s ease-out forwards" }
                             : undefined
                         }
-                        onClick={(e) => handleSquareClick(actualRow, actualCol, e)}
+                        onClick={(e) => { moveCursor(actualRow, actualCol); void handleSquareClick(actualRow, actualCol, e); }}
                         onKeyDown={(e) => {
+                          if (e.ctrlKey || e.metaKey || (e.altKey && e.key !== "Enter")) return;
                           // Arrow keys move the square cursor (#315); the cursor is
                           // clamped to the grid so screen-reader users never lose
                           // their position.
@@ -2102,19 +2125,25 @@ function ChessBoardInner() {
                           ) {
                             e.preventDefault();
                             e.stopPropagation();
-                            const dRow = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
-                            const dCol =
-                              e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
-                            moveCursor(actualRow + dRow, actualCol + dCol);
+                            const [nextRow, nextCol] = getNextBoardSquare([actualRow, actualCol], e.key, isBoardRotated);
+                            moveCursor(nextRow, nextCol);
                             return;
                           }
                           // Enter/Space activate a square, mirroring a click, so the
                           // board is fully playable from the keyboard (#134, #315).
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            selectSquare(null);
+                            clearPremove();
+                            setBoardAnnouncement("Selection cancelled.");
+                          }
                           if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
                             e.preventDefault();
+                            e.stopPropagation();
                             setCursor([actualRow, actualCol]);
-                            announceCursor(actualRow, actualCol, false);
-                            handleSquareClick(actualRow, actualCol, e);
+                            announceCursor(actualRow, actualCol, !selected && isPlayerPiece(piece) && status === "active" && !reviewing);
+                            void handleSquareClick(actualRow, actualCol, e);
                           }
                         }}
                         onTouchStart={(e) => handleTouchStart(e, actualRow, actualCol)}
@@ -2132,21 +2161,19 @@ function ChessBoardInner() {
                         onPointerDown={(e) => handlePiecePointerDown(e, actualRow, actualCol)}
                       >
                         {/* Rank number on leftmost squares */}
-                        {actualCol === 0 && (
+                        {colIndex === 0 && (
                           <span
                             className={`absolute top-0.5 left-1 font-bold pointer-events-none select-none z-10 ${isStreamerMode ? "text-sm sm:text-base text-yellow-300 font-extrabold" : "text-[10px] text-gray-500 dark:text-gray-400 opacity-75"}`}
                           >
-                            {playerColor === "black" ? actualRow + 1 : 8 - actualRow}
+                            {8 - actualRow}
                           </span>
                         )}
                         {/* File letter on bottommost squares */}
-                        {actualRow === 7 && (
+                        {rowIndex === 7 && (
                           <span
                             className={`absolute bottom-0.5 right-1 font-bold pointer-events-none select-none z-10 ${isStreamerMode ? "text-sm sm:text-base text-yellow-300 font-extrabold" : "text-[10px] text-gray-500 dark:text-gray-400 opacity-75"}`}
                           >
-                            {String.fromCharCode(
-                              97 + (playerColor === "black" ? 7 - actualCol : actualCol)
-                            )}
+                            {String.fromCharCode(97 + actualCol)}
                           </span>
                         )}
                         {/* Legal-move marker: dot on empty squares, ring on captures (#123) */}
@@ -2212,16 +2239,19 @@ function ChessBoardInner() {
                         )}
                       </div>
                     );
-                  })
-                )}
-                {/* Right-click annotation overlay: arrows & square highlights (#252, #536) */}
+                  })}
+                  </div>
+                ))}
+                {/* Decorative annotations are excluded from the grid accessibility tree. */}
+                <div aria-hidden="true" className="absolute inset-0 pointer-events-none">
                 <BoardAnnotations
                   boardPx={boardPx}
-                  playerColor={playerColor}
+                  playerColor={isBoardRotated ? "black" : "white"}
                   highlights={highlights}
                   arrows={arrows}
                   premove={queuedPremove}
                 />
+                </div>
               </div>
             )}
             {/* Dragged ghost piece follows the pointer, elevated above the board (#253, #439) */}

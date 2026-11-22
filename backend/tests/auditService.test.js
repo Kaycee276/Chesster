@@ -713,3 +713,63 @@ describe("Hash Chain Verification (auditHashUtil)", () => {
 	});
 });
 
+
+describe("auditService retained move archives", () => {
+  const { prepareMoveArchive } = require("../services/moveArchive");
+  let fixture;
+  let game;
+  let rows;
+
+  beforeEach(() => {
+    supabase.__reset();
+    fixture = auditFixture();
+    rows = fixture.moves.filter((move) => move.game_id === GAME_ID)
+      .sort((left, right) => left.move_number - right.move_number);
+    game = { ...fixture.game, move_count: rows.length };
+    supabase.__setTable("games", [game]);
+    supabase.__setTable("moves", rows);
+    supabase.__setTable("match_audit_logs", fixture.auditLogs);
+  });
+
+  async function retainMoves() {
+    const archive = await prepareMoveArchive(game, rows);
+    expect(archive).not.toBeNull();
+    const retained = { ...game, pgn: archive.pgn, move_archive: archive.moveArchive,
+      moves_archived_at: "2026-11-22T12:00:00.000Z" };
+    supabase.__setTable("games", [retained]);
+    supabase.__setTable("moves", []);
+    return retained;
+  }
+
+  test("pruning preserves the signed audit evidence, FEN and CSV timeline", async () => {
+    const before = await auditService.exportMatchAudit(GAME_ID);
+    await retainMoves();
+    const after = await auditService.exportMatchAudit(GAME_ID);
+
+    expect(after.moves).toEqual(before.moves);
+    expect(after.events).toEqual(before.events);
+    expect(after.summary).toEqual(before.summary);
+    expect(after.summary.totalMoves).toBe(rows.length);
+    expect(after.match.finalFen).toBe(before.match.finalFen);
+    expect(after.integrity.outcome).toEqual(before.integrity.outcome);
+    expect(after.integrity.outcome.movesDigest).toBe(before.integrity.outcome.movesDigest);
+    expect(after.integrity.signature).toBe(before.integrity.signature);
+    expect(auditService.toCsv(after)).toBe(auditService.toCsv(before));
+    expect(auditService.verifyAuditPackage(after)).toBe(true);
+  });
+
+  test("move-chain verification uses the signed move representation before and after archival", async () => {
+    const before = await auditService.verifyMatchAuditIntegrity(GAME_ID);
+    expect(before).toMatchObject({ verified: true, moveCount: rows.length });
+    expect(before.calculatedHash).toBe(before.expectedHash);
+    await retainMoves();
+    expect(await auditService.verifyMatchAuditIntegrity(GAME_ID)).toEqual(before);
+  });
+
+  test("a corrupt retained archive rejects export instead of signing zero moves", async () => {
+    const retained = await retainMoves();
+    supabase.__setTable("games", [{ ...retained, move_archive: "gzip:invalid" }]);
+    await expect(auditService.exportMatchAudit(GAME_ID)).rejects.toThrow(/move archive/i);
+    await expect(auditService.verifyMatchAuditIntegrity(GAME_ID)).rejects.toThrow(/move archive/i);
+  });
+});

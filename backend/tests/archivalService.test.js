@@ -250,3 +250,144 @@ describe("ArchivalService soft-delete retention purge", () => {
     await expect(service.purgeExpiredSoftDeletedGames(90, 500)).rejects.toThrow("query failed");
   });
 });
+
+describe("ArchivalService bounded move retention", () => {
+  const chessEngine = require("../services/chessEngine");
+  const { restoreArchivedMoves } = require("../services/moveArchive");
+
+  function fixture() {
+    const initial = chessEngine.initBoard();
+    const afterWhite = chessEngine.makeMove(initial, [6, 4], [4, 4]);
+    const finalBoard = chessEngine.makeMove(afterWhite, [1, 4], [3, 4]);
+    const game = {
+      id: "00000000-0000-0000-0000-000000000001", game_code: "ARCH01",
+      status: "finished", winner: "draw", move_count: 2, board_state: finalBoard,
+      current_turn: "white", ended_at: "2026-06-01T12:00:00Z",
+      updated_at: "2026-06-01T12:00:00Z", created_at: "2026-06-01T11:00:00Z",
+      game_started_at: "2026-06-01T11:00:00Z", time_control_seconds: 600,
+      pgn: null, move_archive: null, moves_archived_at: null,
+    };
+    const moves = [
+      { id: "move-1", game_id: game.id, move_number: 1, player: "white", piece: "P",
+        from_position: [6, 4], to_position: [4, 4], board_state_after: afterWhite,
+        created_at: "2026-06-01T11:00:10Z", evaluation_cp: 17 },
+      { id: "move-2", game_id: game.id, move_number: 2, player: "black", piece: "p",
+        from_position: [1, 4], to_position: [3, 4], board_state_after: finalBoard,
+        created_at: "2026-06-01T11:00:20Z", promotion: null },
+    ];
+    return { game, moves };
+  }
+
+  function setup({ missing = false, deleteFails = false, updateFails = false, movesOverride } = {}) {
+    const original = fixture();
+    let state = { game: { ...original.game }, moves: movesOverride || original.moves };
+    let snapshot;
+    const client = {
+      query: jest.fn(async (sql, params) => {
+        if (sql === "BEGIN") { snapshot = state; return { rows: [] }; }
+        if (sql === "ROLLBACK") { state = snapshot; return { rows: [] }; }
+        if (sql.startsWith("SELECT g.*")) return { rows: missing ? [] : [state.game] };
+        if (sql.startsWith("SELECT * FROM public.moves")) return { rows: state.moves };
+        if (sql.startsWith("UPDATE public.games")) {
+          if (updateFails) throw new Error("save failed");
+          state = { ...state, game: { ...state.game, pgn: params[1], move_archive: params[2], moves_archived_at: params[3] } };
+          return { rows: [state.game], rowCount: 1 };
+        }
+        if (sql.startsWith("DELETE FROM public.moves")) {
+          if (deleteFails) throw new Error("delete failed");
+          const count = state.moves.length;
+          state = { ...state, moves: [] };
+          return { rows: [], rowCount: count };
+        }
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    const pool = {
+      query: jest.fn(async () => ({ rows: [state.game] })),
+      connect: jest.fn().mockResolvedValue(client),
+    };
+    const service = new ArchivalService({ db: { getPool: () => pool }, now: () => new Date("2026-11-22T12:00:00Z") });
+    return { service, pool, client, original, state: () => state };
+  }
+
+  test("saves verified PGN and compressed complete replay before deleting moves", async () => {
+    const { service, client, original, state } = setup();
+    const result = await service.archiveOldGameMoves();
+    expect(result).toMatchObject({ processed: 1, movesPruned: 2, candidates: 1, dryRun: false });
+    expect(state().game.pgn).toContain("e4");
+    expect(state().game.pgn).toContain("e5");
+    expect(state().moves).toEqual([]);
+    expect(restoreArchivedMoves(state().game, [])).toEqual(original.moves);
+    const sql = client.query.mock.calls.map(([query]) => query);
+    expect(sql.findIndex((query) => query.startsWith("UPDATE public.games")))
+      .toBeLessThan(sql.findIndex((query) => query.startsWith("DELETE FROM public.moves")));
+    expect(sql).toEqual(expect.arrayContaining(["BEGIN", "COMMIT"]));
+    expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
+  test("dry run returns bounded candidates without a write transaction", async () => {
+    const { service, pool, state, original } = setup();
+    const result = await service.archiveOldGameMoves({ olderThanDays: 120, batchSize: 12, dryRun: true });
+    expect(result).toMatchObject({ candidates: 1, processed: 0, movesPruned: 0, dryRun: true });
+    expect(pool.connect).not.toHaveBeenCalled();
+    expect(pool.query.mock.calls[0][1][1]).toBe(12);
+    expect(pool.query.mock.calls[0][0]).toContain("g.status IN ('finished', 'completed')");
+    expect(pool.query.mock.calls[0][0]).toContain("COALESCE(g.ended_at, g.updated_at)");
+    expect(pool.query.mock.calls[0][0]).toContain("g.updated_at < $1");
+    expect(state().game).toEqual(original.game);
+    expect(state().moves).toEqual(original.moves);
+  });
+
+  test("rechecks terminal status and age under a game lock and skips changed candidates", async () => {
+    const { service, client, state } = setup({ missing: true });
+    expect(await service.archiveOldGameMoves()).toMatchObject({ processed: 0 });
+    const query = client.query.mock.calls.find(([sql]) => sql.startsWith("SELECT g.*"))[0];
+    expect(query).toContain("FOR UPDATE OF g SKIP LOCKED");
+    expect(query).toContain("g.moves_archived_at IS NULL");
+    expect(query).toContain("g.deleted_at IS NULL");
+    expect(client.query.mock.calls.some(([sql]) => sql.startsWith("DELETE"))).toBe(false);
+    expect(state().moves).toHaveLength(2);
+  });
+
+  test.each(["update", "delete"])("rolls back archive and rows if %s fails", async (stage) => {
+    const { service, client, original, state } = setup({ updateFails: stage === "update", deleteFails: stage === "delete" });
+    await expect(service.archiveOldGameMoves()).rejects.toThrow(stage === "update" ? "save failed" : "delete failed");
+    expect(client.query).toHaveBeenLastCalledWith("ROLLBACK");
+    expect(state().game).toEqual(original.game);
+    expect(state().moves).toEqual(original.moves);
+    expect(client.release).toHaveBeenCalledTimes(1);
+  });
+
+  test("retains incomplete or inconsistent move sequences", async () => {
+    const { service, client, state } = setup({ movesOverride: fixture().moves.slice(1) });
+    const result = await service.archiveOldGameMoves();
+    expect(result).toMatchObject({ processed: 0, skipped: 1, movesPruned: 0 });
+    expect(state().moves).toHaveLength(1);
+    expect(client.query.mock.calls.some(([sql]) => sql.startsWith("DELETE"))).toBe(false);
+  });
+
+  test("subsequent runs skip games whose move rows were already archived", async () => {
+    const { service, pool, state } = setup();
+    await service.archiveOldGameMoves();
+    pool.query.mockResolvedValueOnce({ rows: [] });
+    expect(await service.archiveOldGameMoves()).toMatchObject({ processed: 0, candidates: 0 });
+    expect(restoreArchivedMoves(state().game, [])).toHaveLength(2);
+  });
+
+  test.each([
+    { olderThanDays: 0 }, { olderThanDays: -1 }, { olderThanDays: NaN },
+    { olderThanDays: "90" }, { batchSize: 0 }, { batchSize: 5001 },
+    { batchSize: 1.5 }, { dryRun: "false" },
+  ])("rejects unsafe options before connecting: %p", async (options) => {
+    const { service, pool } = setup();
+    await expect(service.archiveOldGameMoves(options)).rejects.toThrow(/olderThanDays|batchSize|dryRun/);
+    expect(pool.query).not.toHaveBeenCalled();
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  test("corrupted archive fails loudly instead of returning an empty replay", async () => {
+    expect(() => restoreArchivedMoves({ moves_archived_at: "2026-11-22", move_archive: "invalid", move_count: 2 }, []))
+      .toThrow(/move archive/i);
+  });
+});
