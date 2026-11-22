@@ -42,7 +42,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/license-checker" --ignore-scripts --no-audit --no-fund license-checker@25.0.1
 
       - name: Cache pnpm store
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.local/share/pnpm/store
           key: pnpm-11.18.0-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('pnpm-lock.yaml', 'backend/pnpm-lock.yaml', 'frontend/pnpm-lock.yaml') }}
@@ -114,7 +114,7 @@ jobs:
           persist-credentials: false
 
       - name: Cache Rust audit dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
