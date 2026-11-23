@@ -183,7 +183,7 @@ jobs:
           key: ${{ runner.os }}-cargo-release-wasm-${{ hashFiles('contracts/soroban/Cargo.lock') }}
 
       - name: Install Tools (cargo-tarpaulin & stellar-cli)
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-tarpaulin, stellar-cli
 
@@ -342,7 +342,7 @@ jobs:
             ./base/contracts/soroban
 
       - name: Install stellar-cli
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: stellar-cli
 
