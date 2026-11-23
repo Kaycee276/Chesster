@@ -31,6 +31,8 @@ pub const DEFAULT_MIN_WAGER: i128 = 1;
 pub const DEFAULT_MAX_WAGER: i128 = i128::MAX;
 /// Maximum allowable tournament fee in basis points (500 bps = 5%) (Issue #221).
 pub const MAX_TOURNAMENT_FEE_BPS: u32 = 500;
+/// Maximum allowable protocol fee in basis points (1,000 bps = 10%) (Issue #790).
+pub const MAX_PROTOCOL_FEE_BPS: u32 = 1000;
 /// Basis points denominator (10,000 bps = 100%) (Issue #221).
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
@@ -67,8 +69,8 @@ pub enum EscrowError {
     InsufficientFunds = 12,
     /// Player has reached maximum active matches limit (5).
     MaxActiveMatchesReached = 13,
-    /// Tournament status or parameter is invalid.
-    InvalidTournament = 14,
+    /// Maximum allowable protocol fee in basis points (1000 bps = 10%) (Issue #790).
+    FeeExceedsMaximum = 14,
     /// Side bet entry was not found.
     SideBetNotFound = 15,
     /// Match side pool is closed for new bets.
@@ -137,8 +139,18 @@ pub enum EscrowError {
     NoCancellationProposed = 47,
     /// Player cannot confirm their own cancellation proposal (Issue #290).
     CannotConfirmOwnProposal = 48,
+    /// Tournament status or parameter is invalid.
+    InvalidTournament = 49,
+}
+
+/// Additional escrow errors. Soroban's contract spec caps a `#[contracterror]` enum at
+/// 50 cases and `EscrowError` is full, so new codes continue here from 50 upward.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum EscrowErrorExt {
     /// Caller is not an authorized participant in this match (Issue #290).
-    UnauthorizedPlayer = 49,
+    UnauthorizedPlayer = 50,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -742,6 +754,10 @@ pub enum DataKey {
     AccountNonce(Address),
     /// Emergency drain schedule (recipient, unlock_time) (Issue #285).
     DrainSchedule,
+    /// Designated contract administrator for protocol fee configuration (Issue #790).
+    Admin,
+    /// Configured protocol fee in basis points (Issue #790).
+    ProtocolFeeBps,
 }
 
 /// Aggregated operational metrics for off-chain indexing and monitoring (Issue #288).
@@ -774,6 +790,10 @@ impl ChessterEscrow {
         env.storage()
             .instance()
             .set(&symbol_short!("fee"), &admin_bps);
+        env.storage().instance().set(&DataKey::Admin, &coordinator);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProtocolFeeBps, &admin_bps);
 
         let mut signers = Vec::new(&env);
         signers.push_back(coordinator);
@@ -1304,6 +1324,52 @@ impl ChessterEscrow {
         env.storage()
             .instance()
             .set(&symbol_short!("fee"), &fee_bps);
+    }
+
+    /// Sets the protocol fee deducted from wager pots, enforcing an immutable ceiling (Issue #790).
+    ///
+    /// Validates that `admin` matches the stored administrator address and that `new_fee_bps`
+    /// does not exceed `MAX_PROTOCOL_FEE_BPS` (1,000 bps = 10.00%).
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `admin` - Contract administrator address.
+    /// * `new_fee_bps` - New protocol fee in basis points (max 1000 = 10%).
+    ///
+    /// # Returns
+    /// * `Ok(())` on success.
+    /// * `Err(EscrowError::NotInitialized)` if contract is uninitialized.
+    /// * `Err(EscrowError::Unauthorized)` if caller is not the administrator.
+    /// * `Err(EscrowError::FeeExceedsMaximum)` if new fee exceeds 1000 bps.
+    pub fn set_protocol_fee(env: Env, admin: Address, new_fee_bps: u32) -> Result<(), EscrowError> {
+        admin.require_auth();
+        let current_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .or_else(|| env.storage().instance().get(&symbol_short!("coord")))
+            .ok_or(EscrowError::NotInitialized)?;
+        if admin != current_admin {
+            return Err(EscrowError::Unauthorized);
+        }
+        if new_fee_bps > MAX_PROTOCOL_FEE_BPS {
+            return Err(EscrowError::FeeExceedsMaximum);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ProtocolFeeBps, &new_fee_bps);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("fee"), &new_fee_bps);
+        Ok(())
+    }
+
+    /// Retrieves configured protocol fee basis points (Issue #790).
+    pub fn get_protocol_fee_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ProtocolFeeBps)
+            .unwrap_or_else(|| Self::get_fee_bps(env))
     }
 
     /// Calculates platform fee basis points based on wager amount tiering (Issue #19).
@@ -3705,7 +3771,7 @@ impl ChessterEscrow {
         }
 
         if player != m.player1 && Some(player.clone()) != m.player2 {
-            panic_with_error!(&env, EscrowError::UnauthorizedPlayer);
+            panic_with_error!(&env, EscrowErrorExt::UnauthorizedPlayer);
         }
 
         m.cancellation_proposed_by = Some(player);
@@ -3739,7 +3805,7 @@ impl ChessterEscrow {
         }
 
         if opponent != m.player1 && Some(opponent.clone()) != m.player2 {
-            panic_with_error!(&env, EscrowError::UnauthorizedPlayer);
+            panic_with_error!(&env, EscrowErrorExt::UnauthorizedPlayer);
         }
 
         Self::execute_refund(&env, &game_code, &mut m);
@@ -3776,7 +3842,7 @@ impl ChessterEscrow {
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::NoCancellationProposed));
 
         if proposer != player {
-            panic_with_error!(&env, EscrowError::UnauthorizedPlayer);
+            panic_with_error!(&env, EscrowErrorExt::UnauthorizedPlayer);
         }
 
         m.cancellation_proposed_by = None;
