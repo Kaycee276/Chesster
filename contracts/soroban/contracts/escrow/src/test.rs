@@ -2259,6 +2259,69 @@ fn test_set_fee_bps_requires_coordinator_auth() {
 }
 
 #[test]
+fn test_set_protocol_fee_ceiling_and_validation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&admin, &500);
+
+    // Setting fee to 250 (2.5%) succeeds.
+    let res_250 = client.try_set_protocol_fee(&admin, &250);
+    assert_eq!(res_250, Ok(Ok(())));
+    assert_eq!(client.get_protocol_fee_bps(), 250);
+
+    // Setting fee to 1000 (10.0%) succeeds.
+    let res_1000 = client.try_set_protocol_fee(&admin, &1000);
+    assert_eq!(res_1000, Ok(Ok(())));
+    assert_eq!(client.get_protocol_fee_bps(), 1000);
+
+    // Setting fee to 1001 (10.01%) returns Err(EscrowError::FeeExceedsMaximum).
+    let res_1001 = client.try_set_protocol_fee(&admin, &1001);
+    assert_eq!(res_1001, Err(Ok(EscrowError::FeeExceedsMaximum)));
+    // Ensure the fee was not updated beyond the ceiling
+    assert_eq!(client.get_protocol_fee_bps(), 1000);
+
+    // Also assert direct invocation returning Err(EscrowError::FeeExceedsMaximum)
+    assert_eq!(
+        ChessterEscrow::set_protocol_fee(env.clone(), admin.clone(), 250),
+        Ok(())
+    );
+    assert_eq!(
+        ChessterEscrow::set_protocol_fee(env.clone(), admin.clone(), 1000),
+        Ok(())
+    );
+    assert_eq!(
+        ChessterEscrow::set_protocol_fee(env.clone(), admin.clone(), 1001),
+        Err(EscrowError::FeeExceedsMaximum)
+    );
+}
+
+#[test]
+fn test_set_protocol_fee_auth_and_uninitialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    // Uninitialized contract returns NotInitialized
+    let res_uninit = client.try_set_protocol_fee(&admin, &250);
+    assert_eq!(res_uninit, Err(Ok(EscrowError::NotInitialized)));
+
+    client.init(&admin, &500);
+
+    // Non-admin caller returns Unauthorized
+    let res_unauth = client.try_set_protocol_fee(&non_admin, &250);
+    assert_eq!(res_unauth, Err(Ok(EscrowError::Unauthorized)));
+}
+
+#[test]
 fn test_contract_storage_ttl_auto_extension() {
     let env = Env::default();
     env.mock_all_auths();
