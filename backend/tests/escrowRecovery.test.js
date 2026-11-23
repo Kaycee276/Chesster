@@ -369,4 +369,117 @@ describe("Escrow Recovery Simulation Tests", () => {
       }
     });
   });
+
+  describe("Dead-Letter Queue (DLQ) & Idempotent Retry Worker (Issue #748)", () => {
+    const escrowDeadLetterWorker = require("../workers/escrowDeadLetterWorker");
+
+    let mockRedis;
+
+    beforeEach(() => {
+      mockRedis = {
+        rpush: jest.fn().mockResolvedValue(1),
+        lpop: jest.fn().mockResolvedValue(null),
+      };
+    });
+
+    it("idempotency check: clears retry without re-submitting if match is already settled on-chain", async () => {
+      jest.spyOn(escrowService, "getMatch").mockResolvedValueOnce({
+        status: 2, // RESOLVED / SETTLED
+        createdAt: 1000n,
+      });
+
+      const res = await escrowDeadLetterWorker.processEscrowRetry(
+        { matchId: "MATCH_ALREADY_SETTLED", action: "resolve", winner: "PLAYER1", attempts: 1 },
+        mockRedis
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.alreadySettled).toBe(true);
+      expect(mockRedis.rpush).not.toHaveBeenCalled();
+    });
+
+    it("escalates to queue:escrow:dead and ESCALATED_MANUAL_REVIEW after 5 failed retries", async () => {
+      jest.spyOn(escrowService, "getMatch").mockResolvedValueOnce({
+        status: 1, // ACTIVE
+        createdAt: 1000n,
+      });
+
+      const updateSpy = jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({}) });
+      jest.spyOn(supabase, "from").mockReturnValue({ update: updateSpy });
+
+      const res = await escrowDeadLetterWorker.processEscrowRetry(
+        { matchId: "MATCH_EXHAUSTED", action: "resolve", winner: "PLAYER1", attempts: 5 },
+        mockRedis
+      );
+
+      expect(res.success).toBe(false);
+      expect(res.exhausted).toBe(true);
+      expect(mockRedis.rpush).toHaveBeenCalledWith(
+        "queue:escrow:dead",
+        expect.stringContaining("Exhausted 5 settlement retries")
+      );
+      expect(updateSpy).toHaveBeenCalledWith({ escrow_status: "ESCALATED_MANUAL_REVIEW" });
+    });
+
+    it("recovers transient failure with refreshed sequence number and marks settled", async () => {
+      jest.spyOn(escrowService, "getMatch").mockResolvedValueOnce({
+        status: 1, // ACTIVE
+        createdAt: 1000n,
+      });
+
+      jest.spyOn(escrowService, "resolveWithWinner").mockResolvedValueOnce({
+        hash: "recovered-tx-hash-123",
+      });
+
+      const updateSpy = jest.fn().mockReturnValue({ eq: jest.fn().mockResolvedValue({}) });
+      jest.spyOn(supabase, "from").mockReturnValue({ update: updateSpy });
+
+      const res = await escrowDeadLetterWorker.processEscrowRetry(
+        { matchId: "MATCH_TRANSIENT_RECOVER", action: "resolve", winner: "PLAYER1", winnerAddress: "PLAYER1_ADDR", attempts: 2 },
+        mockRedis
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.receipt.hash).toBe("recovered-tx-hash-123");
+      expect(updateSpy).toHaveBeenCalledWith({
+        escrow_status: "settled",
+        escrow_resolve_tx: "recovered-tx-hash-123",
+      });
+    });
+
+    it("re-enqueues to queue:escrow:retry with incremented attempts when recoverable error occurs", async () => {
+      jest.spyOn(escrowService, "getMatch").mockResolvedValueOnce({
+        status: 1, // ACTIVE
+        createdAt: 1000n,
+      });
+
+      jest.spyOn(escrowService, "resolveWithWinner").mockRejectedValueOnce(new Error("tx_bad_seq"));
+
+      const res = await escrowDeadLetterWorker.processEscrowRetry(
+        { matchId: "MATCH_RETRYABLE_FAIL", action: "resolve", winner: "PLAYER1", winnerAddress: "PLAYER1_ADDR", attempts: 1 },
+        mockRedis
+      );
+
+      expect(res.success).toBe(false);
+      expect(res.retryScheduled).toBe(true);
+      expect(res.attempts).toBe(2);
+      expect(mockRedis.rpush).toHaveBeenCalledWith(
+        "queue:escrow:retry",
+        expect.stringContaining("tx_bad_seq")
+      );
+    });
+
+    it("enqueueEscrowRetry helper serializes intent into Redis queue", async () => {
+      const enqueued = await escrowService.enqueueEscrowRetry(
+        { matchId: "GAME_ENQUEUE_TEST", action: "resolve", winner: "white" },
+        mockRedis
+      );
+
+      expect(enqueued).toBe(true);
+      expect(mockRedis.rpush).toHaveBeenCalledWith(
+        "queue:escrow:retry",
+        expect.stringContaining("GAME_ENQUEUE_TEST")
+      );
+    });
+  });
 });

@@ -101,4 +101,40 @@ function getPubSubClients() {
 	return { pubClient, subClient };
 }
 
-module.exports = { getRedisClient, getRedisConnection, closeRedis, getPubSubClients };
+/** Push item to a Redis queue/list (RPUSH). */
+async function pushQueue(queueName, item) {
+	const redis = getRedisClient();
+	if (!redis) return false;
+	const payload = typeof item === "string" ? item : JSON.stringify(item);
+	return await redis.rpush(queueName, payload);
+}
+
+/** Pop item from a Redis queue/list (LPOP). */
+async function popQueue(queueName) {
+	const redis = getRedisClient();
+	if (!redis) return null;
+	const res = await redis.lpop(queueName);
+	if (!res) return null;
+	try {
+		return JSON.parse(res);
+	} catch (_) {
+		return res;
+	}
+}
+
+/** Get length of a Redis queue/list (LLEN). */
+async function getQueueLength(queueName) {
+	const redis = getRedisClient();
+	if (!redis) return 0;
+	return await redis.llen(queueName);
+}
+
+module.exports = {
+	getRedisClient,
+	getRedisConnection,
+	closeRedis,
+	getPubSubClients,
+	pushQueue,
+	popQueue,
+	getQueueLength,
+};

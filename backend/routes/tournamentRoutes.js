@@ -6,7 +6,14 @@ const {
 	listTournamentsSchema,
 	tournamentIdSchema,
 	registerPlayerSchema,
+	matchAuditTrailParamsSchema,
 } = require("../middleware/validateTournament");
+
+router.get(
+	"/tournaments/:tournamentId/matches/:matchId/audit-trail",
+	validate(matchAuditTrailParamsSchema, "params"),
+	tournamentController.getMatchAuditTrail,
+);
 
 router.get(
 	"/tournaments",

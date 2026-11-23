@@ -240,6 +240,54 @@ class TournamentController {
 	registrationMessage(walletAddress) {
 		return `Chesster tournament registration\naddress: ${walletAddress}`;
 	}
+
+	/** GET /api/tournaments/:tournamentId/matches/:matchId/audit-trail */
+	async getMatchAuditTrail(req, res, next) {
+		try {
+			const { tournamentId, matchId } = req.validated?.params || req.params;
+			const auditService = require("../services/auditService");
+			const supabase = require("../config/supabase");
+
+			let match = await tournamentModel.getMatchById(matchId);
+			const gameId = match?.game_code || match?.game_id || matchId;
+
+			const { data: moveRows } = await supabase
+				.from("moves")
+				.select("*")
+				.eq("game_id", gameId)
+				.order("move_number", { ascending: true });
+
+			const moves = (moveRows || []).map((m, idx) => ({
+				idx,
+				ply: m.move_number !== undefined ? m.move_number : idx + 1,
+				uci: m.uci || (m.from_position && m.to_position ? `${m.from_position}${m.to_position}` : ""),
+				timestamp: m.created_at || (m.timestamp !== undefined ? m.timestamp : new Date().toISOString()),
+				whiteClock: m.white_clock !== undefined ? m.white_clock : (m.whiteClock !== undefined ? m.whiteClock : 300),
+				blackClock: m.black_clock !== undefined ? m.black_clock : (m.blackClock !== undefined ? m.blackClock : 300),
+				from: m.from_position,
+				to: m.to_position,
+				piece: m.piece,
+			}));
+
+			const serverKeypair = process.env.COORDINATOR_SECRET_KEY
+				? Keypair.fromSecret(process.env.COORDINATOR_SECRET_KEY)
+				: Keypair.random();
+
+			const manifest = auditService.generateAuditManifest(
+				{ id: matchId, tournamentId },
+				moves,
+				serverKeypair
+			);
+
+			res.json({
+				success: true,
+				...manifest,
+				manifest,
+			});
+		} catch (error) {
+			next(error);
+		}
+	}
 }
 
 module.exports = new TournamentController();
