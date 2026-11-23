@@ -112,6 +112,22 @@ class TournamentController {
 		}
 	}
 
+	/** GET /api/tournaments/:id/standings */
+	async getTournamentStandings(req, res, next) {
+		try {
+			const { id } = req.validated?.params || req.params;
+			const tournament = await tournamentModel.getTournamentById(id);
+			if (!tournament) {
+				return res.status(404).json({ success: false, error: "Tournament not found" });
+			}
+
+			const standings = await tournamentService.getTournamentStandings(id);
+			res.json({ success: true, standings });
+		} catch (error) {
+			next(error);
+		}
+	}
+
 	/** POST /api/tournaments/:id/register */
 	async registerPlayer(req, res, next) {
 		try {
