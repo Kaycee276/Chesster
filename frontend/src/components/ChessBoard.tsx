@@ -36,6 +36,7 @@ import {
   Sun,
   Moon,
   Laptop,
+  Keyboard,
 } from "lucide-react";
 import { BOARD_THEMES, PIECE_SETS, useThemeStore, type PieceSetKey } from "../store/themeStore";
 
@@ -307,13 +308,18 @@ function WaitingScreen() {
   );
 }
 
+interface ChessBoardProps {
+  /** Opens the keyboard-shortcuts modal owned by the page (#750). */
+  onOpenShortcuts?: () => void;
+}
+
 // Outer wrapper: shows skeleton until board data arrives (keeps hooks rule-safe)
-export default function ChessBoard() {
+export default function ChessBoard({ onOpenShortcuts }: ChessBoardProps = {}) {
   const board = useGameStore((s) => s.board);
   const status = useGameStore((s) => s.status);
   if (!board || board.length === 0) return <BoardSkeleton />;
   if (status === "waiting") return <WaitingScreen />;
-  return <ChessBoardInner />;
+  return <ChessBoardInner onOpenShortcuts={onOpenShortcuts} />;
 }
 
 function PlayerAvatar({ color }: { color: "white" | "black" }) {
@@ -366,7 +372,7 @@ function MaterialChip({ advantage, label }: { advantage: number; label: string }
   );
 }
 
-function ChessBoardInner() {
+function ChessBoardInner({ onOpenShortcuts }: ChessBoardProps) {
   const {
     board,
     gameCode,
@@ -682,6 +688,13 @@ function ChessBoardInner() {
 
       const key = e.key.toLowerCase();
 
+      // "?" (Shift+/) opens the keyboard-shortcuts helper (#750).
+      if (e.key === "?" || (key === "/" && e.shiftKey)) {
+        e.preventDefault();
+        onOpenShortcuts?.();
+        return;
+      }
+
       // "/" or "M" jumps to the quick-move command bar (#315).
       if (key === "/" || key === "m") {
         e.preventDefault();
@@ -738,7 +751,7 @@ function ChessBoardInner() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [moveHistory.length, viewingIndex, setViewingIndex, setFlipped]);
+  }, [moveHistory.length, viewingIndex, setViewingIndex, setFlipped, onOpenShortcuts]);
 
   // Load move history once the board is present (#112)
   useEffect(() => {
@@ -1849,6 +1862,17 @@ function ChessBoardInner() {
               }`}
             >
               <Eye size={15} />
+            </button>
+          )}
+
+          {onOpenShortcuts && (
+            <button
+              onClick={onOpenShortcuts}
+              title="Keyboard Shortcuts (?)"
+              aria-label="View keyboard shortcuts (Press ?)"
+              className="p-1.5 sm:p-2 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+            >
+              <Keyboard size={15} />
             </button>
           )}
 
