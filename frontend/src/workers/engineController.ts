@@ -5,8 +5,13 @@ import {
 	type EngineEvaluation,
 	type EngineMetrics,
 } from "../utils/engineEvaluation";
+import {
+	type EngineSettings,
+	applyEngineOptions,
+} from "../utils/analysisPreferences";
 
-export type { EngineMetrics };
+export type { EngineMetrics, EngineSettings };
+export { applyEngineOptions };
 
 export const DEFAULT_SEARCH_DEPTH = 12;
 
@@ -16,7 +21,10 @@ export type EngineRequest =
 	| { type: "stop" }
 	| { type: "setDepth"; depth: number }
 	| { type: "setMultiPv"; lines: number }
-	| { type: "configure"; depth: number; multiPv: number };
+	| { type: "configure"; depth: number; multiPv: number }
+	| { type: "setOptions"; options: Partial<EngineSettings> }
+	| { type: "setThreads"; threads: number }
+	| { type: "setHash"; hashSizeMb: number };
 
 /** Messages sent from the Stockfish worker back to the UI thread. */
 export type EngineResponse =
@@ -67,6 +75,9 @@ export class EngineController {
 	private latest: EngineEvaluation | null = null;
 	private defaultDepth = DEFAULT_SEARCH_DEPTH;
 	private multiPv = 1;
+	private threads = 1;
+	private hashSizeMb = 16;
+	private maxDepth = 25;
 
 	constructor(engine: UciEngine, emit: (message: EngineResponse) => void) {
 		this.engine = engine;
@@ -79,11 +90,44 @@ export class EngineController {
 	}
 
 	setDepth(depth: number): void {
-		this.defaultDepth = depth;
-		if (this.current && !this.stopping && this.current.depth !== depth) {
+		const clamped = Math.max(10, Math.min(this.maxDepth, depth));
+		this.defaultDepth = clamped;
+		if (this.current && !this.stopping && this.current.depth !== clamped) {
 			const fen = this.current.fen;
-			this.pending = { fen, depth };
+			this.pending = { fen, depth: clamped };
 			this.stopCurrent();
+		}
+	}
+
+	setThreads(threads: number): void {
+		const clamped = Math.max(1, Math.min(4, threads));
+		this.threads = clamped;
+		this.engine.postMessage(`setoption name Threads value ${clamped}`);
+	}
+
+	setHash(hashSizeMb: number): void {
+		const clamped = [16, 32, 64].includes(hashSizeMb) ? hashSizeMb : 16;
+		this.hashSizeMb = clamped;
+		this.engine.postMessage(`setoption name Hash value ${clamped}`);
+	}
+
+	getSettings(): EngineSettings {
+		return {
+			maxDepth: this.defaultDepth,
+			threads: this.threads,
+			hashSizeMb: this.hashSizeMb,
+		};
+	}
+
+	setOptions(options: Partial<EngineSettings>): void {
+		if (options.threads !== undefined) {
+			this.setThreads(options.threads);
+		}
+		if (options.hashSizeMb !== undefined) {
+			this.setHash(options.hashSizeMb);
+		}
+		if (options.maxDepth !== undefined) {
+			this.setDepth(options.maxDepth);
 		}
 	}
 
@@ -104,7 +148,8 @@ export class EngineController {
 
 	handleRequest(request: EngineRequest): void {
 		if (request.type === "evaluate") {
-			const depth = request.depth ?? this.defaultDepth;
+			const requestedDepth = request.depth ?? this.defaultDepth;
+			const depth = Math.max(10, Math.min(this.maxDepth, requestedDepth));
 			const current = this.current;
 			// Already searching this exact position: let the search continue.
 			if (current && !this.stopping && current.fen === request.fen && current.depth === depth) {
@@ -123,6 +168,12 @@ export class EngineController {
 			this.setMultiPv(request.lines);
 		} else if (request.type === "configure") {
 			this.configureEngine(request.depth, request.multiPv);
+		} else if (request.type === "setOptions") {
+			this.setOptions(request.options);
+		} else if (request.type === "setThreads") {
+			this.setThreads(request.threads);
+		} else if (request.type === "setHash") {
+			this.setHash(request.hashSizeMb);
 		}
 	}
 

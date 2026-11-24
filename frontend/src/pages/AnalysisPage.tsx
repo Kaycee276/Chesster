@@ -302,12 +302,30 @@ export default function AnalysisPage() {
   const { evaluation: liveEvaluation, variations } = useStockfishEvaluation(currentFen, {
     depth: analysisPrefs.targetDepth,
     multiPv: analysisPrefs.multiPv,
+    threads: analysisPrefs.threads,
+    hashSizeMb: analysisPrefs.hashSizeMb,
     enabled: !analysisPrefs.isPaused,
   });
 
   const handleDepthChange = (depth: number) => {
     setAnalysisPrefs((prev) => {
-      const next = { ...prev, targetDepth: depth };
+      const next = { ...prev, targetDepth: depth, maxDepth: depth };
+      saveAnalysisPreferences(next);
+      return next;
+    });
+  };
+
+  const handleThreadsChange = (threads: number) => {
+    setAnalysisPrefs((prev) => {
+      const next = { ...prev, threads };
+      saveAnalysisPreferences(next);
+      return next;
+    });
+  };
+
+  const handleHashSizeChange = (hashSizeMb: number) => {
+    setAnalysisPrefs((prev) => {
+      const next = { ...prev, hashSizeMb };
       saveAnalysisPreferences(next);
       return next;
     });
@@ -848,10 +866,14 @@ export default function AnalysisPage() {
             nps={liveEvaluation?.nps ?? liveEvaluation?.metrics?.nps ?? 0}
             multiPv={analysisPrefs.multiPv}
             isPaused={analysisPrefs.isPaused}
+            threads={analysisPrefs.threads}
+            hashSizeMb={analysisPrefs.hashSizeMb}
             variations={formattedVariations}
             lockWhiteBottom={Boolean(analysisPrefs.lockWhiteBottom)}
             onDepthChange={handleDepthChange}
             onMultiPvChange={handleMultiPvChange}
+            onThreadsChange={handleThreadsChange}
+            onHashSizeChange={handleHashSizeChange}
             onTogglePause={handleTogglePause}
             onToggleLockWhiteBottom={handleToggleLockWhiteBottom}
           />

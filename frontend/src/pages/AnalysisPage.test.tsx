@@ -206,4 +206,38 @@ describe("AnalysisPage PGN drag-and-drop (#318)", () => {
 			expect(screen.getByText(/Black CAPS/i)).toBeInTheDocument();
 		});
 	});
+
+	it("opens engine settings popover, adjusts depth, threads, and hash size, and persists to localStorage (#795)", async () => {
+		renderPage();
+
+		const settingsBtn = screen.getByRole("button", { name: /engine settings/i });
+		expect(settingsBtn).toBeInTheDocument();
+		fireEvent.click(settingsBtn);
+
+		// Popover appears
+		expect(screen.getByTestId("engine-settings-popover")).toBeInTheDocument();
+		expect(screen.getByText(/Engine Performance Settings/i)).toBeInTheDocument();
+
+		// Check thread selection buttons
+		const thread2Btn = screen.getByRole("button", { name: "2 threads" });
+		expect(thread2Btn).toBeInTheDocument();
+		fireEvent.click(thread2Btn);
+
+		// Check hash size selection
+		const hash64Btn = screen.getByRole("button", { name: "64 megabytes hash table" });
+		expect(hash64Btn).toBeInTheDocument();
+		fireEvent.click(hash64Btn);
+
+		// Check depth increase/decrease buttons
+		const incDepthBtn = screen.getByRole("button", { name: "Increase depth" });
+		fireEvent.click(incDepthBtn);
+
+		// Verify preferences are persisted in localStorage
+		const raw = localStorage.getItem("chesster_analysis_preferences");
+		expect(raw).toBeTruthy();
+		const saved = JSON.parse(raw!);
+		expect(saved.threads).toBe(2);
+		expect(saved.hashSizeMb).toBe(64);
+		expect(saved.targetDepth).toBeGreaterThanOrEqual(18);
+	});
 });

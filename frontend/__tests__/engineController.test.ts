@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
 	EngineController,
 	configureEngine,
+	applyEngineOptions,
 	type EngineResponse,
 } from "../src/workers/engineController";
 
@@ -212,5 +213,42 @@ describe("EngineController", () => {
 		expect(evaluations()).toHaveLength(2);
 		expect(evaluations()[1].multipv).toBe(2);
 		expect(evaluations()[1].bestMove).toBe("d2d4");
+	});
+
+	it("transmits UCI options for Threads and Hash when options change (Issue #795)", () => {
+		boot();
+		controller.handleRequest({ type: "setThreads", threads: 3 });
+		expect(commands.at(-1)).toBe("setoption name Threads value 3");
+
+		controller.handleRequest({ type: "setHash", hashSizeMb: 64 });
+		expect(commands.at(-1)).toBe("setoption name Hash value 64");
+
+		controller.handleRequest({
+			type: "setOptions",
+			options: { threads: 2, hashSizeMb: 32, maxDepth: 22 },
+		});
+		expect(commands).toContain("setoption name Threads value 2");
+		expect(commands).toContain("setoption name Hash value 32");
+	});
+
+	it("clamps depth between 10 and 25 (Issue #795)", () => {
+		boot();
+		controller.handleRequest({ type: "evaluate", fen: START, depth: 30 });
+		expect(commands.at(-1)).toBe("go depth 25");
+
+		controller.handleRequest({ type: "evaluate", fen: AFTER_E4, depth: 5 });
+		// After stopping, starts with depth clamped to 10
+		controller.handleEngineOutput("bestmove e2e4");
+		expect(commands.at(-1)).toBe("go depth 10");
+	});
+
+	it("applyEngineOptions sends expected UCI option commands (Issue #795)", () => {
+		const testCommands: string[] = [];
+		const fakeWorker = { postMessage: (cmd: string) => testCommands.push(cmd) };
+		applyEngineOptions(fakeWorker, { maxDepth: 20, threads: 4, hashSizeMb: 64 });
+		expect(testCommands).toEqual([
+			"setoption name Threads value 4",
+			"setoption name Hash value 64",
+		]);
 	});
 });
