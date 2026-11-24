@@ -8,6 +8,8 @@ import {
   type ColorMode,
 } from "../store/themeStore";
 import { soundService, type SoundPack } from "../services/soundService";
+import { SOUND_PACKS } from "../services/soundPacks";
+import { getPreviewBoard } from "../services/pieceThemeService";
 
 // Re-apply the persisted theme whenever this component mounts (covers cases
 // where the store module was re-evaluated and the on-load application was missed).
@@ -22,12 +24,6 @@ function useApplyThemeOnMount() {
   }, [boardTheme]);
 }
 
-const SOUND_PACKS: Array<{ key: SoundPack; name: string; description: string }> = [
-  { key: "classic-wood", name: "Classic Wood", description: "Warm mellow woody tones" },
-  { key: "modern-digital", name: "Modern Digital", description: "Crisp synthesized digital sounds" },
-  { key: "lofi-soft", name: "Low-Fi Soft", description: "Muted subtle organic tones" },
-];
-
 export default function ThemeSelector({ hideFloating = false }: { hideFloating?: boolean } = {}) {
   const boardTheme = useThemeStore((s) => s.boardTheme);
   const setBoardTheme = useThemeStore((s) => s.setBoardTheme);
@@ -38,7 +34,8 @@ export default function ThemeSelector({ hideFloating = false }: { hideFloating?:
   const isThemePickerOpen = useThemeStore((s) => s.isThemePickerOpen);
   const setThemePickerOpen = useThemeStore((s) => s.setThemePickerOpen);
   const [localOpen, setLocalOpen] = useState(false);
-  const [soundPack, setSoundPack] = useState<SoundPack>(soundService.getSoundPack());
+  const soundPack = useThemeStore((s) => s.soundPack);
+  const setSoundPack = useThemeStore((s) => s.setSoundPack);
 
   const open = isThemePickerOpen || localOpen;
   const setOpen = (val: boolean) => {
@@ -53,20 +50,10 @@ export default function ThemeSelector({ hideFloating = false }: { hideFloating?:
     setOpen(false);
   };
 
-  const handleSoundPackChange = (pack: SoundPack) => {
-    setSoundPack(pack);
-    soundService.setSoundPack(pack);
-  };
+  const handleSoundPackChange = (pack: SoundPack) => setSoundPack(pack);
 
   const handleSoundPreview = (pack: SoundPack) => {
-    // Temporarily play the sound with the target pack
-    const originalPack = soundService.getSoundPack();
-    soundService.setSoundPack(pack);
-    soundService.previewSound("move");
-    // Restore the previous pack after a brief delay
-    setTimeout(() => {
-      soundService.setSoundPack(originalPack);
-    }, 200);
+    soundService.previewSound("move", pack);
   };
 
   let isGameRoute = false;
@@ -216,34 +203,27 @@ export default function ThemeSelector({ hideFloating = false }: { hideFloating?:
                     }`}
                     aria-pressed={active}
                   >
-                    <div className="flex gap-0.5 text-lg leading-none">
-                      <span
-                        className="text-white"
-                        style={{
-                          textShadow:
-                            "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-                        }}
-                      >
-                        {ps.pieces.K}
-                      </span>
-                      <span
-                        className="text-white"
-                        style={{
-                          textShadow:
-                            "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-                        }}
-                      >
-                        {ps.pieces.Q}
-                      </span>
-                      <span
-                        className="text-white"
-                        style={{
-                          textShadow:
-                            "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
-                        }}
-                      >
-                        {ps.pieces.R}
-                      </span>
+                    <div
+                      className="grid grid-cols-2 gap-px w-12 rounded-md overflow-hidden border border-(--border) text-base leading-none"
+                      aria-hidden="true"
+                      data-testid="piece-set-preview"
+                    >
+                      {getPreviewBoard(ps.key).flatMap((row, rowIndex) =>
+                        row.map((glyph, colIndex) => (
+                          <span
+                            key={`${rowIndex}-${colIndex}`}
+                            className={`flex items-center justify-center aspect-square text-white ${
+                              (rowIndex + colIndex) % 2 === 0 ? "bg-(--sq-light)" : "bg-(--sq-dark)"
+                            }`}
+                            style={{
+                              textShadow:
+                                "-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000",
+                            }}
+                          >
+                            {glyph}
+                          </span>
+                        )),
+                      )}
                     </div>
                     <div className="flex items-center justify-between w-full">
                       <span className="text-sm font-semibold">{ps.name}</span>

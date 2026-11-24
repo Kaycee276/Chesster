@@ -12,6 +12,29 @@ function dailyPuzzleIndex(dateKey, puzzleCount) {
 }
 
 class PuzzleModel {
+  async getAdaptivePuzzle(targetRating, range = 100, excludeId) {
+    let query = supabase.from("puzzles")
+      .select("id, fen, side_to_move, rating, solution_moves")
+      .eq("is_active", true)
+      .gte("rating", targetRating - range)
+      .lte("rating", targetRating + range);
+    if (excludeId) query = query.neq("id", excludeId);
+    const { data, error } = await query.order("id", { ascending: true });
+    if (error) throw error;
+    if (data?.length) return data[Math.floor(Math.random() * data.length)];
+    // Sparse catalogs can have no puzzle in the requested window. Pick the
+    // nearest available rating so the initial rating and later updates work.
+    let fallback = supabase.from("puzzles")
+      .select("id, fen, side_to_move, rating, solution_moves")
+      .eq("is_active", true);
+    if (excludeId) fallback = fallback.neq("id", excludeId);
+    const nearest = await fallback.order("rating", { ascending: true });
+    if (nearest.error) throw nearest.error;
+    if (!nearest.data?.length) return null;
+    return nearest.data.reduce((best, puzzle) =>
+      Math.abs(puzzle.rating - targetRating) < Math.abs(best.rating - targetRating) ? puzzle : best);
+  }
+
 	async getDailyPuzzle(date = new Date()) {
 		const dateKey = utcDateKey(date);
 		const { count, error: countError } = await supabase

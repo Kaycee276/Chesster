@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { Timer } from "lucide-react";
 import { soundService } from "../services/soundService";
-import { formatTime } from "../utils/timeControl";
+import { announcementThreshold, describeDuration, formatTime } from "../utils/timeControl";
 
 interface GameTimerProps {
 	secondsLeft: number;
 	totalSeconds: number;
 	isCurrentTurn?: boolean;
 	isClockRunning?: boolean;
+	/** Who the clock belongs to, used in the screen reader label (e.g. "White"). */
+	playerLabel?: string;
 }
 
 /** Clock is considered "low" once it drops to this many seconds or fewer. */
 const LOW_TIME_THRESHOLD = 10;
 
-export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = false, isClockRunning = true }: GameTimerProps) {
+export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = false, isClockRunning = true, playerLabel }: GameTimerProps) {
 	const [clock, setClock] = useState<{ deadline: number; now: number } | null>(null);
 
 	useEffect(() => {
@@ -51,15 +53,16 @@ export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = f
 		wasLowRef.current = isCurrentTurn && lowTime && secondsLeft > 0;
 	}, [isCurrentTurn, lowTime, secondsLeft]);
 
-	const ariaLabel = isLowTime
-		? `Low time warning: ${Math.ceil(displayMs / 1000)} seconds remaining`
-		: `Time remaining: ${display}`;
+	const ariaLabel = `${playerLabel ? `${playerLabel} remaining time` : "Time remaining"}: ${describeDuration(displayMs)}`;
+
+	// Paused clocks stay silent. The live region is always mounted and only its
+	// text changes when a threshold is crossed, which is what screen readers announce.
+	const threshold = isClockRunning ? announcementThreshold(displayMs) : null;
+	const alertText = threshold === null ? "" : `Warning: ${threshold} seconds or less remaining`;
 
 	return (
 		<div
 			role="timer"
-			aria-live="polite"
-			aria-atomic="true"
 			aria-label={ariaLabel}
 			className={`flex items-center gap-2 p-2 rounded-lg transition-all ${
 				isLowTime
@@ -81,6 +84,9 @@ export default function GameTimer({ secondsLeft, totalSeconds, isCurrentTurn = f
 					style={{ width: `${Math.max(0, pct)}%` }}
 				/>
 			</div>
+			<span className="sr-only" role="alert" aria-live="assertive" aria-atomic="true">
+				{alertText}
+			</span>
 		</div>
 	);
 }

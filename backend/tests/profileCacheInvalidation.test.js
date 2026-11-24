@@ -16,6 +16,11 @@ jest.mock("../models/userModel", () => ({
 // authService pulls in the Stellar SDK (ESM-only deps Jest can't parse);
 // the profile route under test doesn't use it.
 jest.mock("../services/authService", () => ({}));
+jest.mock("../services/leaderboardService", () => ({
+	getPlayerRankAndPercentile: jest.fn().mockResolvedValue({ rank: null, percentile: null }),
+	syncPlayerStats: jest.fn().mockResolvedValue(undefined),
+	invalidateCache: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock("../models/tournamentModel", () => ({ getMatchByGameCode: jest.fn().mockResolvedValue(null) }));
 jest.mock("../services/tournamentService", () => ({ advanceRound: jest.fn() }));
 jest.mock("../services/timerService", () => ({
@@ -106,7 +111,7 @@ describe("profile cache invalidation on match end", () => {
 			const res = await request(app).get("/api/users/GWHITE/profile");
 
 			expect(res.status).toBe(200);
-			expect(res.body).toEqual({ success: true, data: profile });
+			expect(res.body).toEqual({ success: true, data: { ...profile, rank: null, percentile: null } });
 			expect(userModel.getUserProfile).toHaveBeenCalledWith("GWHITE");
 		});
 

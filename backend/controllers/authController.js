@@ -1,10 +1,49 @@
 const authService = require("../services/authService");
 const sessionService = require("../services/sessionService");
 const userModel = require("../models/userModel");
+const leaderboardService = require("../services/leaderboardService");
 const { getIpSubnetFromRequest } = require("../utils/ipUtils");
 const jwt = require("jsonwebtoken");
 
+function challengeBinding(req, uri) {
+	// Validate in the service, after consuming a verification nonce. Missing
+	// browser origins must never fall back to the service's trusted default.
+	const origin = req.get("origin") || "null";
+	return { origin, uri };
+}
+
+/**
+ * Attach leaderboard rank and percentile (Issue #642) to a profile. Failures
+ * degrade to nulls so the profile endpoint never breaks on ranking issues.
+ */
+async function withPercentile(profile, address) {
+	try {
+		const { rank, percentile } = await leaderboardService.getPlayerRankAndPercentile(address);
+		return { ...profile, rank, percentile };
+	} catch (err) {
+		return { ...profile, rank: null, percentile: null };
+	}
+}
+
 class AuthController {
+	/** GET /api/auth/nonce?address=G...&uri=https://allowed.example/path */
+	async generateNonce(req, res) {
+		try {
+			const data = await authService.generateAuthNonce(req.query.address, {
+				...challengeBinding(req, req.query.uri), purpose: req.query.purpose ?? "login",
+			});
+			res.set("Cache-Control", "no-store");
+			res.json({ success: true, data });
+		} catch (error) {
+			res.status(error.status || 400).json({ success: false, error: error.message });
+		}
+	}
+
+	/** POST /api/auth/verify uses SEP-0043 HEX signatures by default. */
+	async verify(req, res) {
+		return authController._login(req, res, true);
+	}
+
 	/**
 	 * POST /api/auth/challenge { address }
 	 * Returns a one-time message the wallet must sign to prove ownership.
@@ -12,10 +51,11 @@ class AuthController {
 	async createChallenge(req, res) {
 		try {
 			const { address, purpose = "login" } = req.body;
-			const message = authService.createChallenge(address, purpose);
+			const message = await authService.createChallenge(address, purpose, challengeBinding(req, req.body.uri));
+			res.set("Cache-Control", "no-store");
 			res.json({ success: true, data: { message } });
 		} catch (error) {
-			res.status(400).json({ success: false, error: error.message });
+			res.status(error.status || 400).json({ success: false, error: error.message });
 		}
 	}
 
@@ -26,11 +66,22 @@ class AuthController {
 	 * and the new token is bound to the client's IP subnet.
 	 */
 	async login(req, res) {
+		return authController._login(req, res, false);
+	}
+
+	async _login(req, res, siws) {
 		try {
 			const { address, signature, referralCode } = req.body;
 			if (!address) throw new Error("Wallet address is required");
 
-			authService.verifySignature(address, signature);
+			const binding = challengeBinding(req, req.body.uri);
+			if (siws) {
+				await authService.verifySIWSSignature(address, req.body.message, signature, {
+					...binding, requireMessage: true, signatureEncoding: req.body.signatureEncoding ?? "hex",
+				});
+			} else {
+				await authService.verifySignature(address, signature, "login", binding);
+			}
 			const user = await userModel.findOrCreateByAddress(address);
 			if (user?.is_deleted) throw new Error("Account has been deleted");
 
@@ -51,9 +102,10 @@ class AuthController {
 				await sessionService.rotateSession(address, jti, ipSubnet, ttlSeconds);
 			}
 
+			res.set("Cache-Control", "no-store");
 			res.json({ success: true, data: { token, user } });
 		} catch (error) {
-			res.status(401).json({ success: false, error: error.message });
+			res.status(error.status || 401).json({ success: false, error: error.message });
 		}
 	}
 
@@ -65,7 +117,7 @@ class AuthController {
 		try {
 			const profile = await userModel.getUserProfile(req.user.address);
 			if (!profile) return res.status(404).json({ success: false, error: "Profile not found" });
-			res.json({ success: true, data: profile });
+			res.json({ success: true, data: await withPercentile(profile, req.user.address) });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });
 		}
@@ -80,7 +132,7 @@ class AuthController {
 		try {
 			const profile = await userModel.getUserProfile(req.params.address);
 			if (!profile) return res.status(404).json({ success: false, error: "Profile not found" });
-			res.json({ success: true, data: profile });
+			res.json({ success: true, data: await withPercentile(profile, req.params.address) });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });
 		}
@@ -94,7 +146,7 @@ class AuthController {
 			const user = await userModel.updateProfile(req.user.address, req.body || {});
 			res.json({ success: true, data: user });
 		} catch (error) {
-			res.status(400).json({ success: false, error: error.message });
+			res.status(error.status || 400).json({ success: false, error: error.message });
 		}
 	}
 
@@ -106,7 +158,7 @@ class AuthController {
 		try {
 			const { signature } = req.body || {};
 			const address = req.user.address;
-			authService.verifySignature(address, signature, "delete-account");
+			await authService.verifySignature(address, signature, "delete-account", challengeBinding(req, req.body.uri));
 
 			const result = await userModel.anonymizeUser(address);
 			await sessionService.revokeAll(address);
@@ -123,4 +175,5 @@ class AuthController {
 	}
 }
 
-module.exports = new AuthController();
+const authController = new AuthController();
+module.exports = authController;

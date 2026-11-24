@@ -7,11 +7,14 @@ const ANNOTATION_COLORS: Record<AnnotationColor, string> = {
   yellow: "#e6c729",
 };
 
+const PREMOVE_COLOR = "#06D6A0";
+
 export interface BoardAnnotationsProps {
   boardPx: number;
   playerColor?: "white" | "black" | null;
   highlights: SquareHighlight[];
   arrows: AnnotationArrow[];
+  premove?: { from: [number, number]; to: [number, number] } | null;
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -35,8 +38,9 @@ export function BoardAnnotations({
   playerColor = "white",
   highlights,
   arrows,
+  premove,
 }: BoardAnnotationsProps) {
-  if (highlights.length === 0 && arrows.length === 0) return null;
+  if (highlights.length === 0 && arrows.length === 0 && !premove) return null;
 
   const squareSize = boardPx / 8;
 
@@ -58,6 +62,17 @@ export function BoardAnnotations({
           orient="auto"
         >
           <polygon points="0 0, 6 3, 0 6" fill="rgba(34, 197, 94, 0.8)" />
+        </marker>
+        <marker
+          id="premove-arrowhead"
+          markerWidth="6"
+          markerHeight="6"
+          refX="3"
+          refY="3"
+          orient="auto"
+          markerUnits="strokeWidth"
+        >
+          <polygon points="0 0, 6 3, 0 6" fill={PREMOVE_COLOR} />
         </marker>
         {(Object.keys(ANNOTATION_COLORS) as AnnotationColor[]).map((color) => (
           <marker
@@ -119,6 +134,49 @@ export function BoardAnnotations({
           />
         );
       })}
+
+      {premove && (
+        <g data-testid="premove-arrow">
+          {(() => {
+            const from = squareCenterPx(premove.from[0], premove.from[1], boardPx, playerColor);
+            const to = squareCenterPx(premove.to[0], premove.to[1], boardPx, playerColor);
+
+            const dx = to.x - from.x;
+            const dy = to.y - from.y;
+            const len = Math.hypot(dx, dy) || 1;
+            const shorten = squareSize * 0.4;
+            const endX = to.x - (dx / len) * shorten;
+            const endY = to.y - (dy / len) * shorten;
+
+            return (
+              <>
+                <line
+                  data-testid={`premove-line-${premove.from[0]}-${premove.from[1]}-${premove.to[0]}-${premove.to[1]}`}
+                  x1={from.x}
+                  y1={from.y}
+                  x2={endX}
+                  y2={endY}
+                  stroke={PREMOVE_COLOR}
+                  strokeWidth={squareSize * 0.14}
+                  strokeDasharray={`${squareSize * 0.2} ${squareSize * 0.15}`}
+                  strokeLinecap="round"
+                  opacity={0.75}
+                  markerEnd="url(#premove-arrowhead)"
+                />
+                <circle
+                  cx={to.x}
+                  cy={to.y}
+                  r={squareSize * 0.35}
+                  fill="none"
+                  stroke={PREMOVE_COLOR}
+                  strokeWidth={squareSize * 0.08}
+                  opacity={0.6}
+                />
+              </>
+            );
+          })()}
+        </g>
+      )}
     </svg>
   );
 }

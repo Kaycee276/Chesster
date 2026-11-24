@@ -4,7 +4,9 @@
  * Synthesises chess sound effects using the Web Audio API.
  * No audio files needed — all sounds are generated in-browser.
  *
- * Supports 7 sound packs:
+ * Supports 9 sound packs (including the original presets):
+ *   - default: Original mellow chess tones
+ *   - metallic: Filtered noise impacts and high-frequency resonance
  *   - wood: Classic wooden piece sounds
  *   - plastic: Modern plastic piece sounds
  *   - arcade: Retro arcade synth sounds
@@ -21,46 +23,58 @@
  *   soundService.setSoundPack('classic-wood');
  */
 
+import { useThemeStore } from "../store/themeStore";
+import { isSoundPack, type SoundPack } from "./soundPacks";
+import { playMetallicTone } from "./metallicSound";
+export type { SoundPack } from "./soundPacks";
+
 type OscType = OscillatorType;
 
-export type SoundPack = "wood" | "plastic" | "arcade" | "retro" | "classic-wood" | "modern-digital" | "lofi-soft";
+type ProfilePack = Exclude<SoundPack, "default" | "metallic">;
 
 const LS_MUTED_KEY = "chesster:sound:muted";
 const LS_VOLUME_KEY = "chesster:sound:volume";
-const LS_SOUND_PACK_KEY = "chesster_sound_pack";
+interface SoundTone {
+  freq: number;
+  duration: number;
+  type: OscType;
+  volume: number;
+  delay: number;
+  endFreq?: number;
+}
 
 interface SoundProfile {
-  move: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  capture: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  check: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  castle: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  promote: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  gameStart: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  gameEnd: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  draw: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  lowTimeTick: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
-  brilliant: Array<{ freq: number; duration: number; type: OscType; volume: number; delay: number }>;
+  move: SoundTone[];
+  capture: SoundTone[];
+  check: SoundTone[];
+  castle: SoundTone[];
+  promote: SoundTone[];
+  gameStart: SoundTone[];
+  gameEnd: SoundTone[];
+  draw: SoundTone[];
+  lowTimeTick: SoundTone[];
+  brilliant: SoundTone[];
 }
 
 /**
  * Sound profiles for each pack. Each profile contains tone parameters
  * for every sound effect, allowing each pack to have its own character.
  */
-const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
+const SOUND_PROFILES: Record<ProfilePack, SoundProfile> = {
   wood: {
     // Classic wooden piece sounds - warm and mellow
-    move: [{ freq: 520, duration: 0.08, type: "square", volume: 0.18, delay: 0 }],
+    move: [{ freq: 140, endFreq: 40, duration: 0.08, type: "triangle", volume: 0.18, delay: 0 }],
     capture: [
-      { freq: 300, duration: 0.08, type: "sawtooth", volume: 0.28, delay: 0 },
-      { freq: 220, duration: 0.12, type: "sawtooth", volume: 0.2, delay: 0.07 },
+      { freq: 300, endFreq: 70, duration: 0.08, type: "triangle", volume: 0.28, delay: 0 },
+      { freq: 220, endFreq: 50, duration: 0.12, type: "triangle", volume: 0.2, delay: 0.07 },
     ],
     check: [
       { freq: 880, duration: 0.12, type: "sine", volume: 0.3, delay: 0 },
       { freq: 880, duration: 0.12, type: "sine", volume: 0.3, delay: 0.18 },
     ],
     castle: [
-      { freq: 440, duration: 0.09, type: "square", volume: 0.18, delay: 0 },
-      { freq: 550, duration: 0.09, type: "square", volume: 0.18, delay: 0.1 },
+      { freq: 440, endFreq: 90, duration: 0.09, type: "triangle", volume: 0.18, delay: 0 },
+      { freq: 550, endFreq: 110, duration: 0.09, type: "triangle", volume: 0.18, delay: 0.1 },
     ],
     promote: [
       { freq: 440, duration: 0.1, type: "sine", volume: 0.22, delay: 0 },
@@ -193,7 +207,11 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
   },
   retro: {
     // 8-bit chiptune sounds - classic video game vibe
-    move: [{ freq: 800, duration: 0.05, type: "square", volume: 0.15, delay: 0 }],
+    move: [
+      { freq: 800, duration: 0.045, type: "square", volume: 0.12, delay: 0 },
+      { freq: 1000, duration: 0.045, type: "square", volume: 0.12, delay: 0.035 },
+      { freq: 1200, duration: 0.045, type: "square", volume: 0.12, delay: 0.07 },
+    ],
     capture: [
       { freq: 1200, duration: 0.05, type: "square", volume: 0.18, delay: 0 },
       { freq: 600, duration: 0.08, type: "square", volume: 0.15, delay: 0.03 },
@@ -388,15 +406,10 @@ const SOUND_PROFILES: Record<SoundPack, SoundProfile> = {
 class SoundService {
   private ctx: AudioContext | null = null;
   private _enabled = localStorage.getItem(LS_MUTED_KEY) !== "true";
-  private _volume = Math.min(1, Math.max(0, parseFloat(localStorage.getItem(LS_VOLUME_KEY) ?? "1") || 1));
-  private _soundPack: SoundPack = (localStorage.getItem(LS_SOUND_PACK_KEY) as SoundPack) || "wood";
-
-  constructor() {
-    // Validate and normalize the persisted pack
-    if (!Object.keys(SOUND_PROFILES).includes(this._soundPack)) {
-      this._soundPack = "wood";
-    }
-  }
+  private _volume = (() => {
+    const saved = parseFloat(localStorage.getItem(LS_VOLUME_KEY) ?? "1");
+    return Number.isFinite(saved) ? Math.min(1, Math.max(0, saved)) : 1;
+  })();
 
   private getCtx(): AudioContext | null {
     if (!this._enabled) return null;
@@ -409,9 +422,25 @@ class SoundService {
     }
     // Resume if suspended (browser autoplay policy)
     if (this.ctx.state === "suspended") {
-      this.ctx.resume().catch(() => {});
+      this.ctx.resume().catch((error) => console.warn("Could not resume chess audio.", error));
     }
     return this.ctx;
+  }
+
+  private addPitchJitter(baseFreq: number, soundType: keyof SoundProfile = "move"): number {
+    if (typeof process !== "undefined" && process.env?.NODE_ENV === "test") {
+      return baseFreq;
+    }
+    const jitterRange = 0.1;
+    const jitter = (Math.random() - 0.5) * 2 * jitterRange;
+
+    if (soundType === "capture") {
+      return baseFreq * (1 + jitter) * 1.2;
+    }
+    if (soundType === "check") {
+      return baseFreq * (1 + jitter) * 0.8;
+    }
+    return baseFreq * (1 + jitter);
   }
 
   private tone(
@@ -420,33 +449,54 @@ class SoundService {
     type: OscType = "sine",
     volume = 0.25,
     delay = 0,
+    soundType: keyof SoundProfile = "move",
+    endFreq?: number,
   ) {
+    if (this._volume === 0) return;
     const ctx = this.getCtx();
     if (!ctx) return;
+    let osc: OscillatorNode | null = null;
+    let gain: GainNode | null = null;
     try {
-      const osc  = ctx.createOscillator();
-      const gain = ctx.createGain();
+      osc = ctx.createOscillator();
+      gain = ctx.createGain();
       osc.connect(gain);
       gain.connect(ctx.destination);
 
       const scaledVolume = volume * this._volume;
+      const jitteredFreq = this.addPitchJitter(freq, soundType);
+
       osc.type = type;
-      osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
+      osc.frequency.setValueAtTime(jitteredFreq, ctx.currentTime + delay);
+      if (endFreq !== undefined) {
+        osc.frequency.exponentialRampToValueAtTime(endFreq, ctx.currentTime + delay + duration);
+      }
+      const nodes = [osc, gain];
+      osc.onended = () => nodes.forEach((node) => node.disconnect());
       gain.gain.setValueAtTime(0, ctx.currentTime + delay);
       gain.gain.linearRampToValueAtTime(scaledVolume, ctx.currentTime + delay + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
       osc.start(ctx.currentTime + delay);
       osc.stop(ctx.currentTime + delay + duration + 0.05);
-    } catch {
-      // ignore
+    } catch (error) {
+      osc?.disconnect();
+      gain?.disconnect();
+      console.warn("Could not synthesize the chess sound.", error);
     }
   }
 
-  private playSoundEffect(effectKey: keyof SoundProfile) {
-    const profile = SOUND_PROFILES[this._soundPack];
+  private playSoundEffect(effectKey: keyof SoundProfile, pack: SoundPack = this.getSoundPack()) {
+    const profile = SOUND_PROFILES[pack === "metallic" ? "modern-digital" : pack === "default" ? "classic-wood" : pack];
     const tones = profile[effectKey];
+    if (pack === "metallic") {
+      if (this._volume === 0) return;
+      const ctx = this.getCtx();
+      if (!ctx) return;
+      tones.forEach((tone) => playMetallicTone(ctx, tone.freq, tone.duration, tone.volume * this._volume, tone.delay));
+      return;
+    }
     tones.forEach((tone) => {
-      this.tone(tone.freq, tone.duration, tone.type, tone.volume, tone.delay);
+      this.tone(tone.freq, tone.duration, tone.type, tone.volume, tone.delay, effectKey, tone.endFreq);
     });
   }
 
@@ -552,6 +602,7 @@ class SoundService {
   // ── Volume ────────────────────────────────────────────────────────────────
 
   setVolume(value: number) {
+    if (!Number.isFinite(value)) return;
     this._volume = Math.min(1, Math.max(0, value));
     localStorage.setItem(LS_VOLUME_KEY, String(this._volume));
   }
@@ -567,25 +618,19 @@ class SoundService {
   // ── Sound pack ────────────────────────────────────────────────────────────
 
   setSoundPack(pack: SoundPack) {
-    if (Object.keys(SOUND_PROFILES).includes(pack)) {
-      this._soundPack = pack;
-      localStorage.setItem(LS_SOUND_PACK_KEY, pack);
-    }
+    if (isSoundPack(pack)) useThemeStore.getState().setSoundPack(pack);
   }
 
   getSoundPack(): SoundPack {
-    return this._soundPack;
+    const pack = useThemeStore.getState().soundPack;
+    return isSoundPack(pack) ? pack : "wood";
   }
 
   /**
    * Preview a sound effect (e.g. for audio pack selection in settings).
    */
-  previewSound(soundType: "move" | "capture" = "move") {
-    if (soundType === "capture") {
-      this.capture();
-    } else {
-      this.move();
-    }
+  previewSound(soundType: "move" | "capture" = "move", pack: SoundPack = this.getSoundPack()) {
+    this.playSoundEffect(soundType, isSoundPack(pack) ? pack : this.getSoundPack());
   }
 
   getAudioContext(): AudioContext | null {

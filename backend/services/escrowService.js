@@ -1,4 +1,4 @@
-const { Keypair, rpc, TransactionBuilder, Networks, Contract, xdr, scValToNative, nativeToScVal, BASE_FEE } = require("@stellar/stellar-sdk");
+const { Keypair, rpc, TransactionBuilder, Networks, Contract, Operation, Asset, Memo, xdr, scValToNative, nativeToScVal, BASE_FEE } = require("@stellar/stellar-sdk");
 
 const RPC_URL = process.env.STELLAR_RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = process.env.STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -196,7 +196,7 @@ async function estimateFee(sourceAccount, operation) {
  * @param {string} [opts.label] - used only for logging
  * @returns {Promise<object>} the successful transaction response
  */
-async function submitWithRetry(buildOperation, { label = "coordinator transaction" } = {}) {
+async function submitWithRetry(buildOperation, { label = "coordinator transaction", memo = null } = {}) {
 	if (!coordinatorKeypair) throw new Error("Coordinator secret key not configured");
 
 	let lastErr;
@@ -209,13 +209,12 @@ async function submitWithRetry(buildOperation, { label = "coordinator transactio
 			const operation = buildOperation();
 			const fee = await estimateFee(sourceAccount, operation);
 
-			const tx = new TransactionBuilder(sourceAccount, {
+			const builder = new TransactionBuilder(sourceAccount, {
 				fee,
 				networkPassphrase: NETWORK_PASSPHRASE,
-			})
-				.addOperation(operation)
-				.setTimeout(30)
-				.build();
+			}).addOperation(operation);
+			if (memo) builder.addMemo(memo);
+			const tx = builder.setTimeout(30).build();
 
 			const preparedTx = await server.prepareTransaction(tx);
 			preparedTx.sign(coordinatorKeypair);
@@ -238,7 +237,7 @@ async function submitWithRetry(buildOperation, { label = "coordinator transactio
 				if (attempt > 0) {
 					console.log(`[Escrow] ${label} succeeded on retry attempt ${attempt + 1}`);
 				}
-				return txResponse;
+				return { ...txResponse, hash: txResponse.hash || sendResponse.hash };
 			}
 
 			throw new Error(`Transaction failed: ${JSON.stringify(txResponse)}`);
@@ -792,8 +791,437 @@ function resetUserSponsorship(userAddress) {
 	}
 }
 
+/**
+ * Wraps an async function with a renewable Redis lock (Issue #703).
+ * Acquires a lock before executing the function and extends the TTL periodically
+ * while the function is running. This prevents deadlocks when settlement takes longer
+ * than the initial TTL, which can happen during high Stellar network congestion.
+ *
+ * @param {object} redis - Redis client instance
+ * @param {string} lockKey - Redis key for the lock (e.g., "lock:escrow:match:ABC123")
+ * @param {string} workerId - Unique identifier for this worker/process
+ * @param {number} ttlSeconds - Lock TTL in seconds
+ * @param {function} fn - Async function to execute within the lock
+ * @returns {Promise<any>} Result of fn()
+ * @throws {Error} If lock acquisition fails or fn() throws
+ */
+async function withRenewableLock(redis, lockKey, workerId, ttlSeconds, fn) {
+	if (!redis || !lockKey || !workerId || !ttlSeconds || typeof fn !== 'function') {
+		throw new Error('withRenewableLock: missing required arguments');
+	}
+
+	const acquired = await redis.set(lockKey, workerId, 'NX', 'EX', ttlSeconds);
+	if (!acquired) {
+		throw new Error(`Failed to acquire lock: ${lockKey}`);
+	}
+
+	const renewalIntervalMs = Math.floor((ttlSeconds / 3) * 1000);
+	let renewalInterval = null;
+	let result;
+
+	try {
+		renewalInterval = setInterval(async () => {
+			try {
+				await redis.expire(lockKey, ttlSeconds);
+			} catch (err) {
+				console.error(`[Escrow] Lock renewal failed for ${lockKey}:`, err.message);
+				if (renewalInterval) {
+					clearInterval(renewalInterval);
+					renewalInterval = null;
+				}
+			}
+		}, renewalIntervalMs);
+
+		result = await fn();
+		return result;
+	} finally {
+		if (renewalInterval) {
+			clearInterval(renewalInterval);
+			renewalInterval = null;
+		}
+		await releaseLockSafe(redis, lockKey, workerId);
+	}
+}
+
+/**
+ * Safely releases a lock only if the current holder (workerId) matches.
+ * Uses a Lua script for atomicity.
+ *
+ * @param {object} redis - Redis client instance
+ * @param {string} lockKey - Redis key for the lock
+ * @param {string} workerId - Expected lock holder
+ */
+async function releaseLockSafe(redis, lockKey, workerId) {
+	const luaScript = `
+		if redis.call('GET', KEYS[1]) == ARGV[1] then
+			return redis.call('DEL', KEYS[1])
+		else
+			return 0
+		end
+	`;
+	try {
+		await redis.eval(luaScript, 1, lockKey, workerId);
+	} catch (err) {
+		console.error(`[Escrow] Safe lock release failed for ${lockKey}:`, err.message);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Idempotent settlement coordinator (Issue #645)
+//
+// Concurrent game-end events (resignation + flag fall, tournament rounds
+// finishing together) can race to settle the same match. Settlement is
+// therefore serialised per match id and recorded in a ledger so it can only
+// ever be submitted once:
+//
+//   1. Redis mutex  lock:escrow:match:<id>  (SET NX, 30s TTL, renewed while held)
+//   2. escrow_settlement_ledger lookup      (already confirmed -> return it)
+//   3. Soroban RPC status pre-check         (only an Active match is settled)
+//   4. pending ledger row, then submission  (txBAD_SEQ retried with backoff in
+//                                            submitWithRetry)
+//   5. optimistic-lock ledger update to confirmed / failed, retried with
+//      exponential backoff and jitter via database/transactionRetry
+// ---------------------------------------------------------------------------
+
+const { executeWithRetry, OptimisticLockError } = require("../database/transactionRetry");
+
+const ON_CHAIN_STATUS = Object.freeze({ PENDING: 0, ACTIVE: 1, RESOLVED: 2, REFUNDED: 3 });
+const SETTLEMENT_LOCK_TTL_SECONDS = 30;
+const SETTLEMENT_LEDGER_TABLE = "escrow_settlement_ledger";
+
+class SettlementInProgressError extends Error {
+	constructor(matchId) {
+		super(`Settlement already in progress for match ${matchId}`);
+		this.name = "SettlementInProgressError";
+		this.code = "SETTLEMENT_IN_PROGRESS";
+		this.matchId = matchId;
+	}
+}
+
+class MatchNotActiveError extends Error {
+	constructor(matchId, status) {
+		super(`Match ${matchId} cannot be settled: on-chain status is ${status}`);
+		this.name = "MatchNotActiveError";
+		this.code = "MATCH_NOT_ACTIVE";
+		this.matchId = matchId;
+		this.status = status;
+	}
+}
+
+/**
+ * Read the match status from the escrow contract via Soroban RPC (get_match
+ * simulation) so settlement is only attempted for an Active match.
+ * @returns {Promise<{status: number, exists: boolean, isActive: boolean, isFinal: boolean, match: object}>}
+ */
+async function checkOnChainStatus(matchId) {
+	const match = await getMatch(matchId);
+	const status = Number(match.status);
+	const exists = match.createdAt !== 0;
+	return {
+		status,
+		exists,
+		isActive: exists && status === ON_CHAIN_STATUS.ACTIVE,
+		isFinal: exists && (status === ON_CHAIN_STATUS.RESOLVED || status === ON_CHAIN_STATUS.REFUNDED),
+		match,
+	};
+}
+
+/** In-memory ledger with the same contract as the database one (tests, standalone use). */
+function createMemoryLedger() {
+	const rows = new Map();
+	return {
+		async find(matchId) {
+			const row = rows.get(String(matchId));
+			return row ? { ...row } : null;
+		},
+		async insertPending(matchId) {
+			const id = String(matchId);
+			if (rows.has(id)) return null;
+			const row = { match_id: id, status: "pending", tx_hash: null, attempts: 1, last_error: null, version: 0, submitted_at: new Date().toISOString() };
+			rows.set(id, row);
+			return { ...row };
+		},
+		async update(matchId, expectedVersion, patch) {
+			const row = rows.get(String(matchId));
+			if (!row || row.version !== expectedVersion) throw new OptimisticLockError();
+			Object.assign(row, patch, { version: expectedVersion + 1 });
+			return { ...row };
+		},
+	};
+}
+
+/** Ledger backed by the escrow_settlement_ledger PostgreSQL table (via the Supabase client). */
+function createSupabaseLedger(supabase) {
+	return {
+		async find(matchId) {
+			const { data, error } = await supabase.from(SETTLEMENT_LEDGER_TABLE).select("*").eq("match_id", String(matchId)).maybeSingle();
+			if (error) throw error;
+			return data || null;
+		},
+		async insertPending(matchId) {
+			const { data, error } = await supabase
+				.from(SETTLEMENT_LEDGER_TABLE)
+				.insert({ match_id: String(matchId), status: "pending" })
+				.select()
+				.single();
+			if (error) {
+				if (error.code === "23505") return null; // unique violation: another settlement owns this match
+				throw error;
+			}
+			return data;
+		},
+		async update(matchId, expectedVersion, patch) {
+			const { data, error } = await supabase
+				.from(SETTLEMENT_LEDGER_TABLE)
+				.update({ ...patch, version: expectedVersion + 1, updated_at: new Date().toISOString() })
+				.eq("match_id", String(matchId))
+				.eq("version", expectedVersion)
+				.select();
+			if (error) throw error;
+			if (!data || data.length === 0) throw new OptimisticLockError();
+			return data[0];
+		},
+	};
+}
+
+let defaultMemoryLedger = null;
+
+function resolveDefaultLedger() {
+	try {
+		const supabase = require("../config/supabase");
+		if (supabase && typeof supabase.from === "function") return createSupabaseLedger(supabase);
+	} catch (_) {
+		// Supabase not configured (standalone or test environment)
+	}
+	if (!defaultMemoryLedger) {
+		console.warn("[Escrow] Database unavailable — settlement ledger is in-memory and only protects this process");
+		defaultMemoryLedger = createMemoryLedger();
+	}
+	return defaultMemoryLedger;
+}
+
+function resolveDefaultRedis() {
+	try {
+		return require("../config/redis").getRedisClient();
+	} catch (_) {
+		return null;
+	}
+}
+
+// Fallback mutual exclusion for deployments without Redis (single process only).
+const inProcessSettlementLocks = new Set();
+
+async function withSettlementLock(matchId, { redis, workerId, ttlSeconds }, fn) {
+	const lockKey = `lock:escrow:match:${matchId}`;
+
+	if (!redis) {
+		if (inProcessSettlementLocks.has(lockKey)) throw new SettlementInProgressError(matchId);
+		inProcessSettlementLocks.add(lockKey);
+		try {
+			return await fn();
+		} finally {
+			inProcessSettlementLocks.delete(lockKey);
+		}
+	}
+
+	let entered = false;
+	try {
+		return await withRenewableLock(redis, lockKey, workerId, ttlSeconds, async () => {
+			entered = true;
+			return fn();
+		});
+	} catch (err) {
+		if (!entered && String(err?.message).startsWith("Failed to acquire lock")) throw new SettlementInProgressError(matchId);
+		throw err;
+	}
+}
+
+/** Optimistic-lock ledger update: re-reads the row and retries with backoff + jitter on conflict. */
+async function updateSettlementLedger(ledger, matchId, buildPatch, retryOptions = {}) {
+	return executeWithRetry(
+		async () => {
+			const current = await ledger.find(matchId);
+			if (!current) throw new Error(`Settlement ledger row missing for match ${matchId}`);
+			const patch = typeof buildPatch === "function" ? buildPatch(current) : buildPatch;
+			return ledger.update(matchId, current.version, patch);
+		},
+		{ maxRetries: 5, baseDelayMs: 25, maxDelayMs: 500, context: `escrow-ledger:${matchId}`, ...retryOptions },
+	);
+}
+
+/**
+ * Settle a match exactly once, however many callers race to do it.
+ *
+ * @param {string} matchId - game code / on-chain match id
+ * @param {() => Promise<{hash?: string}>} settlementFn - performs the on-chain
+ *   resolve/refund (e.g. () => resolveWithWinner(code, winner)) and returns its receipt
+ * @param {object} [options]
+ * @param {object} [options.redis] - Redis client (defaults to the shared client; in-process lock without one)
+ * @param {object} [options.ledger] - ledger store (defaults to the escrow_settlement_ledger table)
+ * @param {Function} [options.checkStatus] - on-chain status lookup (defaults to checkOnChainStatus)
+ * @param {string} [options.workerId] - lock owner id
+ * @param {number} [options.lockTtlSeconds=30]
+ * @param {object} [options.retry] - overrides for the ledger update retry (see executeWithRetry)
+ * @returns {Promise<{matchId: string, status: string, txHash: string|null, idempotent: boolean,
+ *   alreadySettled: boolean, onChainStatus?: number, receipt?: object}>}
+ * @throws {SettlementInProgressError} another settlement for this match holds the lock
+ * @throws {MatchNotActiveError} the match is not Active on-chain and was never settled
+ */
+async function settleMatchWithIdempotency(matchId, settlementFn, options = {}) {
+	if (!matchId) throw new Error("matchId is required for settlement");
+	if (typeof settlementFn !== "function") throw new Error("settlementFn must be a function");
+
+	const redis = options.redis === undefined ? resolveDefaultRedis() : options.redis;
+	const ledger = options.ledger || resolveDefaultLedger();
+	const checkStatus = options.checkStatus || checkOnChainStatus;
+	const workerId = options.workerId || `escrow-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+	const ttlSeconds = options.lockTtlSeconds || SETTLEMENT_LOCK_TTL_SECONDS;
+
+	return withSettlementLock(matchId, { redis, workerId, ttlSeconds }, async () => {
+		// 1. Idempotency: a confirmed settlement is returned as-is.
+		let record = await ledger.find(matchId);
+		if (record && record.status === "confirmed") {
+			return { matchId, status: "confirmed", txHash: record.tx_hash || null, idempotent: true, alreadySettled: true };
+		}
+
+		// 2. Only an Active match can be settled; anything already final on-chain
+		//    (e.g. settled by a crashed worker whose ledger write was lost) is reconciled.
+		const chain = await checkStatus(matchId);
+		if (!chain.isActive) {
+			if (!chain.isFinal) throw new MatchNotActiveError(matchId, chain.status);
+			if (!record) {
+				record = await ledger.insertPending(matchId);
+				if (!record) throw new SettlementInProgressError(matchId);
+			}
+			await updateSettlementLedger(ledger, matchId, { status: "confirmed", last_error: null }, options.retry);
+			return { matchId, status: "confirmed", txHash: record.tx_hash || null, idempotent: true, alreadySettled: true, onChainStatus: chain.status };
+		}
+
+		// 3. Record the attempt before touching the network so a duplicate cannot start.
+		if (!record) {
+			record = await ledger.insertPending(matchId);
+			if (!record) throw new SettlementInProgressError(matchId);
+		} else {
+			await updateSettlementLedger(
+				ledger,
+				matchId,
+				(current) => ({ status: "pending", attempts: (current.attempts || 0) + 1, submitted_at: new Date().toISOString(), last_error: null }),
+				options.retry,
+			);
+		}
+
+		// 4. Submit. txBAD_SEQ and other transient failures are retried with
+		//    exponential backoff + jitter inside submitWithRetry.
+		let receipt;
+		try {
+			receipt = await settlementFn();
+		} catch (err) {
+			try {
+				await updateSettlementLedger(ledger, matchId, { status: "failed", last_error: String(err?.message || err).slice(0, 500) }, options.retry);
+			} catch (ledgerErr) {
+				console.error(`[Escrow] Could not mark settlement failed for ${matchId}:`, ledgerErr.message);
+			}
+			throw err;
+		}
+
+		// 5. Confirm. The transaction is already on-chain, so a ledger write
+		//    failure must not hide the receipt from the caller.
+		const txHash = receipt?.hash || null;
+		try {
+			await updateSettlementLedger(ledger, matchId, { status: "confirmed", tx_hash: txHash, last_error: null }, options.retry);
+		} catch (ledgerErr) {
+			console.error(`[Escrow] Settlement ${matchId} confirmed on-chain (${txHash}) but ledger update failed:`, ledgerErr.message);
+		}
+		return { matchId, status: "confirmed", txHash, idempotent: false, alreadySettled: false, receipt };
+	});
+}
+
+// Serializes coordinator classic payments so concurrent refund batches never
+// race on the same Stellar sequence number (sequence-number lock).
+let paymentLock = Promise.resolve();
+
+function withSequenceLock(task) {
+	const run = paymentLock.then(task, task);
+	paymentLock = run.catch(() => undefined);
+	return run;
+}
+
+/**
+ * Refund a tournament buy-in to a single participant with a native payment
+ * from the coordinator account. Calls are serialized behind a sequence lock.
+ *
+ * @param {string} tournamentId
+ * @param {string} destination - participant Stellar address
+ * @param {string|number} amount - XLM amount
+ * @returns {Promise<{hash: string}>}
+ */
+async function refundTournamentBuyIn(tournamentId, destination, amount) {
+	if (!coordinatorKeypair) throw new Error("Coordinator secret key not configured");
+	if (!destination) throw new Error("Refund destination is required");
+	if (!(Number(amount) > 0)) throw new Error("Refund amount must be positive");
+	const memo = Memo.text(`refund:${String(tournamentId).slice(0, 20)}`);
+	return withSequenceLock(async () => {
+		const response = await submitWithRetry(
+			() => Operation.payment({ destination, asset: Asset.native(), amount: String(amount) }),
+			{ label: `tournament_refund(${tournamentId}, ${destination})`, memo },
+		);
+		return { hash: response.hash || response.txHash || response.id };
+	});
+}
+
+/**
+ * Refund a list of participants in concurrent batches. Never throws for an
+ * individual failure; each result carries its own outcome.
+ */
+async function refundTournamentBatch(tournamentId, entries, { batchSize = 5 } = {}) {
+	const results = [];
+	for (let i = 0; i < entries.length; i += batchSize) {
+		const batch = entries.slice(i, i + batchSize);
+		const settled = await Promise.allSettled(
+			batch.map((e) => refundTournamentBuyIn(tournamentId, e.wallet_address, e.amount)),
+		);
+		settled.forEach((r, idx) => {
+			results.push(
+				r.status === "fulfilled"
+					? { wallet_address: batch[idx].wallet_address, ok: true, hash: r.value.hash }
+					: { wallet_address: batch[idx].wallet_address, ok: false, error: r.reason?.message || String(r.reason) },
+			);
+		});
+	}
+	return results;
+/**
+ * Enqueue a failed escrow transaction intent for dead-letter retry processing.
+ *
+ * @param {object} item - { matchId, action, winner, attempts, lastError, ... }
+ * @param {object} [customRedis] - Optional injected redis client
+ * @returns {Promise<boolean>} whether enqueueing succeeded
+ */
+async function enqueueEscrowRetry(item, customRedis = null) {
+	try {
+		const { getRedisClient } = require("../config/redis");
+		const redis = customRedis || getRedisClient();
+		if (!redis || typeof redis.rpush !== "function") {
+			console.warn(`[Escrow] Redis unavailable, cannot enqueue retry for match: ${item?.matchId}`);
+			return false;
+		}
+		const payload = JSON.stringify({
+			...item,
+			attempts: item.attempts || 0,
+			enqueuedAt: Date.now(),
+		});
+		await redis.rpush("queue:escrow:retry", payload);
+		console.log(`[Escrow] Successfully enqueued retry for match ${item?.matchId}`);
+		return true;
+	} catch (err) {
+		console.error(`[Escrow] Failed to enqueue retry for match ${item?.matchId}:`, err.message);
+		return false;
+	}
+}
+
 module.exports = {
 	init,
+	refundTournamentBuyIn,
+	refundTournamentBatch,
 	resolveMatch,
 	resolveWithWinner,
 	resolveAsDraw,
@@ -803,6 +1231,7 @@ module.exports = {
 	getMatch,
 	estimateFee,
 	isRetryableError,
+	enqueueEscrowRetry,
 	DRAW_ADDRESS,
 	getHorizonTransactions,
 	verifyDepositTransaction,
@@ -815,4 +1244,14 @@ module.exports = {
 	getUserSponsorshipTotal,
 	getMatchAuditLogs,
 	resetUserSponsorship,
+	withRenewableLock,
+	releaseLockSafe,
+	settleMatchWithIdempotency,
+	checkOnChainStatus,
+	createMemoryLedger,
+	createSupabaseLedger,
+	SettlementInProgressError,
+	MatchNotActiveError,
+	ON_CHAIN_STATUS,
+	SETTLEMENT_LOCK_TTL_SECONDS,
 };

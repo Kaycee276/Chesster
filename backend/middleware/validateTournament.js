@@ -118,12 +118,18 @@ const registerPlayerSchema = {
 	signature: { type: "string", required: true, min: 1 },
 };
 
+const matchAuditTrailParamsSchema = {
+	tournamentId: { type: "string", required: true },
+	matchId: { type: "string", required: true },
+};
+
 module.exports = {
 	validate,
 	validateValue,
 	listTournamentsSchema,
 	tournamentIdSchema,
 	registerPlayerSchema,
+	matchAuditTrailParamsSchema,
 	TOURNAMENT_STATUSES,
 	UUID_PATTERN,
 	STELLAR_ADDRESS_PATTERN,

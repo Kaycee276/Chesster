@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge, FileUp } from "lucide-react";
+import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge, FileUp, RotateCw, LayoutGrid } from "lucide-react";
 import MoveNavigator from "../components/MoveNavigator";
 import EvaluationGraph from "../components/EvaluationGraph";
 import PromotionModal from "../components/PromotionModal";
+import BoardEditor from "../components/BoardEditor";
 import MoveBadge from "../components/analysis/MoveBadge";
 import { useToastStore } from "../store/toastStore";
 import { api } from "../api/gameApi";
@@ -15,7 +16,17 @@ import {
   type AccuracySummary,
   type MoveQuality,
 } from "../utils/moveAccuracy";
-import { INITIAL_BOARD, getPossibleMoves, applyMove, squareToAlgebraic } from "../utils/chessUtils";
+import {
+  calculateGameAccuracy,
+  estimatePerformanceRating,
+} from "../utils/capsCalculator";
+import {
+  INITIAL_BOARD,
+  getPossibleMoves,
+  applyMove,
+  squareToAlgebraic,
+  parseFen,
+} from "../utils/chessUtils";
 import { loadPgn, splitPgnGames, PgnParseError, type ReplayedMove } from "../utils/pgnParser";
 import EvaluationBar from "../components/EvaluationBar";
 import AnalysisControlBar from "../components/AnalysisControlBar";
@@ -111,6 +122,14 @@ export default function AnalysisPage() {
   } | null>(null);
 
   const [showPgnModal, setShowPgnModal] = useState(false);
+  const [showBoardEditor, setShowBoardEditor] = useState(false);
+  // Custom position loaded from the board editor (#757). When set, it
+  // replaces the standard starting board; imported games clear it.
+  const [customStart, setCustomStart] = useState<{
+    board: string[][];
+    turn: "white" | "black";
+    fen: string;
+  } | null>(null);
   const [pgnInput, setPgnInput] = useState("");
   const [matchIdInput, setMatchIdInput] = useState("");
   const [loadingMatch, setLoadingMatch] = useState(false);
@@ -244,12 +263,19 @@ export default function AnalysisPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [currentIndex, moves.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const baseBoard = currentIndex === -1 ? INITIAL_BOARD : moves[currentIndex].boardAfter;
+  const baseBoard =
+    currentIndex === -1 ? customStart?.board ?? INITIAL_BOARD : moves[currentIndex].boardAfter;
   const currentBoard =
     branch && branch.length > 0 ? branch[branch.length - 1].boardAfter : baseBoard;
 
   const pliesPlayed = currentIndex + 1 + (branch?.length ?? 0);
-  const turnToMove: "white" | "black" = pliesPlayed % 2 === 0 ? "white" : "black";
+  const baseTurn = customStart?.turn ?? "white";
+  const turnToMove: "white" | "black" =
+    pliesPlayed % 2 === 0
+      ? baseTurn
+      : baseTurn === "white"
+        ? "black"
+        : "white";
 
   // ── Engine Evaluation & Analysis Settings (#438) ─────────────────────────
   const [analysisPrefs, setAnalysisPrefs] = useState<AnalysisPreferences>(() =>
@@ -286,6 +312,14 @@ export default function AnalysisPage() {
   const handleTogglePause = () => {
     setAnalysisPrefs((prev) => {
       const next = { ...prev, isPaused: !prev.isPaused };
+      saveAnalysisPreferences(next);
+      return next;
+    });
+  };
+
+  const handleToggleLockWhiteBottom = () => {
+    setAnalysisPrefs((prev) => {
+      const next = { ...prev, lockWhiteBottom: !prev.lockWhiteBottom };
       saveAnalysisPreferences(next);
       return next;
     });
@@ -364,6 +398,24 @@ export default function AnalysisPage() {
     commitBranchMove(selectedSquare, [row, col]);
   };
 
+  // ── Custom position from the board editor (#757) ────────────────────────
+  const handleApplyPosition = (fen: string) => {
+    try {
+      const parsed = parseFen(fen);
+      setCustomStart({ board: parsed.board, turn: parsed.turn, fen });
+      setMoves([]);
+      setHeaders({ Event: "Custom position" });
+      setResult("*");
+      setCurrentIndex(-1);
+      setBranch(null);
+      setSelectedSquare(null);
+      setShowBoardEditor(false);
+      addToast("Custom position loaded", "success");
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : "Invalid position", "error");
+    }
+  };
+
   // ── PGN import ──────────────────────────────────────────────────────────
   const handleImportPgn = () => {
     try {
@@ -374,6 +426,7 @@ export default function AnalysisPage() {
       setCurrentIndex(-1);
       setBranch(null);
       setSelectedSquare(null);
+      setCustomStart(null);
       setShowPgnModal(false);
       setPgnInput("");
       addToast(`Imported ${parsed.moves.length} moves`, "success");
@@ -397,6 +450,7 @@ export default function AnalysisPage() {
         setCurrentIndex(-1);
         setBranch(null);
         setSelectedSquare(null);
+        setCustomStart(null);
         if (!keepSelector) setFileGames([]);
         addToast(`Imported ${parsed.moves.length} moves`, "success");
       } catch (err) {
@@ -514,6 +568,7 @@ export default function AnalysisPage() {
       setCurrentIndex(-1);
       setBranch(null);
       setSelectedSquare(null);
+      setCustomStart(null);
       addToast(`Loaded ${records.length} moves from match ${code}`, "success");
     } catch {
       addToast("Failed to load that match", "error");
@@ -542,7 +597,17 @@ export default function AnalysisPage() {
     return rows;
   }, [moves]);
 
-  const isFlipped = false; // analysis board always shown from white's perspective
+  const [isFlipped, setIsFlipped] = useState(false);
+  const activeOrientation: "white" | "black" = analysisPrefs.lockWhiteBottom
+    ? "white"
+    : isFlipped
+      ? "black"
+      : "white";
+
+  const capsAccuracy = useMemo(() => {
+    if (!accuracy.evaluations || accuracy.evaluations.length <= 1) return null;
+    return calculateGameAccuracy(accuracy.evaluations);
+  }, [accuracy.evaluations]);
 
   return (
     <div className="h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg) p-2 gap-2">
@@ -560,6 +625,14 @@ export default function AnalysisPage() {
             Single games load instantly · collections offer a selector
           </p>
         </div>
+      )}
+
+      {showBoardEditor && (
+        <BoardEditor
+          initialFen={customStart?.fen}
+          onApply={handleApplyPosition}
+          onClose={() => setShowBoardEditor(false)}
+        />
       )}
 
       {showPgnModal && (
@@ -608,11 +681,27 @@ export default function AnalysisPage() {
             </span>
           )}
           <button
+            onClick={() => setShowBoardEditor(true)}
+            title="Set up a custom position"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg bg-(--bg) border border-(--border) hover:border-(--accent-primary)/60 text-xs font-semibold transition-colors shrink-0"
+          >
+            <LayoutGrid size={13} /> <span className="hidden sm:inline">Board Editor</span>
+          </button>
+          <button
             onClick={() => setShowPgnModal(true)}
             title="Paste PGN"
             className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg bg-(--bg) border border-(--border) hover:border-(--accent-primary)/60 text-xs font-semibold transition-colors shrink-0"
           >
             <Upload size={13} /> <span className="hidden sm:inline">Paste PGN</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsFlipped((f) => !f)}
+            title="Flip board orientation"
+            aria-label="Flip board orientation"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg bg-(--bg) border border-(--border) hover:border-(--accent-primary)/60 text-xs font-semibold transition-colors shrink-0"
+          >
+            <RotateCw size={13} /> <span className="hidden sm:inline">Flip</span>
           </button>
           <label className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-(--bg) border border-(--border) hover:border-(--accent-primary)/60 text-xs font-semibold transition-colors cursor-pointer shrink-0">
             <FileUp size={13} aria-hidden="true" /> Drop/browse PGN
@@ -654,7 +743,7 @@ export default function AnalysisPage() {
             <EvaluationBar
               scoreCp={liveEvaluation.scoreCp}
               mate={liveEvaluation.mate}
-              orientation="white"
+              orientation={activeOrientation}
               depth={liveEvaluation.depth}
               loading={!liveEvaluation}
             />
@@ -748,9 +837,11 @@ export default function AnalysisPage() {
             multiPv={analysisPrefs.multiPv}
             isPaused={analysisPrefs.isPaused}
             variations={formattedVariations}
+            lockWhiteBottom={Boolean(analysisPrefs.lockWhiteBottom)}
             onDepthChange={handleDepthChange}
             onMultiPvChange={handleMultiPvChange}
             onTogglePause={handleTogglePause}
+            onToggleLockWhiteBottom={handleToggleLockWhiteBottom}
           />
 
           <MoveNavigator
@@ -766,6 +857,7 @@ export default function AnalysisPage() {
               evaluations={accuracy.evaluations}
               currentMoveIndex={currentIndex}
               onMoveChange={goToMove}
+              moves={moves}
             />
           )}
 
@@ -794,6 +886,81 @@ export default function AnalysisPage() {
                     ? "Evaluating positions with Stockfish…"
                     : "Engine analysis unavailable."}
                 </p>
+              )}
+
+              {/* CAPS Accuracy Engine circular gauges & rating estimates (#683) */}
+              {capsAccuracy && (
+                <div className="grid grid-cols-2 gap-3 pt-2 border-t border-(--border)/60">
+                  <div
+                    data-testid="caps-gauge-white"
+                    className="flex items-center gap-2.5 bg-(--bg) p-2 rounded-lg border border-(--border)"
+                  >
+                    <div className="relative w-9 h-9 shrink-0 flex items-center justify-center">
+                      <svg className="w-9 h-9 -rotate-90" viewBox="0 0 36 36">
+                        <path
+                          className="text-(--border)"
+                          strokeWidth="3.5"
+                          stroke="currentColor"
+                          fill="none"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                        <path
+                          className="text-(--accent-primary)"
+                          strokeDasharray={`${Math.round(capsAccuracy.whiteAccuracy)}, 100`}
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          stroke="currentColor"
+                          fill="none"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                      </svg>
+                      <span className="absolute text-[9px] font-mono font-bold">
+                        {Math.round(capsAccuracy.whiteAccuracy)}%
+                      </span>
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-[10px] font-bold text-(--text)">White CAPS</span>
+                      <span className="text-[9px] font-mono text-(--text-tertiary)">
+                        Est. {estimatePerformanceRating(capsAccuracy.whiteAccuracy)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    data-testid="caps-gauge-black"
+                    className="flex items-center gap-2.5 bg-(--bg) p-2 rounded-lg border border-(--border)"
+                  >
+                    <div className="relative w-9 h-9 shrink-0 flex items-center justify-center">
+                      <svg className="w-9 h-9 -rotate-90" viewBox="0 0 36 36">
+                        <path
+                          className="text-(--border)"
+                          strokeWidth="3.5"
+                          stroke="currentColor"
+                          fill="none"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                        <path
+                          className="text-(--accent-primary)"
+                          strokeDasharray={`${Math.round(capsAccuracy.blackAccuracy)}, 100`}
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          stroke="currentColor"
+                          fill="none"
+                          d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                        />
+                      </svg>
+                      <span className="absolute text-[9px] font-mono font-bold">
+                        {Math.round(capsAccuracy.blackAccuracy)}%
+                      </span>
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <span className="text-[10px] font-bold text-(--text)">Black CAPS</span>
+                      <span className="text-[9px] font-mono text-(--text-tertiary)">
+                        Est. {estimatePerformanceRating(capsAccuracy.blackAccuracy)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           )}

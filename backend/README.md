@@ -97,3 +97,50 @@ backend/
 3. Select `backend/docs/openapi.yaml` from your local checkout.
 4. Test request schemas, inspect endpoints, and try out live requests against `http://localhost:3000/api`.
 
+## Stellar wallet sign in
+
+Set `REDIS_URL`, a strong `JWT_SECRET`, and `AUTH_ALLOWED_ORIGINS` (comma separated
+exact origins, including scheme and port). Wallet authentication requires Redis;
+it returns an error rather than accepting a local challenge when Redis is down.
+Wildcards in `CORS_ORIGIN` do not authorize wallet login. Local development can
+use `http://localhost:3090`; production must configure explicit allowed origins.
+
+1. Call `GET /api/auth/nonce?address=<Stellar G address>&uri=<encoded client URI>`
+   with the browser's `Origin` header. The response's `data` contains `nonce`,
+   `message`, `domain`, `uri`, `issuedAt`, and `expirationTime`. Responses are
+   marked `Cache-Control: no-store`.
+2. Sign the exact UTF-8 `message` with the wallet. The message binds the wallet,
+   domain, client URI, issuance time, and expiry in an EIP-4361-style Stellar
+   sign in challenge. SEP-0043 defines the wallet interface and hex signature
+   format; it does not prescribe the challenge grammar.
+3. Send `{ address, message, signature, uri }` to `POST /api/auth/verify` from
+   the same origin. `signature` is a 64-byte Ed25519 signature encoded as hex
+   (SEP-0043), or set `signatureEncoding: "base64"` explicitly. The response
+   includes the JWT and user profile, retaining session rotation and IP binding.
+
+Nonces contain 32 random bytes, have a strict 300-second Redis TTL, and are
+atomically removed on the first verification attempt, including failed
+signatures. Request a new challenge after any failed attempt. Reissuing a
+challenge invalidates the previous one. Concurrent requests across servers can
+consume each challenge only once.
+
+`POST /api/auth/challenge` and `POST /api/auth/login` retain their existing
+message/base64 response and signature formats, using the same Redis and origin
+checks. Account deletion uses `purpose: "delete-account"` and cannot reuse a
+login challenge; it also requires the original `Origin` and optional `uri`.
+
+### WebSocket handshake protection
+
+Initial Engine.IO handshakes use a shared Redis token bucket per client IP,
+with a capacity of 30 attempts and a refill rate of 30 tokens per minute.
+Each attempt refreshes the bucket's 60 second inactivity expiration. Excess
+polling requests and WebSocket upgrades receive HTTP 429 with `Retry-After`
+and `Too many connection attempts` before a connection is allocated.
+Requests belonging to an existing session are not counted again.
+
+When Redis is unavailable, a local LRU cache holds at most 10,000 IP buckets.
+It also tracks attempts while Redis is healthy, preserving local usage during
+an outage. This fallback is per process; Redis provides the shared cluster limit.
+Loopback connections are subject to the same limits. Forwarding headers are
+only used behind peers configured in `TRUSTED_PROXIES`, using the first
+untrusted address in the proxy chain; otherwise the socket's remote IP is used.

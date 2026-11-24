@@ -71,6 +71,8 @@ class TimerService {
 		//   incrementMs, preset, turn,
 		//   turnStartHr      - process.hrtime.bigint() when the active turn
 		//                      began (null while paused)
+		//   turnStartedAt    - ISO wall-clock timestamp of the same instant
+		//                      (informational only, never used for elapsed time)
 		//   paused,
 		//   deadline         - wall-clock flag-fall estimate (informational)
 		//   timeout
@@ -156,6 +158,7 @@ class TimerService {
 			preset: tc.preset,
 			turn,
 			turnStartHr: this.hrNow(),
+			turnStartedAt: new Date().toISOString(),
 			paused: false,
 			deadline: Date.now() + baseMs,
 			timeout: null,
@@ -196,6 +199,7 @@ class TimerService {
 		state[key] = Math.max(0, remaining) + state.incrementMs;
 		state.turn = moverColor === "white" ? "black" : "white";
 		state.turnStartHr = state.paused ? null : this.hrNow();
+		state.turnStartedAt = new Date().toISOString();
 
 		this._scheduleFlagFall(gameCode);
 		this._emitTimerSync(gameCode);
@@ -229,6 +233,7 @@ class TimerService {
 		if (state.paused) {
 			state.paused = false;
 			state.turnStartHr = this.hrNow();
+			state.turnStartedAt = new Date().toISOString();
 			this._scheduleFlagFall(gameCode);
 			this._emitTimerSync(gameCode);
 		}
@@ -405,31 +410,47 @@ class TimerService {
 
 		const timeout = setTimeout(async () => {
 			this.player_disconnect_timers.delete(key);
-			try {
-				const gameModel = require("../models/gameModel");
-				const game = await gameModel.forfeitByDisconnect(gameCode, color);
-				await require("../models/userModel").invalidateProfilesForGame(game);
-				this.clearClock(gameCode);
-				if (this.io && game) {
-					this.io.to(gameCode).emit("game-update", game);
-					this.io.to(gameCode).emit("presence-update", {
-						gameCode,
-						color,
-						status: "offline",
-						forfeited: true,
-					});
-					this.io.to(gameCode).emit("game_over", {
-						gameCode,
-						winner: game.winner === game.player_white_address ? "white" : "black",
-						reason: "abandonment",
-					});
-				}
-			} catch (err) {
-				console.error(`[TimerService] auto-forfeit failed for ${gameCode}/${color}:`, err.message);
-			}
+			await this.forfeitForAbandonment(gameCode, color);
 		}, graceSeconds * 1000);
 
 		this.player_disconnect_timers.set(key, { timeout, expiresAt: Date.now() + graceSeconds * 1000 });
+	}
+
+	/**
+	 * Forfeit `color` for abandoning the game (failed to reconnect within the
+	 * grace period). Persists the result via gameModel.forfeitByDisconnect, which
+	 * also settles escrow with the coordinator, then notifies the room.
+	 * gameModel.forfeitByDisconnect leaves a game that is no longer active untouched,
+	 * so a late call cannot overwrite an existing result.
+	 * @param {string} gameCode
+	 * @param {"white"|"black"} color
+	 * @returns {Promise<object|null>} the finished game row, or null on failure
+	 */
+	async forfeitForAbandonment(gameCode, color) {
+		try {
+			const gameModel = require("../models/gameModel");
+			const game = await gameModel.forfeitByDisconnect(gameCode, color);
+			await require("../models/userModel").invalidateProfilesForGame(game);
+			this.clearClock(gameCode);
+			if (this.io && game) {
+				this.io.to(gameCode).emit("game-update", game);
+				this.io.to(gameCode).emit("presence-update", {
+					gameCode,
+					color,
+					status: "offline",
+					forfeited: true,
+				});
+				this.io.to(gameCode).emit("game_over", {
+					gameCode,
+					winner: game.winner === game.player_white_address ? "white" : "black",
+					reason: "abandonment",
+				});
+			}
+			return game;
+		} catch (err) {
+			console.error(`[TimerService] auto-forfeit failed for ${gameCode}/${color}:`, err.message);
+			return null;
+		}
 	}
 
 	cancelReconnectGrace(gameCode, color) {

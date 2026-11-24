@@ -30,17 +30,21 @@ export default defineConfig({
 			injectRegister: "auto",
 			// Use the hand-authored public/manifest.json instead of generating one.
 			manifest: false,
-			includeAssets: ["favicon.ico"],
+			includeAssets: ["favicon.ico", "manifest.json", "icon-192.png", "icon-512.png"],
 			workbox: {
 				// Precache the built app shell and static assets.
-				globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff,woff2}"],
+				globPatterns: ["**/*.{js,css,html,ico,png,svg,webp,woff,woff2,wasm,mp3,ogg,wav}"],
 				globIgnores: ["**/stats.html"],
 				maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+				navigateFallback: "index.html",
+				navigateFallbackDenylist: [/^\/api(?:\/|$)/],
 				// Runtime-cache chessboard piece/image assets so the board renders
 				// offline and on flaky connections.
 				runtimeCaching: [
 					{
-						urlPattern: ({ request }) => request.destination === "image",
+						urlPattern: ({ request, url, sameOrigin }) =>
+							sameOrigin && request.destination === "image" &&
+							/^\/(?:assets\/|pieces\/|icon-(?:192|512)\.png$|favicon\.ico$)/.test(url.pathname),
 						handler: "CacheFirst",
 						options: {
 							cacheName: "chessboard-assets",
@@ -48,7 +52,7 @@ export default defineConfig({
 								maxEntries: 100,
 								maxAgeSeconds: 60 * 60 * 24 * 30,
 							},
-							cacheableResponse: { statuses: [0, 200] },
+							cacheableResponse: { statuses: [200] },
 						},
 					},
 					// Cache daily puzzle responses for offline playback

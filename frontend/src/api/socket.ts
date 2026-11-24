@@ -19,6 +19,16 @@ export interface SpectatorReaction {
   xOffset: number;
 }
 
+/** A spectator currently watching a game, as reported by spectator presence events (#705). */
+export interface SpectatorPresence {
+  address: string;
+  name?: string;
+  rating?: number;
+  /** Unix epoch milliseconds when the spectator joined. */
+  joinedAt?: number;
+  badge?: "master" | "verified" | "organizer";
+}
+
 /** Payload of the server's presence/reconnection events (#317). */
 export interface OpponentStatusEvent {
   gameCode?: string;
@@ -192,6 +202,21 @@ class SocketService {
 
   offReaction() {
     this.socket?.off("spectator:reaction");
+  }
+
+  onSpectatorJoined(callback: (data: SpectatorPresence) => void) {
+    this.socket?.off("spectator_joined");
+    this.socket?.on("spectator_joined", callback);
+  }
+
+  onSpectatorLeft(callback: (data: { address: string }) => void) {
+    this.socket?.off("spectator_left");
+    this.socket?.on("spectator_left", callback);
+  }
+
+  offSpectatorPresence() {
+    this.socket?.off("spectator_joined");
+    this.socket?.off("spectator_left");
   }
 
   offChatMessage() {

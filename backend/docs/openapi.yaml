@@ -32,6 +32,98 @@ tags:
     description: System status, uptime, and database health probes
 
 paths:
+  /auth/nonce:
+    get:
+      tags: [Auth]
+      summary: Issue a single use Stellar sign in challenge
+      description: Requires Redis and an explicitly allowed browser Origin. Nonces expire after 300 seconds. Responses use Cache-Control no-store.
+      operationId: generateAuthNonce
+      parameters:
+        - in: header
+          name: Origin
+          required: true
+          schema: { type: string, format: uri }
+        - in: query
+          name: address
+          required: true
+          schema: { type: string }
+        - in: query
+          name: uri
+          description: Client URI on the same allowed origin
+          schema: { type: string, format: uri }
+        - in: query
+          name: purpose
+          schema: { type: string, enum: [login, delete-account], default: login }
+      responses:
+        '200':
+          description: Origin bound challenge issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      address: { type: string }
+                      nonce: { type: string, pattern: '^[a-f0-9]{64}$' }
+                      message: { type: string }
+                      domain: { type: string }
+                      origin: { type: string, format: uri }
+                      uri: { type: string, format: uri }
+                      purpose: { type: string }
+                      issuedAt: { type: string, format: date-time }
+                      expirationTime: { type: string, format: date-time }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          description: Authentication store unavailable
+  /auth/verify:
+    post:
+      tags: [Auth]
+      summary: Verify the exact Stellar sign in message and issue a JWT
+      description: The challenge is consumed atomically on the first attempt. Signatures use SEP-0043 hex format by default. Reuses login session rotation and IP binding.
+      operationId: verifyStellarSignIn
+      parameters:
+        - in: header
+          name: Origin
+          required: true
+          schema: { type: string, format: uri }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address, message, signature]
+              properties:
+                address: { type: string }
+                message: { type: string }
+                signature: { type: string }
+                signatureEncoding: { type: string, enum: [hex, base64], default: hex }
+                uri: { type: string, format: uri }
+      responses:
+        '200':
+          description: Wallet verified, JWT and user returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      token: { type: string }
+                      user:
+                        $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Authentication store unavailable
   /auth/challenge:
     post:
       tags:
@@ -45,9 +137,9 @@ paths:
             schema:
               type: object
               required:
-                - publicKey
+                - address
               properties:
-                publicKey:
+                address:
                   type: string
                   example: GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI
                   description: Stellar G-address of the connecting wallet
@@ -65,12 +157,9 @@ paths:
                   data:
                     type: object
                     properties:
-                      nonce:
+                      message:
                         type: string
-                        example: "Sign this message to authenticate with Chesster: 1729000000000-a1b2c3d4"
-                      expiresAt:
-                        type: string
-                        format: date-time
+                        description: Exact origin bound Stellar challenge to sign
         '400':
           $ref: '#/components/responses/BadRequest'
         '429':
@@ -89,10 +178,10 @@ paths:
             schema:
               type: object
               required:
-                - publicKey
+                - address
                 - signature
               properties:
-                publicKey:
+                address:
                   type: string
                   example: GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI
                 signature:

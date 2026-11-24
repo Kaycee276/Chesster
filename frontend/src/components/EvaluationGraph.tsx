@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { formatEvaluation } from "../utils/engineEvaluation";
+import type { ReplayedMove } from "../utils/pgnParser";
 
 interface EvaluationGraphProps {
 	evaluations: readonly (number | null)[];
 	currentMoveIndex: number;
 	onMoveChange: (index: number) => void;
+	moves?: readonly Pick<ReplayedMove, "san" | "color" | "moveNumber">[];
 }
 
 interface Point {
@@ -20,6 +22,11 @@ const PADDING_X = 12;
 const PADDING_Y = 16;
 const ZERO_Y = HEIGHT / 2;
 const SCORE_RANGE = 500;
+const BADGES = {
+	blunder: { glyph: "??", color: "#dc2626", label: "Blunder" },
+	mistake: { glyph: "?", color: "#ea580c", label: "Mistake" },
+	inaccuracy: { glyph: "?!", color: "#facc15", label: "Inaccuracy" },
+};
 
 function positionLabel(index: number): string {
 	if (index === 0) return "Starting position";
@@ -77,6 +84,7 @@ export default function EvaluationGraph({
 	evaluations,
 	currentMoveIndex,
 	onMoveChange,
+	moves,
 }: EvaluationGraphProps) {
 	const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 	const points = createPoints(evaluations);
@@ -89,6 +97,20 @@ export default function EvaluationGraph({
 			: [];
 	});
 	const hoveredPoint = hoveredIndex === null ? undefined : pointByIndex.get(hoveredIndex);
+	const annotations = new Map(points.flatMap((point) => {
+		const previous = pointByIndex.get(point.index - 1);
+		if (!previous) return [];
+		const move = moves?.[point.index - 1];
+		const color = move?.color ?? (point.index % 2 === 1 ? "white" : "black");
+		const loss = color === "white" ? previous.score - point.score : point.score - previous.score;
+		// Issue #648 uses 50/100/300cp boundaries for graph callouts.
+		const type = loss > 300 ? "blunder" : loss >= 100 ? "mistake" : loss >= 50 ? "inaccuracy" : null;
+		if (!type) return [];
+		const badge = BADGES[type];
+		const notation = move ? `${move.moveNumber}${color === "white" ? "." : "..."} ${move.san}` : positionLabel(point.index);
+		return [[point.index, { ...badge, type, label: `${notation}${badge.glyph} · ${badge.label} (-${(loss / 100).toFixed(2)} pawns)` }] as const];
+	}));
+	const hoveredLabel = hoveredPoint && (annotations.get(hoveredPoint.index)?.label ?? `${positionLabel(hoveredPoint.index)} · ${formatEvaluation(hoveredPoint.score)}`);
 
 	const selectPoint = (index: number) => onMoveChange(index - 1);
 	const handlePointKeyDown = (event: React.KeyboardEvent<SVGGElement>, index: number) => {
@@ -99,13 +121,13 @@ export default function EvaluationGraph({
 
 	return (
 		<section className="shrink-0 rounded-xl bg-(--bg-secondary) border border-(--border) p-2.5">
-			<div className="mb-1 flex items-center justify-between">
-				<h2 className="text-[10px] font-semibold uppercase tracking-wide text-(--accent-primary)">
+			<div className="mb-1 flex h-8 items-center justify-between gap-2">
+				<h2 className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-(--accent-primary)">
 					Move evaluation
 				</h2>
-				{hoveredPoint && (
-					<span className="text-[10px] font-mono text-(--text-secondary)" aria-live="polite">
-						{positionLabel(hoveredPoint.index)} · {formatEvaluation(hoveredPoint.score)}
+				{hoveredLabel && (
+					<span className="min-w-0 line-clamp-2 text-right text-[10px] font-mono text-(--text-secondary)" aria-live="polite">
+						{hoveredLabel}
 					</span>
 				)}
 			</div>
@@ -135,7 +157,8 @@ export default function EvaluationGraph({
 						<path key={index} d={path} fill="none" stroke="#60a5fa" strokeWidth="2" strokeLinejoin="round" />
 					))}
 					{points.map((point) => {
-						const label = `${positionLabel(point.index)}: ${formatEvaluation(point.score)}`;
+						const annotation = annotations.get(point.index);
+						const label = annotation?.label ?? `${positionLabel(point.index)}: ${formatEvaluation(point.score)}`;
 						return (
 							<g
 								key={point.index}
@@ -143,6 +166,8 @@ export default function EvaluationGraph({
 								tabIndex={0}
 								aria-label={label}
 								aria-pressed={currentMoveIndex === point.index - 1}
+								data-classification={annotation?.type}
+								className="cursor-pointer outline-none [&:focus-visible>circle]:stroke-(--accent-primary) [&:focus-visible>circle]:stroke-3"
 								onClick={() => selectPoint(point.index)}
 								onKeyDown={(event) => handlePointKeyDown(event, point.index)}
 								onPointerEnter={() => setHoveredIndex(point.index)}
@@ -155,16 +180,26 @@ export default function EvaluationGraph({
 								<circle
 									cx={point.x}
 									cy={point.y}
-									r={currentMoveIndex === point.index - 1 ? 4.5 : 3}
-									fill="#93c5fd"
+									r={annotation ? 9 : currentMoveIndex === point.index - 1 ? 4.5 : 3}
+									fill={annotation?.color ?? "#93c5fd"}
 									stroke="#0f172a"
 									strokeWidth="1.5"
 								/>
+								{annotation && (
+									<text x={point.x} y={point.y} textAnchor="middle" dominantBaseline="central" fill={annotation.type === "blunder" ? "#ffffff" : "#0f172a"} fontSize="10" fontWeight="bold" pointerEvents="none" aria-hidden="true">
+										{annotation.glyph}
+										</text>
+								)}
 							</g>
 						);
 					})}
 				</svg>
 			)}
+			<div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-(--text-secondary)" aria-label="Move classification legend">
+				{Object.values(BADGES).map((badge) => (
+					<span key={badge.label}>{badge.glyph} {badge.label}</span>
+				))}
+			</div>
 		</section>
 	);
 }

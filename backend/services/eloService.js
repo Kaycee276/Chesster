@@ -23,9 +23,11 @@ class EloService {
 	getKFactor(gamesPlayed, currentRating) {
 		const games = Number(gamesPlayed ?? 0);
 		const rating = Number(currentRating ?? 1200);
-		if (!Number.isFinite(games) || games < 20) return 40;
-		if (rating >= 2000) return 10;
-		return DEFAULT_K_FACTOR;
+		if (!Number.isFinite(games)) return DEFAULT_K_FACTOR;
+		if (games < 10) return 64;
+		if (games < 30) return 40;
+		if (rating >= 2100) return 16;
+		return 24;
 	}
 
 	calculateG(ratingDeviation) {

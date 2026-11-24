@@ -1,5 +1,6 @@
 const { parseUciMove, getLegalMoves, getOpeningBookMove } = require("./botHeuristics");
 const { StockfishPool, PRIORITY, configuredPoolSize } = require("./stockfishPool");
+const { boundedDepth, moveOptions, validateBoard, validateHistory, parseBotFen, MAX_MOVE_TIME_MS } = require("./botInput");
 
 // Path to a UCI-speaking Stockfish binary. Not bundled with this repo (the
 // official `stockfish` npm package ships 100MB+ of prebuilt WASM binaries
@@ -8,7 +9,9 @@ const { StockfishPool, PRIORITY, configuredPoolSize } = require("./stockfishPool
 // servers do. Set STOCKFISH_PATH to point at a real Stockfish executable in
 // any environment where bots should actually play at engine strength.
 const STOCKFISH_PATH = process.env.STOCKFISH_PATH || "stockfish";
-const ENGINE_MOVE_TIME_MS = parseInt(process.env.STOCKFISH_MOVE_TIME_MS || "800", 10);
+const configuredMoveTime = Number(process.env.STOCKFISH_MOVE_TIME_MS);
+const ENGINE_MOVE_TIME_MS = Number.isFinite(configuredMoveTime) && configuredMoveTime >= 1
+	? Math.min(MAX_MOVE_TIME_MS, Math.floor(configuredMoveTime)) : 800;
 // Post-game analysis searches deeper than a live move, so it gets a longer
 // execution budget and may wait longer for a worker behind live moves.
 const ANALYSIS_TIMEOUT_MS = Number(process.env.STOCKFISH_ANALYSIS_TIMEOUT_MS) || 15000;
@@ -29,7 +32,7 @@ const DIFFICULTY_PRESETS = {
 	medium: { skillLevel: 10, depth: 10 },
 	hard: { skillLevel: 18, depth: 16 },
 	master: { skillLevel: 20, depth: 20 },
-	maximum: { skillLevel: 20, depth: 22 },
+	maximum: { skillLevel: 20, depth: 20 },
 };
 
 /**
@@ -53,7 +56,7 @@ function isValidBotLevel(level) {
 
 /** Map a 0-20 skill level onto a search depth consistent with the presets. */
 function depthForSkill(skillLevel) {
-	return Math.max(1, Math.min(22, Math.round(3 + skillLevel * 0.9)));
+	return Math.max(1, Math.min(20, Math.round(3 + skillLevel * 0.9)));
 }
 
 /**
@@ -71,8 +74,8 @@ function resolveDifficulty(difficulty) {
 		return { skillLevel, depth: depthForSkill(skillLevel) };
 	}
 	if (typeof difficulty === "string") {
-		const preset = DIFFICULTY_PRESETS[difficulty.trim().toLowerCase()];
-		if (preset) return { ...preset };
+		const name = difficulty.trim().toLowerCase();
+		if (Object.prototype.hasOwnProperty.call(DIFFICULTY_PRESETS, name)) return { ...DIFFICULTY_PRESETS[name] };
 	}
 	return { ...DIFFICULTY_PRESETS.medium };
 }
@@ -138,9 +141,11 @@ class BotService {
 	 * never delays live bot moves or spawns engines outside the pool's cap.
 	 * @returns {Promise<{ bestMove: string|null, scoreCp: number|null }>}
 	 */
-	analyzeFen(fen, depth = 16) {
+	async analyzeFen(fen, depth = 16) {
+		const position = parseBotFen(fen);
+		const searchDepth = boundedDepth(depth);
 		return this.pool.run(
-			{ kind: "analyze", fen, depth: Math.max(1, Math.floor(depth)) },
+			{ kind: "analyze", fen: position.fen, depth: searchDepth },
 			{ priority: PRIORITY.ANALYSIS, timeoutMs: ANALYSIS_TIMEOUT_MS, queueTimeoutMs: ANALYSIS_QUEUE_TIMEOUT_MS },
 		);
 	}
@@ -159,9 +164,13 @@ class BotService {
 	 *   engine:"stockfish"|"heuristic", skillLevel:number, depth:number }|null>}
 	 * @throws {Error} with code BOT_TIMEOUT or BOT_QUEUE_FULL when the pool can't answer in time
 	 */
-	async getBestMove(board, turn, lastMove = null, difficulty = "medium", moveCount = 0) {
-		const { skillLevel, depth } = resolveDifficulty(difficulty);
-		const fen = boardToFEN(board, turn, moveCount);
+	async getBestMove(board, turn, lastMove = null, difficulty = "medium", moveCount = 0, options = {}) {
+		validateBoard(board);
+		validateHistory(turn, lastMove, moveCount);
+		const resolved = resolveDifficulty(difficulty);
+		const { depth, timeLimitMs } = moveOptions(options, resolved.depth);
+		const skillLevel = resolved.skillLevel;
+		const fen = options.fen === undefined ? boardToFEN(board, turn, moveCount) : parseBotFen(options.fen).fen;
 		if (moveCount < 12) {
 			const bookMove = getOpeningBookMove(fen);
 			if (bookMove) {
@@ -179,8 +188,8 @@ class BotService {
 			lastMove,
 			skillLevel,
 			depth,
-			moveTimeMs: ENGINE_MOVE_TIME_MS,
-		});
+			moveTimeMs: timeLimitMs === undefined ? ENGINE_MOVE_TIME_MS : Math.min(ENGINE_MOVE_TIME_MS, timeLimitMs),
+		}, timeLimitMs === undefined ? {} : { timeoutMs: timeLimitMs, queueTimeoutMs: timeLimitMs });
 
 		if (result.fallbackReason && !QUIET_FALLBACK_REASONS.has(result.fallbackReason)) {
 			console.warn(`[BotService] Stockfish unavailable (${result.fallbackReason}), falling back to heuristic engine`);
@@ -188,6 +197,13 @@ class BotService {
 
 		if (!result.move) return null;
 		return { ...result.move, uci: result.uci, engine: result.engine, skillLevel, depth };
+	}
+
+	/** FEN variant of the stateless move API, preserving engine position metadata. */
+	async getBestMoveFromFen(fen, difficulty = "medium", options = {}) {
+		const position = parseBotFen(fen);
+		moveOptions(options, resolveDifficulty(difficulty).depth);
+		return this.getBestMove(position.board, position.turn, position.lastMove, difficulty, position.moveCount, { ...options, fen: position.fen });
 	}
 
 	/** Terminate the worker pool (graceful shutdown / tests). */

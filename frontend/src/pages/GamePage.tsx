@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useGameStore } from "../store/gameStore";
 import { useToastStore } from "../store/toastStore";
@@ -6,11 +6,12 @@ import { useWalletStore } from "../store/walletStore";
 import { api } from "../api/gameApi";
 import ChessBoard from "../components/ChessBoard";
 import DisconnectBanner from "../components/DisconnectBanner";
-import KeyboardShortcutsModal from "../components/KeyboardShortcutsModal";
 import { useGraceCountdown } from "../hooks/useGraceCountdown";
 import { socketService, type OpponentStatusEvent } from "../api/socket";
 import { depositXLM } from "../services/stellarService";
 import WalletDropdown from "../components/WalletDropdown";
+import MobileDrawer from "../components/MobileDrawer";
+import KeyboardShortcutsModal from "../components/KeyboardShortcutsModal";
 
 interface GameInfo {
   wager_amount?: number | null;
@@ -137,8 +138,7 @@ export default function GamePage() {
   const [gameInfo, setGameInfo] = useState<GameInfo | null>(null);
   const [fetchingInfo, setFetchingInfo] = useState(true);
   const [joinStep, setJoinStep] = useState<JoinStep>("idle");
-  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
-  const shortcutsRef = useRef<HTMLElement | null>(null);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
 
   // Fetch game info on mount (for wager display + validity check)
   useEffect(() => {
@@ -167,36 +167,6 @@ export default function GamePage() {
     };
     fetchInfo();
   }, [gameCode, storedGameCode, playerColor, rejoinGame, navigate]);
-
-  // Global keyboard handler for ? (help) and other shortcuts (#496)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't open shortcuts if already open
-      if (showShortcutsModal) return;
-
-      // Ignore if modifier keys are held
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-
-      // Ignore if focus is in an input/textarea/select/contenteditable
-      const target = e.target as HTMLElement;
-      if (
-        ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
-        target.contentEditable === "true"
-      ) {
-        return;
-      }
-
-      // Open shortcuts on ?
-      if (e.key === "?") {
-        e.preventDefault();
-        shortcutsRef.current = target;
-        setShowShortcutsModal(true);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showShortcutsModal]);
 
   const hasWager = !!gameInfo?.wager_amount;
   const wagerAmount = gameInfo?.wager_amount;
@@ -235,17 +205,22 @@ export default function GamePage() {
     }
   };
 
-  // Already a player → show board
+  // Already a player → show board & responsive layout
   if (storedGameCode === gameCode && playerColor) {
     return (
-      <div className="h-dvh max-h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg)">
+      <div className="h-dvh max-h-dvh w-dvw overflow-hidden flex flex-col bg-(--bg) relative">
         {/* Opponent disconnect/reconnect banner above the board (#317). */}
         <OpponentDisconnectBanner />
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+          <ChessBoard onOpenShortcuts={() => setIsShortcutsOpen(true)} />
+        </div>
+        {/* Responsive mobile bottom drawer layout (#684) */}
+        <MobileDrawer />
+        {/* Keyboard shortcut helper (#750) */}
         <KeyboardShortcutsModal
-          isOpen={showShortcutsModal}
-          onClose={() => setShowShortcutsModal(false)}
+          isOpen={isShortcutsOpen}
+          onClose={() => setIsShortcutsOpen(false)}
         />
-        <ChessBoard />
       </div>
     );
   }

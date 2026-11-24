@@ -143,4 +143,31 @@ describe("BotWorkerPool", () => {
 		await queued;
 		await expect(pool.executeMove({})).rejects.toMatchObject({ code: "BOT_POOL_CLOSED" });
 	});
+	it("times out simultaneous stalled engines without leaking children and serves the next task", async () => {
+		pool = new BotWorkerPool({ size: 2, workerScript: TEST_WORKER, taskTimeoutMs: 3000, queueTimeoutMs: 6000 });
+		const outcomes = Array.from({ length: pool.size }, () => pool.executeMove({ mode: "hang" })
+			.then(() => null, (error) => error));
+		expect(await waitFor(() => pool.workers.length === pool.size && pool.workers.every((slot) => slot.enginePid), 2000)).toBe(true);
+		const enginePids = pool.workers.map((slot) => slot.enginePid);
+		const errors = await Promise.all(outcomes);
+		expect(errors.every((error) => error && error.code === "BOT_TIMEOUT")).toBe(true);
+		expect(await waitFor(() => enginePids.every((pid) => !isAlive(pid)))).toBe(true);
+		expect(pool.stats()).toMatchObject({ busy: 0, queued: 0 });
+		await expect(pool.executeMove({ label: "after-stalled-engines" })).resolves.toMatchObject({ label: "after-stalled-engines" });
+		await pool.destroy();
+		expect(pool.stats()).toMatchObject({ workers: 0, busy: 0, queued: 0 });
+	});
+
+	it("expires queued requests behind a stalled engine without stranding the queue", async () => {
+		pool = new BotWorkerPool({ size: 1, workerScript: TEST_WORKER, taskTimeoutMs: 3000, queueTimeoutMs: 100 });
+		const stalled = pool.executeMove({ mode: "hang" }).then(() => null, (error) => error);
+		const queued = pool.executeMove({ label: "stale" }).then(() => null, (error) => error);
+		expect(await queued).toMatchObject({ code: "BOT_TIMEOUT" });
+		expect(pool.stats().queued).toBe(0);
+		expect(await waitFor(() => pool.workers[0] && pool.workers[0].enginePid, 2000)).toBe(true);
+		await pool.destroy();
+		expect(await stalled).toMatchObject({ code: "BOT_POOL_CLOSED" });
+		expect(pool.stats()).toMatchObject({ workers: 0, busy: 0, queued: 0 });
+	});
+
 });

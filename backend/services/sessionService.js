@@ -1,11 +1,121 @@
 const { getRedisConnection } = require("../config/redis");
 
+/** Time a disconnected player has to reconnect before auto-forfeit (Issue #580). */
+const DISCONNECTION_GRACE_MS = 60 * 1000;
+
 class SessionService {
 	constructor() {
 		this.revokedAfter = new Map();
 		this.activeJti = new Map(); // In-memory fallback for active JTI per wallet
 		this.ipBindings = new Map(); // In-memory fallback for JTI -> IP subnet bindings
 		this.blacklist = new Map(); // In-memory blacklist for revoked JTIs (JTI -> expireAt timestamp)
+		// Pending disconnection grace timers keyed by `${gameId}:${playerAddress}` (Issue #580).
+		this.disconnectionTimers = new Map();
+		this.io = null;
+	}
+
+	/**
+	 * Provide the socket.io server used to emit grace lifecycle events.
+	 * @param {object} io
+	 */
+	setIo(io) {
+		this.io = io;
+	}
+
+	disconnectionKey(gameId, playerAddress) {
+		return `${gameId}:${playerAddress}`;
+	}
+
+	/**
+	 * Start a disconnection grace countdown for a player whose socket dropped
+	 * during an active game (Issue #580).
+	 *
+	 * Emits OPPONENT_DISCONNECTED to the game room with the remaining grace time
+	 * and, unless cancelDisconnectionGrace() is called first, invokes `onTimeout`
+	 * once the grace period expires. `onTimeout` is responsible for the
+	 * abandonment forfeit (which also settles escrow). Starting a grace for a
+	 * player who already has one restarts it rather than stacking timers.
+	 *
+	 * @param {string} gameId
+	 * @param {string} playerAddress - Address of the disconnected player.
+	 * @param {string} opponentAddress - Address of the player who wins on expiry.
+	 * @param {object} [options]
+	 * @param {Function} [options.onTimeout] - async ({ gameId, playerAddress, opponentAddress }).
+	 * @param {number} [options.graceMs=60000]
+	 * @param {object} [options.io] - Overrides the service-level socket.io server.
+	 * @returns {{ gracePeriodRemainingMs: number, expiresAt: number }}
+	 */
+	startDisconnectionGrace(gameId, playerAddress, opponentAddress, options = {}) {
+		if (!gameId || !playerAddress || !opponentAddress) {
+			throw new Error("gameId, playerAddress, and opponentAddress are required");
+		}
+		const graceMs = Number.isFinite(options.graceMs) && options.graceMs > 0 ? options.graceMs : DISCONNECTION_GRACE_MS;
+		const io = options.io || this.io;
+		const key = this.disconnectionKey(gameId, playerAddress);
+
+		const existing = this.disconnectionTimers.get(key);
+		if (existing) clearTimeout(existing.timeout);
+
+		const expiresAt = Date.now() + graceMs;
+		const timeout = setTimeout(async () => {
+			this.disconnectionTimers.delete(key);
+			if (typeof options.onTimeout !== "function") return;
+			try {
+				await options.onTimeout({ gameId, playerAddress, opponentAddress });
+			} catch (err) {
+				console.error(`[SessionService] disconnection timeout handler failed for ${gameId}:`, err.message);
+			}
+		}, graceMs);
+		// Never keep the process alive just for a pending grace timer.
+		if (typeof timeout.unref === "function") timeout.unref();
+
+		this.disconnectionTimers.set(key, { timeout, expiresAt, opponentAddress });
+
+		if (io) {
+			io.to(gameId).emit("OPPONENT_DISCONNECTED", {
+				gameId,
+				playerAddress,
+				gracePeriodRemainingMs: graceMs,
+			});
+		}
+		return { gracePeriodRemainingMs: graceMs, expiresAt };
+	}
+
+	/**
+	 * Cancel a pending disconnection grace (the player reconnected in time) and
+	 * notify the room with OPPONENT_RECONNECTED. A no-op returning false when no
+	 * grace is pending, so it is safe to call on every reconnect.
+	 *
+	 * @param {string} gameId
+	 * @param {string} playerAddress
+	 * @param {object} [options]
+	 * @param {object} [options.io]
+	 * @returns {boolean} true if a pending grace was cancelled
+	 */
+	cancelDisconnectionGrace(gameId, playerAddress, options = {}) {
+		const key = this.disconnectionKey(gameId, playerAddress);
+		const entry = this.disconnectionTimers.get(key);
+		if (!entry) return false;
+
+		clearTimeout(entry.timeout);
+		this.disconnectionTimers.delete(key);
+
+		const io = options.io || this.io;
+		if (io) {
+			io.to(gameId).emit("OPPONENT_RECONNECTED", { gameId, playerAddress });
+		}
+		return true;
+	}
+
+	/**
+	 * @param {string} gameId
+	 * @param {string} playerAddress
+	 * @returns {{ active: boolean, gracePeriodRemainingMs: number }}
+	 */
+	getDisconnectionGraceStatus(gameId, playerAddress) {
+		const entry = this.disconnectionTimers.get(this.disconnectionKey(gameId, playerAddress));
+		if (!entry) return { active: false, gracePeriodRemainingMs: 0 };
+		return { active: true, gracePeriodRemainingMs: Math.max(0, entry.expiresAt - Date.now()) };
 	}
 
 	async getClient() {
@@ -208,8 +318,11 @@ class SessionService {
 		this.activeJti.clear();
 		this.ipBindings.clear();
 		this.blacklist.clear();
+		for (const entry of this.disconnectionTimers.values()) clearTimeout(entry.timeout);
+		this.disconnectionTimers.clear();
 	}
 }
 
 module.exports = new SessionService();
 module.exports.SessionService = SessionService;
+module.exports.DISCONNECTION_GRACE_MS = DISCONNECTION_GRACE_MS;

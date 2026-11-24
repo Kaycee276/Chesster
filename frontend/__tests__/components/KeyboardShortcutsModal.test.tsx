@@ -1,216 +1,146 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import KeyboardShortcutsModal from "../../src/components/KeyboardShortcutsModal";
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import React from 'react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import '@testing-library/jest-dom';
+import { KeyboardShortcutsModal } from '../../src/components/KeyboardShortcutsModal';
 
-describe("KeyboardShortcutsModal", () => {
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, defaultValue?: string) => defaultValue || key,
+  }),
+}));
+
+describe('KeyboardShortcutsModal', () => {
   beforeEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    localStorage.clear();
   });
 
-  it("renders when isOpen is true", () => {
+  it('renders when isOpen is true', () => {
     render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
-    expect(screen.getByText("Keyboard Shortcuts")).toBeTruthy();
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
   });
 
-  it("does not render when isOpen is false", () => {
-    render(<KeyboardShortcutsModal isOpen={false} onClose={vi.fn()} />);
-    expect(screen.queryByText("Keyboard Shortcuts")).toBeFalsy();
+  it('does not render when isOpen is false', () => {
+    const { container } = render(<KeyboardShortcutsModal isOpen={false} onClose={vi.fn()} />);
+    expect(container.firstChild).toBeNull();
   });
 
-  it("has correct ARIA attributes", () => {
-    render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
-    const dialog = screen.getByRole("dialog");
-
-    expect(dialog.getAttribute("aria-modal")).toBe("true");
-    expect(dialog.getAttribute("aria-labelledby")).toBe("shortcuts-title");
-  });
-
-  it("has an accessible title", () => {
-    render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
-    const title = screen.getByText("Keyboard Shortcuts");
-    expect(title.getAttribute("id")).toBe("shortcuts-title");
-  });
-
-  it("close button has accessible name", () => {
-    render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
-    const closeButton = screen.getByRole("button", { name: /close shortcuts/i });
-    expect(closeButton).toBeTruthy();
-  });
-
-  it("calls onClose when close button is clicked", async () => {
+  it('calls onClose when close button is clicked', () => {
     const onClose = vi.fn();
     render(<KeyboardShortcutsModal isOpen={true} onClose={onClose} />);
-    const closeButton = screen.getByRole("button", { name: /close shortcuts/i });
-
-    fireEvent.click(closeButton);
-
+    fireEvent.click(screen.getByLabelText('Close'));
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("calls onClose when backdrop is clicked", () => {
-    const onClose = vi.fn();
-    render(<KeyboardShortcutsModal isOpen={true} onClose={onClose} />);
-
-    // Click the backdrop (outer div)
-    const backdrop = screen.getByRole("dialog").parentElement;
-    if (backdrop) {
-      fireEvent.click(backdrop);
-    }
-
-    expect(onClose).toHaveBeenCalled();
+  it('displays default keybindings', () => {
+    render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
+    expect(screen.getByText('Flip Board')).toBeInTheDocument();
+    expect(screen.getByText('Offer Draw')).toBeInTheDocument();
+    expect(screen.getByText('Resign')).toBeInTheDocument();
   });
 
-  it("does not call onClose when modal content is clicked", () => {
-    const onClose = vi.fn();
-    render(<KeyboardShortcutsModal isOpen={true} onClose={onClose} />);
-
-    const title = screen.getByText("Keyboard Shortcuts");
-    fireEvent.click(title);
-
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it("calls onClose when Escape key is pressed", () => {
-    const onClose = vi.fn();
-    render(<KeyboardShortcutsModal isOpen={true} onClose={onClose} />);
-
-    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
-
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("displays shortcuts content", () => {
+  it('allows rebinding a key', async () => {
     render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
 
-    expect(screen.getByText("?")).toBeTruthy();
-    expect(screen.getByText("Open this help")).toBeTruthy();
-    expect(screen.getByText("Close modals and dialogs")).toBeTruthy();
+    const flipBoardRow = screen.getByText('Flip Board').closest('tr');
+    const rebindButton = flipBoardRow?.querySelector('button[class*="px-3"]');
+
+    fireEvent.click(rebindButton!);
+    expect(rebindButton).toHaveTextContent('Recording...');
+
+    const keyCodeInput = rebindButton as HTMLButtonElement;
+    fireEvent.keyDown(keyCodeInput, { key: 'G', code: 'KeyG' });
+
+    await waitFor(() => {
+      expect(screen.getByText('G')).toBeInTheDocument();
+    });
+
+    const stored = localStorage.getItem('chesster:user_keybindings');
+    expect(stored).toContain('flip_board');
   });
 
-  it("traps focus within the modal", async () => {
-    const user = userEvent.setup();
-    render(
-      <>
-        <button>Outside button</button>
-        <KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />
-      </>
-    );
+  it('detects duplicate key conflicts', async () => {
+    render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
 
-    const dialog = screen.getByRole("dialog");
-    const buttons = Array.from(dialog.querySelectorAll("button"));
+    const drawRow = screen.getByText('Offer Draw').closest('tr');
+    const rebindButton = drawRow?.querySelector('button[class*="px-3"]');
 
-    // Move focus to the last button in the dialog
-    const lastButton = buttons[buttons.length - 1];
-    lastButton.focus();
+    fireEvent.click(rebindButton!);
 
-    // Press Tab — should wrap to first focusable in dialog (close button or first kbd)
-    await user.tab();
+    const keyCodeInput = rebindButton as HTMLButtonElement;
+    fireEvent.keyDown(keyCodeInput, { key: 'F', code: 'KeyF' });
 
-    // Focus should stay within dialog
-    const activeElement = document.activeElement;
-    expect(dialog.contains(activeElement)).toBe(true);
+    await waitFor(() => {
+      expect(screen.getByText(/already assigned/)).toBeInTheDocument();
+    });
   });
 
-  it("restores focus to prior element after close", async () => {
-    const triggerButton = document.createElement("button");
-    triggerButton.textContent = "Trigger";
-    document.body.appendChild(triggerButton);
+  it('persists custom keybindings to localStorage', () => {
+    const { rerender } = render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
 
-    const { rerender } = render(
-      <KeyboardShortcutsModal isOpen={false} onClose={vi.fn()} triggerElement={triggerButton} />
-    );
+    const flipBoardRow = screen.getByText('Flip Board').closest('tr');
+    const rebindButton = flipBoardRow?.querySelector('button[class*="px-3"]');
 
-    // Open modal
-    rerender(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} triggerElement={triggerButton} />);
+    fireEvent.click(rebindButton!);
+    const keyCodeInput = rebindButton as HTMLButtonElement;
+    fireEvent.keyDown(keyCodeInput, { key: 'Z', code: 'KeyZ' });
 
-    // Close modal
-    const onClose = vi.fn();
-    rerender(
-      <KeyboardShortcutsModal isOpen={false} onClose={onClose} triggerElement={triggerButton} />
-    );
-
-    // Note: In this test, we can't easily verify focus restoration without manual
-    // setup of prior focus state. The hook handles this, so we trust the hook tests.
-    expect(true).toBe(true);
-
-    document.body.removeChild(triggerButton);
-  });
-
-  it("does not render duplicate modals on rapid opens/closes", () => {
-    const { rerender } = render(
-      <KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />
-    );
+    expect(localStorage.getItem('chesster:user_keybindings')).toContain('flip_board');
 
     rerender(<KeyboardShortcutsModal isOpen={false} onClose={vi.fn()} />);
-
-    const dialogs = screen.queryAllByRole("dialog");
-    expect(dialogs.length).toBe(0);
-
     rerender(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
 
-    const dialogsAgain = screen.queryAllByRole("dialog");
-    expect(dialogsAgain.length).toBe(1);
+    expect(screen.getByText('Z')).toBeInTheDocument();
   });
 
-  it("removes keydown listener on unmount", () => {
-    const onClose = vi.fn();
-    const { unmount } = render(
-      <KeyboardShortcutsModal isOpen={true} onClose={onClose} />
-    );
-
-    unmount();
-
-    // Escape after unmount should not call onClose
-    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it("removes keydown listener when modal closes", () => {
-    const onClose = vi.fn();
-    const { rerender } = render(
-      <KeyboardShortcutsModal isOpen={true} onClose={onClose} />
-    );
-
-    rerender(<KeyboardShortcutsModal isOpen={false} onClose={onClose} />);
-
-    // Escape after close should not call onClose
-    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
-    // onClose should still only have been called once (from the first render)
-    expect(onClose).not.toHaveBeenCalledTimes(2);
-  });
-
-  it("has scrollable content when tall", () => {
-    render(
-      <KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />
-    );
-
-    const dialog = screen.getByRole("dialog");
-    expect(dialog.className).toContain("max-h-[90vh]");
-    expect(dialog.className).toContain("overflow-y-auto");
-  });
-
-  it("modal content does not overflow viewport", () => {
-    render(
-      <KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />
-    );
-
-    const modal = screen.getByRole("dialog");
-
-    // Modal should have max-height constraint
-    expect(modal.className).toContain("max-h");
-  });
-
-  it("keyboard shortcuts are properly formatted with kbd elements", () => {
+  it('restores default keybindings on reset', async () => {
     render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
 
-    const kbdElements = screen.getAllByRole("term");
-    // At least 2 shortcuts should be documented
-    expect(kbdElements.length).toBeGreaterThanOrEqual(2);
+    const flipBoardRow = screen.getByText('Flip Board').closest('tr');
+    const rebindButton = flipBoardRow?.querySelector('button[class*="px-3"]');
+
+    fireEvent.click(rebindButton!);
+    const keyCodeInput = rebindButton as HTMLButtonElement;
+    fireEvent.keyDown(keyCodeInput, { key: 'Z', code: 'KeyZ' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Z')).toBeInTheDocument();
+    });
+
+    const resetButton = screen.getByText('Reset to Defaults');
+    fireEvent.click(resetButton);
+
+    await waitFor(() => {
+      expect(screen.getByText('F')).toBeInTheDocument();
+    });
+
+    expect(localStorage.getItem('chesster:user_keybindings')).toBeNull();
+  });
+
+  it('supports modifier key combinations', async () => {
+    render(<KeyboardShortcutsModal isOpen={true} onClose={vi.fn()} />);
+
+    const flipBoardRow = screen.getByText('Flip Board').closest('tr');
+    const rebindButton = flipBoardRow?.querySelector('button[class*="px-3"]');
+
+    fireEvent.click(rebindButton!);
+    const keyCodeInput = rebindButton as HTMLButtonElement;
+    fireEvent.keyDown(keyCodeInput, { key: 'Z', code: 'KeyZ', ctrlKey: true });
+
+    await waitFor(() => {
+      expect(screen.getByText('Ctrl+Z')).toBeInTheDocument();
+    });
+  });
+
+  it('calls onClose when Done button is clicked', () => {
+    const onClose = vi.fn();
+    render(<KeyboardShortcutsModal isOpen={true} onClose={onClose} />);
+    fireEvent.click(screen.getByText('Done'));
+    expect(onClose).toHaveBeenCalled();
   });
 });

@@ -365,6 +365,167 @@ describe("auditService.recordAntiCheatAlert (Issue #461)", () => {
 	});
 });
 
+describe("instant tactical refutation heuristic (Issue #643)", () => {
+	const {
+		AntiCheatService,
+		evaluateMoveComplexity,
+		evaluateTacticalResponse,
+		detectInstantTacticalRefutations,
+		TACTICAL_BURST_FLAG,
+	} = require("../services/antiCheatService");
+	const chessEngine = require("../services/chessEngine");
+
+	const complex = { priorMoveEvalDiff: 350, legalMovesCount: 32 };
+	const botMove = (moveNumber, overrides = {}) => ({
+		moveNumber,
+		durationMs: 120,
+		isTopEngineMove: true,
+		...complex,
+		...overrides,
+	});
+
+	describe("evaluateMoveComplexity", () => {
+		it("accepts volatile positions with many legal moves", () => {
+			expect(evaluateMoveComplexity(complex)).toEqual({ complex: true, reason: "high_tactical_volatility" });
+			expect(evaluateMoveComplexity({ priorMoveEvalDiff: -350, legalMovesCount: 32 }).complex).toBe(true);
+		});
+
+		it("ignores forced replies such as recaptures with a single legal move", () => {
+			expect(evaluateMoveComplexity({ priorMoveEvalDiff: 900, legalMovesCount: 1 })).toEqual({ complex: false, reason: "forced_move" });
+		});
+
+		it("ignores quiet positions and positions with few choices", () => {
+			expect(evaluateMoveComplexity({ priorMoveEvalDiff: 200, legalMovesCount: 32 }).reason).toBe("low_volatility");
+			expect(evaluateMoveComplexity({ priorMoveEvalDiff: 500, legalMovesCount: 15 }).reason).toBe("few_legal_moves");
+		});
+
+		it("treats missing data as not complex", () => {
+			expect(evaluateMoveComplexity({}).complex).toBe(false);
+			expect(evaluateMoveComplexity({ priorMoveEvalDiff: null, legalMovesCount: 30 }).complex).toBe(false);
+		});
+	});
+
+	describe("evaluateTacticalResponse", () => {
+		it("flags an engine-top reply under 300ms in a complex position", () => {
+			const flag = evaluateTacticalResponse(botMove(12), 350, 32);
+			expect(flag).toMatchObject({ type: TACTICAL_BURST_FLAG, flag: "TACTICAL_BURST_FLAG", severity: "high", moveNumber: 12, durationMs: 120 });
+		});
+
+		it("does not flag human-speed replies, including exactly 300ms", () => {
+			expect(evaluateTacticalResponse(botMove(12, { durationMs: 300 }), 350, 32)).toBeNull();
+			expect(evaluateTacticalResponse(botMove(12, { durationMs: 4200 }), 350, 32)).toBeNull();
+		});
+
+		it("does not flag non-engine moves or unknown durations", () => {
+			expect(evaluateTacticalResponse(botMove(12, { isTopEngineMove: false }), 350, 32)).toBeNull();
+			expect(evaluateTacticalResponse(botMove(12, { durationMs: null }), 350, 32)).toBeNull();
+		});
+
+		it("does not flag fast forced recaptures", () => {
+			expect(evaluateTacticalResponse(botMove(12), 900, 1)).toBeNull();
+		});
+	});
+
+	describe("detectInstantTacticalRefutations", () => {
+		it("flags a bot that refutes several complex positions instantly", () => {
+			const result = detectInstantTacticalRefutations([botMove(10), botMove(14, { durationMs: 80 }), botMove(18, { durationMs: 250 })]);
+			expect(result.bursts).toHaveLength(3);
+			expect(result.flags).toEqual([expect.objectContaining({ type: TACTICAL_BURST_FLAG, burstCount: 3, moveNumbers: [10, 14, 18] })]);
+			expect(result.suspicionBoost).toBe(30);
+		});
+
+		it("does not flag a single lucky fast reply", () => {
+			const result = detectInstantTacticalRefutations([botMove(10), botMove(14, { durationMs: 5000 })]);
+			expect(result.bursts).toHaveLength(1);
+			expect(result.flags).toEqual([]);
+			expect(result.suspicionBoost).toBe(0);
+		});
+
+		it("does not flag a human who thinks on complex positions and recaptures quickly", () => {
+			const result = detectInstantTacticalRefutations([
+				botMove(10, { durationMs: 6500 }),
+				botMove(14, { durationMs: 9100 }),
+				botMove(16, { durationMs: 90, legalMovesCount: 1, priorMoveEvalDiff: 900 }),
+				botMove(18, { durationMs: 110, legalMovesCount: 1, priorMoveEvalDiff: 900 }),
+			]);
+			expect(result.flags).toEqual([]);
+			expect(result.complexMoves).toBe(2);
+		});
+
+		it("caps the suspicion boost and tolerates empty input", () => {
+			const many = Array.from({ length: 10 }, (_, i) => botMove(i + 1));
+			expect(detectInstantTacticalRefutations(many).suspicionBoost).toBe(40);
+			expect(detectInstantTacticalRefutations()).toMatchObject({ flags: [], suspicionBoost: 0 });
+			expect(detectInstantTacticalRefutations([null, undefined]).flags).toEqual([]);
+		});
+	});
+
+	describe("analyzeGame integration", () => {
+		const board = chessEngine.initBoard();
+
+		// White and black alternate; black answers every white move.
+		function rows(blackDurationMs, whiteDurationMs = 4000) {
+			return Array.from({ length: 12 }, (_, index) => {
+				const color = index % 2 === 0 ? "white" : "black";
+				return {
+					id: `log-${index}`,
+					player_address: color === "white" ? "GHUMAN" : "GBOT",
+					move_timestamp_ms: 1_000 + index * 5_000,
+					move_duration_ms: color === "white" ? whiteDurationMs : blackDurationMs,
+					event_data: { color, moveNumber: index + 1, legalMoveCount: 30, move: { from: [6, 4], to: [4, 4] }, boardBefore: board, boardAfter: board },
+				};
+			});
+		}
+
+		function fakeDb(telemetry) {
+			return {
+				from(table) {
+					return {
+						select() { return this; },
+						eq() { return this; },
+						order() { return Promise.resolve({ data: telemetry, error: null }); },
+						maybeSingle() {
+							if (table === "games") return Promise.resolve({ data: { player_white_address: "GHUMAN", player_black_address: "GBOT" }, error: null });
+							return Promise.resolve({ data: { elo_rating: 1700 }, error: null });
+						},
+						update() { return { eq: () => Promise.resolve({ error: null }) }; },
+					};
+				},
+			};
+		}
+
+		// Every position evaluates to +400 for the side to move, so each opponent move
+		// swung the eval by 800cp (400 + 400). bestMove matches the played move e2e4.
+		function volatileEngine() {
+			return {
+				analyzeFen: jest.fn().mockImplementation(async () => ({ bestMove: "e2e4", scoreCp: 400 })),
+			};
+		}
+
+		async function analyze(telemetry) {
+			const games = { recordCheatAnalysis: jest.fn().mockResolvedValue(undefined) };
+			const service = new AntiCheatService({ db: fakeDb(telemetry), games, engine: volatileEngine(), logger: { warn: jest.fn() } });
+			const analysis = await service.analyzeGame("game-1");
+			return { analysis, games };
+		}
+
+		it("flags instant engine-top replies, raises suspicion and persists the flag", async () => {
+			const { analysis, games } = await analyze(rows(100));
+			expect(analysis.black.antiCheatFlags).toEqual([expect.objectContaining({ type: TACTICAL_BURST_FLAG, severity: "high" })]);
+			expect(analysis.black.flagged).toBe(true);
+			expect(analysis.black.reasons.join(" ")).toMatch(/instant .* engine-top replies/);
+			expect(analysis.black.suspicionScore).toBeGreaterThanOrEqual(40);
+			expect(analysis.white.antiCheatFlags.map((flag) => flag.type)).not.toContain(TACTICAL_BURST_FLAG);
+			expect(games.recordCheatAnalysis).toHaveBeenCalledWith("game-1", analysis);
+		});
+
+		it("does not add the flag when the same replies are human speed", async () => {
+			const { analysis } = await analyze(rows(5000));
+			expect(analysis.black.antiCheatFlags.map((flag) => flag.type)).not.toContain(TACTICAL_BURST_FLAG);
+		});
+	});
+});
+
 describe("FIDE centipawn loss (ACPL) distribution profiling (Issue #744)", () => {
 	const {
 		calculateACPL,

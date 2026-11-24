@@ -1,9 +1,10 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { Settings, Volume2, Play } from "lucide-react";
 import { useGameStore } from "../store/gameStore";
 import { BOARD_THEMES, useThemeStore } from "../store/themeStore";
-import { soundService, type SoundPack } from "../services/soundService";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { soundService } from "../services/soundService";
+import { isSoundPack, SOUND_PACKS } from "../services/soundPacks";
+import MoveHighlightPicker from "./MoveHighlightPicker";
 
 export default function GameSettings({ hideFloating = false }: { hideFloating?: boolean } = {}) {
   const isBlindfoldMode = useGameStore((s) => s.isBlindfoldMode);
@@ -16,8 +17,14 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
   const toggleHaptics = useGameStore((s) => s.toggleHaptics);
   const isMoveConfirmationEnabled = useGameStore((s) => s.isMoveConfirmationEnabled);
   const toggleMoveConfirmation = useGameStore((s) => s.toggleMoveConfirmation);
+  const autoQueen = useGameStore((s) => s.autoQueen);
+  const toggleAutoQueen = useGameStore((s) => s.toggleAutoQueen);
   const masterVolume = useGameStore((s) => s.masterVolume);
   const setMasterVolume = useGameStore((s) => s.setMasterVolume);
+  const moveSoundsEnabled = useGameStore((s) => s.moveSoundsEnabled);
+  const toggleMoveSounds = useGameStore((s) => s.toggleMoveSounds);
+  const alertSoundsEnabled = useGameStore((s) => s.alertSoundsEnabled);
+  const toggleAlertSounds = useGameStore((s) => s.toggleAlertSounds);
   const pieceSet = useGameStore((s) => s.pieceSet);
   const setPieceSet = useGameStore((s) => s.setPieceSet);
   const boardTheme = useThemeStore((s) => s.boardTheme);
@@ -25,11 +32,10 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
   const isSettingsOpen = useGameStore((s) => s.isSettingsOpen);
   const setSettingsOpen = useGameStore((s) => s.setSettingsOpen);
   const [localOpen, setLocalOpen] = useState(false);
-  const [soundPack, setSoundPack] = useState<SoundPack>(() => soundService.getSoundPack());
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const soundPack = useThemeStore((s) => s.soundPack);
+  const setSoundPack = useThemeStore((s) => s.setSoundPack);
 
   const open = isSettingsOpen || localOpen;
-  useFocusTrap(dialogRef, open);
   const setOpen = (val: boolean) => {
     setLocalOpen(val);
     setSettingsOpen(val);
@@ -76,23 +82,19 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
           onClick={() => setOpen(false)}
         >
           <div
-            ref={dialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="settings-title"
             className="w-full max-w-sm bg-(--bg-secondary) border border-(--border) rounded-2xl p-5 sm:p-6 flex flex-col gap-5 shadow-2xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h3 id="settings-title" className="text-base font-bold flex items-center gap-2">
+              <h3 className="text-base font-bold flex items-center gap-2">
                 <Settings size={16} className="text-(--accent-primary)" />
                 Game Settings
               </h3>
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                aria-label="Close settings"
                 className="text-(--text-tertiary) hover:text-(--text) transition-colors text-lg leading-none"
+                aria-label="Close"
               >
                 ×
               </button>
@@ -126,51 +128,78 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
 
             <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold">Sound Theme</span>
-                <span className="text-xs text-(--text-tertiary)">Piece audio pack</span>
-              </div>
-              <div className="grid grid-cols-1 gap-2">
-                {[
-                  { key: "classic-wood" as const, name: "Classic Wood", description: "Warm, resonant wooden board impacts" },
-                  { key: "modern-digital" as const, name: "Modern Digital", description: "Crisp, synthesized click and chime cues" },
-                  { key: "lofi-soft" as const, name: "Low-Fi Soft", description: "Muted, subtle organic taps" },
-                ].map((pack) => (
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Move Sounds</label>
+                  <p className="text-xs text-(--text-tertiary)">Clicks for moves and captures</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleMoveSounds}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    moveSoundsEnabled ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={moveSoundsEnabled}
+                  aria-label="Toggle move sounds"
+                >
                   <div
-                    key={pack.key}
-                    className={`flex items-center justify-between p-2 rounded-lg border text-xs transition-colors ${
-                      soundPack === pack.key
-                        ? "border-(--accent-primary) ring-2 ring-(--accent-primary)/40 bg-(--bg-tertiary)"
-                        : "border-(--border) hover:border-(--accent-primary)/60"
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      moveSoundsEnabled ? "translate-x-5" : "translate-x-0.5"
                     }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSoundPack(pack.key);
-                        soundService.setSoundPack(pack.key);
-                      }}
-                      className="flex flex-col text-left flex-1 cursor-pointer"
-                    >
-                      <span className="font-semibold text-xs text-(--text)">{pack.name}</span>
-                      <span className="text-[11px] text-(--text-tertiary)">{pack.description}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const original = soundService.getSoundPack();
-                        soundService.setSoundPack(pack.key);
-                        soundService.previewSound("move");
-                        setTimeout(() => soundService.setSoundPack(original), 200);
-                      }}
-                      className="p-1.5 rounded-md hover:bg-(--bg-secondary) text-(--text-secondary) hover:text-(--text) transition-colors cursor-pointer"
-                      title={`Preview ${pack.name} sound`}
-                      aria-label={`Preview ${pack.name} sound`}
-                    >
-                      <Play size={14} />
-                    </button>
-                  </div>
-                ))}
+                  />
+                </button>
               </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Alert Sounds</label>
+                  <p className="text-xs text-(--text-tertiary)">Turn notifications and low-time warnings</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleAlertSounds}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    alertSoundsEnabled ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={alertSoundsEnabled}
+                  aria-label="Toggle alert sounds"
+                >
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      alertSoundsEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <label htmlFor="sound-pack" className="text-sm font-semibold">Sound pack</label>
+              <select
+                id="sound-pack"
+                value={soundPack}
+                onChange={(event) => {
+                  if (isSoundPack(event.target.value)) setSoundPack(event.target.value);
+                }}
+                className="w-full rounded-lg border border-(--border) bg-(--bg-tertiary) p-2 text-sm text-(--text)"
+              >
+                {SOUND_PACKS.map((pack) => (
+                  <option key={pack.key} value={pack.key}>{pack.name}</option>
+                ))}
+              </select>
+              <p className="text-xs text-(--text-tertiary)">
+                {SOUND_PACKS.find((pack) => pack.key === soundPack)?.description}
+              </p>
+              <button
+                type="button"
+                onClick={() => soundService.previewSound("move", soundPack)}
+                className="flex items-center justify-center gap-2 rounded-lg border border-(--border) p-2 text-sm hover:bg-(--bg-tertiary)"
+              >
+                <Play size={14} aria-hidden="true" /> Test sound
+              </button>
             </div>
 
             <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
@@ -199,6 +228,10 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
+              <MoveHighlightPicker />
             </div>
 
             <div className="flex flex-col gap-3 border-t border-(--border) pt-3">
@@ -368,6 +401,34 @@ export default function GameSettings({ hideFloating = false }: { hideFloating?: 
                   <div
                     className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
                       isMoveConfirmationEnabled ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Auto-Queen Promotion Toggle (#671) */}
+            <div className="flex flex-col gap-3 pt-3 border-t border-(--border)">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1">
+                  <label className="text-sm font-semibold">Auto-Queen Promotion</label>
+                  <p className="text-xs text-(--text-tertiary)">
+                    Automatically promote pawns to queens (hold Alt/Option to override)
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleAutoQueen}
+                  className={`relative flex h-6 w-11 rounded-full transition-colors ${
+                    autoQueen ? "bg-(--accent-primary)" : "bg-(--bg-tertiary)"
+                  }`}
+                  role="switch"
+                  aria-checked={autoQueen}
+                  aria-label="Toggle auto-queen promotion"
+                >
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-md transition-transform ${
+                      autoQueen ? "translate-x-5" : "translate-x-0.5"
                     }`}
                   />
                 </button>

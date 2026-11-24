@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import PuzzlePage from "../PuzzlePage";
 import { PUZZLE_STREAK_STORAGE_KEY } from "../../hooks/usePuzzleStreak";
+import { useGameStore } from "../../store/gameStore";
 import { MemoryRouter } from "react-router-dom";
 
 // Mock puzzleApi
@@ -18,7 +19,7 @@ const mockPuzzle = {
 
 vi.mock("../../api/puzzleApi", () => ({
   puzzleApi: {
-    fetchDailyPuzzle: vi.fn(() => Promise.resolve(mockPuzzle)),
+    fetchAdaptivePuzzle: vi.fn(() => Promise.resolve(mockPuzzle)),
   },
 }));
 
@@ -26,6 +27,7 @@ describe("PuzzlePage Streak UI Integration", () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    useGameStore.setState({ puzzleRating: 1500, puzzleRD: 350, puzzleVolatility: 0.06, ratedPuzzleIds: [] });
   });
 
   it("renders daily streak badge and weekly calendar", async () => {
@@ -37,7 +39,7 @@ describe("PuzzlePage Streak UI Integration", () => {
 
     // Wait for puzzle to load
     await waitFor(() => {
-      expect(screen.getByText(/Daily Tactics/i)).toBeInTheDocument();
+      expect(screen.getByText(/Adaptive Tactics/i)).toBeInTheDocument();
     });
 
     // Verify streak badge is displayed with 0 days initially
@@ -62,7 +64,7 @@ describe("PuzzlePage Streak UI Integration", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/Daily Tactics/i)).toBeInTheDocument();
+      expect(screen.getByText(/Adaptive Tactics/i)).toBeInTheDocument();
     });
 
     // Find and click the solution square to execute move

@@ -4,7 +4,8 @@ const chessEngine = require("./chessEngine");
 
 const DEFAULT_BATCH_SIZE = 50;
 
-const HEADER_RE = /^\[(\w+)\s+"(.*)"\]$/;
+const HEADER_RE = /^\[(\w+)\s+"((?:[^"\\\x00-\x1f\x7f]|\\["\\])*)"\]$/;
+const STR_TAGS = ["Event", "Site", "Date", "Round", "White", "Black", "Result"];
 const RESULT_TOKENS = new Set(["1-0", "0-1", "1/2-1/2", "*"]);
 // Comments, NAG glyphs, move-number markers, result tokens, or a bare
 // movetext token (candidate SAN), scanned left to right so clock/NAG
@@ -12,8 +13,73 @@ const RESULT_TOKENS = new Set(["1-0", "0-1", "1/2-1/2", "*"]);
 const TOKEN_RE = /\{[^}]*\}|\$\d+|\d+\.(?:\.\.)?|1-0|0-1|1\/2-1\/2|\*|[^\s{}$]+/g;
 const CLOCK_RE = /\[%clk\s+([0-9:]+)\]/;
 
+function escapePgnTag(value) {
+	return String(value).replace(/[\x00-\x1f\x7f]/g, " ").replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+}
+
+function isValidPgnDate(value) {
+	if (!/^\d{4}\.\d{2}\.\d{2}$/.test(value)) return false;
+	const iso = value.replaceAll(".", "-");
+	const date = new Date(`${iso}T00:00:00.000Z`);
+	return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === iso;
+}
+
+function getSevenTagRoster(game = {}) {
+	const text = (value, fallback) => String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ").trim() || fallback;
+	const rawDate = game.date ?? game.game_started_at ?? game.created_at ?? game.createdAt ?? Date.now();
+	const date = new Date(typeof rawDate === "string" && isValidPgnDate(rawDate) ? rawDate.replaceAll(".", "-") : rawDate);
+	const dateValue = Number.isNaN(date.valueOf()) || date.getUTCFullYear() < 0 || date.getUTCFullYear() > 9999
+		? new Date() : date;
+	const winner = game.winner;
+	const result = RESULT_TOKENS.has(game.result) ? game.result
+		: winner === "draw" || game.is_draw === true ? "1/2-1/2"
+			: winner === "white" || (winner && winner === game.player_white_address) ? "1-0"
+				: winner === "black" || (winner && winner === game.player_black_address) ? "0-1" : "*";
+	return {
+		Event: text(game.event, "Chesster Match"),
+		Site: text(game.site, "https://chesster.app"),
+		Date: dateValue.toISOString().slice(0, 10).replaceAll("-", "."),
+		Round: text(game.round, "-"),
+		White: text(game.white ?? game.player_white_address, "White"),
+		Black: text(game.black ?? game.player_black_address, "Black"),
+		Result: result,
+	};
+}
+
+function formatSevenTagRoster(game = {}) {
+	return Object.entries(getSevenTagRoster(game)).map(([tag, value]) => `[${tag} "${escapePgnTag(value)}"]`).join("\n");
+}
+
+/** Validate one game's initial header section, including order and tag values. */
+function validateSevenTagRoster(pgn) {
+	if (typeof pgn !== "string") return { isValid: false, missingTags: [...STR_TAGS] };
+	const tags = [];
+	let malformed = false;
+	for (const rawLine of pgn.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		if (!line.startsWith("[")) break;
+		const match = line.match(HEADER_RE);
+		if (!match) { malformed = true; continue; }
+		tags.push([match[1], match[2].replace(/\\(["\\])/g, "$1")]);
+	}
+	const missingTags = STR_TAGS.filter((name) => !tags.some(([tag]) => tag === name));
+	const values = Object.fromEntries(tags);
+	const ordered = STR_TAGS.every((name, index) => tags[index]?.[0] === name && tags.filter(([tag]) => tag === name).length === 1);
+	const nonempty = STR_TAGS.every((name) => typeof values[name] === "string" && values[name].trim().length > 0);
+	return {
+		isValid: !malformed && missingTags.length === 0 && ordered && nonempty && isValidPgnDate(values.Date) && RESULT_TOKENS.has(values.Result),
+		missingTags,
+	};
+}
+
+/** Preserve the existing SAN, clock and engine annotations on database exports. */
+function generateGamePGN(game, moves = [], options = {}) {
+	return require("./replayService").formatPgn(game, moves, options);
+}
+
 function emptyGame() {
-	return { headers: {}, movesStr: "" };
+	return { headers: {}, headerLines: [], movesStr: "" };
 }
 
 /**
@@ -85,8 +151,12 @@ function validateAndFormat(rawGame) {
 	let color = "white";
 	const moves = [];
 	let error = null;
+	const roster = validateSevenTagRoster(rawGame.headerLines?.join("\n") ?? Object.entries(headers).map(([tag, value]) => `[${tag} "${escapePgnTag(value)}"]`).join("\n"));
+	if (!roster.isValid) error = { message: "Invalid Seven Tag Roster", missingTags: roster.missingTags };
+	else if (result && result !== headers.Result) error = { message: "Movetext result does not match the Result tag" };
 
 	for (let ply = 0; ply < sanMoves.length; ply++) {
+		if (error) break;
 		const { san, clock } = sanMoves[ply];
 		const parsed = chessEngine.parseSanMove(san, board, color);
 
@@ -137,7 +207,8 @@ async function* parsePgnStream(input) {
 				hasMoves = false;
 			}
 			const match = line.match(HEADER_RE);
-			if (match) current.headers[match[1]] = match[2];
+			current.headerLines.push(line);
+			if (match) current.headers[match[1]] = match[2].replace(/\\(["\\])/g, "$1");
 			continue;
 		}
 
@@ -195,6 +266,12 @@ async function importPgn(input, { batchSize = DEFAULT_BATCH_SIZE, persistBatch }
 }
 
 module.exports = {
+	STR_TAGS,
+	escapePgnTag,
+	getSevenTagRoster,
+	formatSevenTagRoster,
+	validateSevenTagRoster,
+	generateGamePGN,
 	DEFAULT_BATCH_SIZE,
 	parsePgnStream,
 	tokenizeMoveText,

@@ -2,8 +2,10 @@ import React, { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { MatchReadyEvent } from "../api/socket";
 import { soundService } from "../services/soundService";
-import { useFocusTrap } from "../hooks/useFocusTrap";
+import { startCountdownTicker } from "../services/countdownTicker";
 import { TournamentBracketTree, type TreeMatch, type TreeRound } from "./TournamentBracketTree";
+
+const COUNTDOWN_SECONDS = 60;
 
 export interface TournamentQueueModalProps {
 	matchData?: MatchReadyEvent | null;
@@ -25,9 +27,13 @@ export const TournamentQueueModal: React.FC<TournamentQueueModalProps> = ({
 	onClose,
 }) => {
 	const { t } = useTranslation();
-	const [secondsLeft, setSecondsLeft] = useState(60);
-	const dialogRef = useRef<HTMLDivElement>(null);
-	useFocusTrap(dialogRef, true);
+	const [secondsLeft, setSecondsLeft] = useState(COUNTDOWN_SECONDS);
+	const onEnterMatchRef = useRef(onEnterMatch);
+	const hasEnterHandler = Boolean(onEnterMatch);
+
+	useEffect(() => {
+		onEnterMatchRef.current = onEnterMatch;
+	}, [onEnterMatch]);
 
 	useEffect(() => {
 		if (matchData) {
@@ -35,19 +41,27 @@ export const TournamentQueueModal: React.FC<TournamentQueueModalProps> = ({
 		}
 	}, [matchData]);
 
+	// Each match starts a fresh countdown. Ticks come from a dedicated worker so the
+	// countdown stays accurate while the browser throttles timers in background tabs.
 	useEffect(() => {
-		if (!matchData || !onEnterMatch) return;
-		if (secondsLeft <= 0) {
-			onEnterMatch(matchData.gameCode);
-			return;
-		}
+		if (!matchData || !hasEnterHandler) return;
 
-		const timer = setInterval(() => {
-			setSecondsLeft((prev) => prev - 1);
-		}, 1000);
+		const gameCode = matchData.gameCode;
+		let remaining = COUNTDOWN_SECONDS;
+		setSecondsLeft(remaining);
 
-		return () => clearInterval(timer);
-	}, [secondsLeft, matchData, onEnterMatch]);
+		const stop = startCountdownTicker(() => {
+			remaining -= 1;
+			setSecondsLeft(Math.max(remaining, 0));
+			if (remaining <= 0) {
+				stop();
+				onEnterMatchRef.current?.(gameCode);
+			}
+		});
+
+		// Cleanup stops the worker when the match changes or the modal unmounts.
+		return stop;
+	}, [matchData, hasEnterHandler]);
 
 	if (status === "in_progress") {
 		return (
@@ -86,15 +100,9 @@ export const TournamentQueueModal: React.FC<TournamentQueueModalProps> = ({
 	if (!matchData) return null;
 
 	return (
-		<div className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center">
-			<div
-				ref={dialogRef}
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="tournament-title"
-				className="bg-slate-900 border border-amber-500 rounded-xl p-6 text-center max-w-md w-full shadow-[0_0_15px_rgba(245,158,11,0.5)]"
-			>
-				<h2 id="tournament-title" className="text-2xl font-bold text-amber-400">
+		<div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50">
+			<div className="bg-slate-900 border border-amber-500 rounded-xl p-6 text-center max-w-md w-full shadow-[0_0_15px_rgba(245,158,11,0.5)]">
+				<h2 className="text-2xl font-bold text-amber-400">
 					{t("tournament.matchReadyTitle", "⚔️ Match Ready!")}
 				</h2>
 				<p className="mt-2 text-slate-300">

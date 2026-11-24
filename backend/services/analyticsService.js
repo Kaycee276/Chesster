@@ -1,4 +1,12 @@
 const supabase = require("../config/supabase");
+const { getRedisClient } = require("../config/redis");
+
+const VOLUME_24H_CACHE_KEY = "analytics:volume-24h";
+const VOLUME_24H_CACHE_TTL_MS = 5 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// In-memory fallback used when Redis is disabled or unavailable.
+let volumeMemoryCache = null; // { expiresAt, value }
 
 /**
  * Get the count of unique active players for a given date.
@@ -293,10 +301,141 @@ async function aggregateHourlyMetrics(targetHour) {
 	}
 }
 
+/**
+ * Resolve the asset symbol for a game's token_address. Games without a token
+ * address are wagered in native XLM. USDC/EURC are matched against the
+ * configured issuer/contract addresses (USDC_TOKEN_ADDRESS, EURC_TOKEN_ADDRESS)
+ * and, as a fallback, against the symbol embedded in the address string.
+ * Unrecognised tokens are reported under their raw address.
+ */
+function resolveAssetSymbol(tokenAddress) {
+	if (!tokenAddress || typeof tokenAddress !== "string") return "XLM";
+	const normalized = tokenAddress.trim();
+	if (!normalized) return "XLM";
+	const lower = normalized.toLowerCase();
+
+	const configured = {
+		USDC: process.env.USDC_TOKEN_ADDRESS,
+		EURC: process.env.EURC_TOKEN_ADDRESS,
+	};
+	for (const [symbol, address] of Object.entries(configured)) {
+		if (address && address.trim().toLowerCase() === lower) return symbol;
+	}
+	if (lower === "xlm" || lower === "native") return "XLM";
+	if (lower.includes("usdc")) return "USDC";
+	if (lower.includes("eurc")) return "EURC";
+	return normalized;
+}
+
+function formatVolume(total, symbol) {
+	const decimals = symbol === "USDC" || symbol === "EURC" ? 2 : 7;
+	return total.toFixed(decimals);
+}
+
+async function readVolumeCache() {
+	const redis = getRedisClient();
+	if (redis) {
+		try {
+			const raw = await redis.get(VOLUME_24H_CACHE_KEY);
+			if (raw) return JSON.parse(raw);
+		} catch (err) {
+			console.warn("[AnalyticsService] Redis read failed for volume cache:", err.message);
+		}
+	}
+	if (volumeMemoryCache && volumeMemoryCache.expiresAt > Date.now()) {
+		return volumeMemoryCache.value;
+	}
+	return null;
+}
+
+async function writeVolumeCache(value) {
+	volumeMemoryCache = { expiresAt: Date.now() + VOLUME_24H_CACHE_TTL_MS, value };
+	const redis = getRedisClient();
+	if (redis) {
+		try {
+			await redis.set(VOLUME_24H_CACHE_KEY, JSON.stringify(value), "PX", VOLUME_24H_CACHE_TTL_MS);
+		} catch (err) {
+			console.warn("[AnalyticsService] Redis write failed for volume cache:", err.message);
+		}
+	}
+}
+
+/** Drop the cached 24-hour volume so the next call recomputes it. */
+async function invalidateRolling24HourVolumeCache() {
+	volumeMemoryCache = null;
+	const redis = getRedisClient();
+	if (redis) {
+		try {
+			await redis.del(VOLUME_24H_CACHE_KEY);
+		} catch (err) {
+			console.warn("[AnalyticsService] Redis delete failed for volume cache:", err.message);
+		}
+	}
+}
+
+/**
+ * Aggregate wager volume for the trailing 24 hours, grouped by asset.
+ * Results are cached for 5 minutes (Redis, with an in-memory fallback).
+ *
+ * @param {object} [options]
+ * @param {boolean} [options.bypassCache=false] - recompute and refresh the cache
+ * @returns {Promise<{window: string, timestamp: string, assets: Array}>}
+ */
+async function getRolling24HourVolume({ bypassCache = false } = {}) {
+	if (!bypassCache) {
+		const cached = await readVolumeCache();
+		if (cached) return cached;
+	}
+
+	try {
+		const since = new Date(Date.now() - DAY_MS).toISOString();
+		const { data: games, error } = await supabase
+			.from("games")
+			.select("wager_amount, token_address, player_white_address, player_black_address")
+			.gte("created_at", since);
+
+		if (error) throw error;
+
+		const groups = new Map();
+		for (const game of games || []) {
+			const symbol = resolveAssetSymbol(game.token_address);
+			let group = groups.get(symbol);
+			if (!group) {
+				group = { total: 0, matchCount: 0, players: new Set() };
+				groups.set(symbol, group);
+			}
+			group.total += parseFloat(game.wager_amount) || 0;
+			group.matchCount++;
+			if (game.player_white_address) group.players.add(game.player_white_address);
+			if (game.player_black_address) group.players.add(game.player_black_address);
+		}
+
+		const assets = [...groups.entries()]
+			.map(([asset, g]) => ({
+				asset,
+				totalVolume: formatVolume(g.total, asset),
+				matchCount: g.matchCount,
+				uniquePlayers: g.players.size,
+				averageWager: formatVolume(g.matchCount ? g.total / g.matchCount : 0, asset),
+			}))
+			.sort((a, b) => a.asset.localeCompare(b.asset));
+
+		const result = { window: "24h", timestamp: new Date().toISOString(), assets };
+		await writeVolumeCache(result);
+		return result;
+	} catch (error) {
+		console.error("[AnalyticsService] Error fetching rolling 24-hour volume:", error.message);
+		throw error;
+	}
+}
+
 module.exports = {
 	getDailyActivePlayers,
 	getDailyMatchVolume,
 	getTokenWageredSummary,
 	getDashboardSummary,
 	aggregateHourlyMetrics,
+	getRolling24HourVolume,
+	invalidateRolling24HourVolumeCache,
+	resolveAssetSymbol,
 };
