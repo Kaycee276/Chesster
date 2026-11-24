@@ -3,7 +3,89 @@ const gameModel = require("../models/gameModel");
 const escrowService = require("./escrowService");
 const logger = require("../utils/logger");
 
+const REFUND_BATCH_SIZE = 5;
+
 class TournamentService {
+	/**
+	 * Cancels a tournament that has not started and refunds every buy-in.
+	 *
+	 * Idempotent: each participant has a ledger row (pending -> processing ->
+	 * refunded | failed) that is claimed atomically before payment, so calling
+	 * this again on a cancelled tournament only retries failed/pending refunds
+	 * and never pays anyone twice.
+	 *
+	 * @param {string} tournamentId
+	 * @param {string} reason
+	 * @param {{io?: object, batchSize?: number}} [options]
+	 */
+	async cancelTournament(tournamentId, reason, { io = null, batchSize = REFUND_BATCH_SIZE } = {}) {
+		const tournament = await tournamentModel.getTournament(tournamentId);
+		if (!tournament) throw new Error("Tournament not found");
+		if (!["draft", "open", "registering", "cancelled"].includes(tournament.status)) {
+			throw new Error("Only tournaments that have not started can be cancelled");
+		}
+
+		const participants = (await tournamentModel.getParticipants(tournamentId)) || [];
+		const fee = Number(tournament.entry_fee ?? tournament.entryFee ?? 0);
+		const wallets = [...new Set(participants.map((p) => p.wallet_address || p.walletAddress).filter(Boolean))];
+
+		if (fee > 0) {
+			await tournamentModel.ensureRefundEntries(
+				wallets.map((wallet) => ({ tournament_id: tournamentId, wallet_address: wallet, amount: fee })),
+			);
+		}
+
+		if (tournament.status !== "cancelled") {
+			await tournamentModel.updateTournamentStatus(tournamentId, "cancelled", {
+				cancellation_reason: reason || null,
+			});
+		}
+
+		if (fee > 0) {
+			const ledger = await tournamentModel.listRefundEntries(tournamentId);
+			const claimed = [];
+			for (const entry of ledger) {
+				if (!["pending", "failed"].includes(entry.status)) continue;
+				const row = await tournamentModel.claimRefundEntry(tournamentId, entry.wallet_address);
+				if (row) claimed.push(row);
+			}
+			const results = await escrowService.refundTournamentBatch(tournamentId, claimed, { batchSize });
+			for (const result of results) {
+				try {
+					await tournamentModel.markRefundResult(tournamentId, result.wallet_address, {
+						txHash: result.hash,
+						error: result.ok ? null : result.error,
+					});
+				} catch (err) {
+					logger.error(`Failed to record refund result for ${result.wallet_address}: ${err.message}`);
+				}
+			}
+		}
+
+		const finalLedger = fee > 0 ? await tournamentModel.listRefundEntries(tournamentId) : [];
+		const count = (status) => finalLedger.filter((e) => e.status === status).length;
+		const summary = {
+			tournamentId,
+			status: "cancelled",
+			reason: reason || null,
+			refunded: count("refunded"),
+			failed: count("failed"),
+			pending: count("pending"),
+			inFlight: count("processing"),
+			entries: finalLedger,
+		};
+		broadcastTournamentEvent(io, tournamentId, "tournament:cancelled", {
+			reason: reason || null,
+			refunded: summary.refunded,
+			failed: summary.failed,
+		});
+		return summary;
+	}
+
+	async cancelTour9yMnTm4NSzvG9rrwjM2ec8xZgh1cafXH8(tournamentId, reason, options) {
+		return this.cancelTournament(tournamentId, reason, options);
+	}
+
 	/**
 	 * Seeds participants by sorting descending by Elo rating.
 	 * Assigns a 1-based seed rank to each participant.

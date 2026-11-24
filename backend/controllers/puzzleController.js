@@ -1,5 +1,41 @@
+const crypto = require("crypto");
 const puzzleModel = require("../models/puzzleModel");
 const userModel = require("../models/userModel");
+
+const DAILY_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=60";
+
+function buildPuzzleEtag(puzzle) {
+	const hash = crypto
+		.createHash("md5")
+		.update(String(puzzle.id || "") + String(puzzle.date || ""))
+		.digest("hex");
+	return `"${hash}"`;
+}
+
+function buildLegacyPuzzleEtag(puzzle) {
+	const hash = crypto
+		.createHash("md5")
+		.update(String(puzzle.id || "") + String(puzzle.fen || "") + String(puzzle.date || ""))
+		.digest("hex");
+	return `"${hash}"`;
+}
+
+// Honors comma-separated lists, weak validators (W/) and the "*" wildcard.
+function etagMatches(header, etag, legacyEtag = null) {
+	if (!header) return false;
+	return header
+		.split(",")
+		.map((candidate) => candidate.trim().replace(/^W\//, ""))
+		.some((candidate) => candidate === "*" || candidate === etag || (legacyEtag && candidate === legacyEtag));
+}
+
+function puzzleCacheControlMiddleware(maxAge = 300, staleWhileRevalidate = 60) {
+	const headerValue = `public, max-age=${maxAge}, stale-while-revalidate=${staleWhileRevalidate}`;
+	return (_req, res, next) => {
+		res.locals.puzzleCacheControl = headerValue;
+		next();
+	};
+}
 
 const UCI_MOVE = /^[a-h][1-8][a-h][1-8][qrbn]?$/;
 
@@ -49,6 +85,13 @@ class PuzzleController {
 			if (!puzzle) {
 				return res.status(404).json({ success: false, error: "No daily puzzle available" });
 			}
+			const etag = buildPuzzleEtag(puzzle);
+			const legacyEtag = buildLegacyPuzzleEtag(puzzle);
+			res.setHeader("Cache-Control", res.locals?.puzzleCacheControl || DAILY_CACHE_CONTROL);
+			res.setHeader("ETag", etag);
+			if (etagMatches(req.headers["if-none-match"], etag, legacyEtag)) {
+				return res.status(304).end();
+			}
 			return res.json({
 				success: true,
 				data: {
@@ -95,3 +138,6 @@ class PuzzleController {
 
 module.exports = new PuzzleController();
 module.exports.normalizeMoves = normalizeMoves;
+module.exports.buildPuzzleEtag = buildPuzzleEtag;
+module.exports.etagMatches = etagMatches;
+module.exports.puzzleCacheControlMiddleware = puzzleCacheControlMiddleware;

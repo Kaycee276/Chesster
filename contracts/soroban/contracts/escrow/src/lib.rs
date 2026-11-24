@@ -6069,7 +6069,7 @@ impl ChessterEscrow {
         }
     }
 
-    fn require_arbiter(env: &Env, arbiter: &Address) -> Result<(), EscrowError> {
+    fn require_arbiter(env: &Env, arbiter: &Address) {
         let arbiters: Vec<Address> = env
             .storage()
             .instance()
@@ -6079,7 +6079,6 @@ impl ChessterEscrow {
         if !arbiters.iter().any(|a| a == *arbiter) {
             panic_with_error!(env, EscrowError::Unauthorized);
         }
-        Ok(())
     }
 
     /// Cleans up settled or refunded matches older than 30 days (`STALE_MATCH_THRESHOLD_SECS`) from storage (Issue #41, #380).

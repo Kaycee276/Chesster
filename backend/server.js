@@ -256,12 +256,13 @@ function broadcastGameUpdate(gameCode, game) {
       target?.emit("game-update", maskGameForViewer(game, color || "white"));
     }
   }
-  const spectatorRoom = io.sockets.adapter.rooms.get(`spectator_chat:${gameCode}`);
-  if (spectatorRoom) {
-    for (const socketId of spectatorRoom) {
-      const target = io.sockets.sockets.get(socketId);
-      target?.emit("game-update", maskGameForViewer(game, "white"));
-    }
+  const spectatorRoomName = `spectator_chat:${gameCode}`;
+  const spectatorRoom = io.sockets.adapter.rooms.get(spectatorRoomName);
+  if (spectatorRoom && spectatorRoom.size > 0) {
+    // Compute spectator view once and use Socket.IO's single-encode room broadcast
+    // instead of serializing per-client in an unbounded O(N) loop (Issue #716).
+    const spectatorPayload = maskGameForViewer(game, "white");
+    io.to(spectatorRoomName).emit("game-update", spectatorPayload);
   }
 }
 
