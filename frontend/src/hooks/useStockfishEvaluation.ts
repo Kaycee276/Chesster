@@ -11,6 +11,8 @@ export type EngineStatus = "loading" | "ready" | "error" | "unsupported";
 interface Options {
 	depth?: number;
 	multiPv?: number;
+	threads?: number;
+	hashSizeMb?: number;
 	enabled?: boolean;
 }
 
@@ -35,7 +37,7 @@ function isTabHidden(): boolean {
  */
 export function useStockfishEvaluation(
 	fen: string | null,
-	{ depth = DEFAULT_SEARCH_DEPTH, multiPv = 1, enabled = true }: Options = {},
+	{ depth = DEFAULT_SEARCH_DEPTH, multiPv = 1, threads = 1, hashSizeMb = 16, enabled = true }: Options = {},
 ) {
 	const [state, setState] = useState<State>(() => ({
 		status: typeof Worker === "undefined" ? "unsupported" : "loading",
@@ -46,6 +48,8 @@ export function useStockfishEvaluation(
 	const fenRef = useRef(fen);
 	const depthRef = useRef(depth);
 	const multiPvRef = useRef(multiPv);
+	const threadsRef = useRef(threads);
+	const hashSizeMbRef = useRef(hashSizeMb);
 	const completedFenRef = useRef<string | null>(null);
 
 	// Spawn the worker once per enabled session.
@@ -56,6 +60,13 @@ export function useStockfishEvaluation(
 			type: "module",
 		});
 		workerRef.current = worker;
+
+		if (threadsRef.current > 1 || hashSizeMbRef.current !== 16) {
+			worker.postMessage({
+				type: "setOptions",
+				options: { threads: threadsRef.current, hashSizeMb: hashSizeMbRef.current },
+			});
+		}
 
 		if (multiPvRef.current > 1) {
 			worker.postMessage({ type: "setMultiPv", lines: multiPvRef.current });
@@ -97,15 +108,21 @@ export function useStockfishEvaluation(
 		fenRef.current = fen;
 		depthRef.current = depth;
 		multiPvRef.current = multiPv;
+		threadsRef.current = threads;
+		hashSizeMbRef.current = hashSizeMb;
 
 		const worker = workerRef.current;
 		if (!worker) return;
 
+		worker.postMessage({
+			type: "setOptions",
+			options: { threads, hashSizeMb, maxDepth: depth },
+		});
 		worker.postMessage({ type: "setMultiPv", lines: multiPv } satisfies EngineRequest);
 		const request: EngineRequest =
 			fen && !isTabHidden() ? { type: "evaluate", fen, depth } : { type: "stop" };
 		worker.postMessage(request);
-	}, [fen, depth, multiPv, enabled]);
+	}, [fen, depth, multiPv, threads, hashSizeMb, enabled]);
 
 	// Pause while the tab is hidden; resume when it is visible again.
 	useEffect(() => {

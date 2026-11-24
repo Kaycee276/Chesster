@@ -1,4 +1,5 @@
-import { Play, Pause, Cpu, Gauge, Layers } from "lucide-react";
+import { useState } from "react";
+import { Play, Pause, Cpu, Gauge, Layers, Settings, Minus, Plus } from "lucide-react";
 
 export interface AnalysisVariation {
   multipv: number;
@@ -12,15 +13,19 @@ export interface AnalysisControlBarProps {
   nps: number;
   multiPv: number;
   isPaused: boolean;
+  threads?: number;
+  hashSizeMb?: number;
   variations?: AnalysisVariation[];
   lockWhiteBottom?: boolean;
   onDepthChange: (depth: number) => void;
   onMultiPvChange: (lines: number) => void;
+  onThreadsChange?: (threads: number) => void;
+  onHashSizeChange?: (hashMb: number) => void;
   onTogglePause: () => void;
   onToggleLockWhiteBottom?: () => void;
 }
 
-export type { AnalysisPreferences } from "../utils/analysisPreferences";
+export type { AnalysisPreferences, EngineSettings } from "../utils/analysisPreferences";
 
 export default function AnalysisControlBar({
   currentDepth,
@@ -28,17 +33,26 @@ export default function AnalysisControlBar({
   nps,
   multiPv,
   isPaused,
+  threads = 1,
+  hashSizeMb = 16,
   variations = [],
   lockWhiteBottom = false,
   onDepthChange,
   onMultiPvChange,
+  onThreadsChange,
+  onHashSizeChange,
   onTogglePause,
   onToggleLockWhiteBottom,
 }: AnalysisControlBarProps) {
-  const depthPercentage = Math.min(100, Math.max(0, Math.round((currentDepth / targetDepth) * 100)));
-  const formattedNps = nps >= 1_000_000
-    ? `${(nps / 1_000_000).toFixed(2)} MN/s`
-    : `${Math.round(nps / 1000)} kN/s`;
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const depthPercentage = Math.min(
+    100,
+    Math.max(0, Math.round((currentDepth / targetDepth) * 100))
+  );
+  const formattedNps =
+    nps >= 1_000_000
+      ? `${(nps / 1_000_000).toFixed(2)} MN/s`
+      : `${Math.round(nps / 1000)} kN/s`;
 
   return (
     <div
@@ -67,6 +81,22 @@ export default function AnalysisControlBar({
             <Cpu size={12} className="text-(--accent-primary)" />
             Stockfish
           </span>
+
+          <button
+            type="button"
+            onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+            title="Engine Performance Settings"
+            aria-label="Engine settings"
+            aria-expanded={isSettingsOpen}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold border transition-all ${
+              isSettingsOpen
+                ? "bg-(--accent-primary)/15 border-(--accent-primary) text-(--text) font-bold"
+                : "bg-(--bg) border-(--border) text-(--text-tertiary) hover:text-(--text)"
+            }`}
+          >
+            <Settings size={12} className={isSettingsOpen ? "text-(--accent-primary)" : ""} />
+            <span>Settings</span>
+          </button>
 
           {onToggleLockWhiteBottom && (
             <button
@@ -120,6 +150,112 @@ export default function AnalysisControlBar({
         />
       </div>
 
+      {/* Collapsible Engine Settings Modal / Popover (Issue #795) */}
+      {isSettingsOpen && (
+        <div
+          data-testid="engine-settings-popover"
+          className="p-3 rounded-lg bg-(--bg) border border-(--border) flex flex-col gap-3 shadow-md"
+        >
+          <div className="flex items-center justify-between border-b border-(--border)/60 pb-1.5">
+            <span className="font-bold text-[11px] text-(--text) flex items-center gap-1.5">
+              <Settings size={13} className="text-(--accent-primary)" />
+              Engine Performance Settings
+            </span>
+            <span className="text-[10px] text-(--text-tertiary)">Stockfish 19 lite</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* 1. Depth Stepper & Slider */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex justify-between items-center text-[10px] text-(--text-tertiary) font-semibold uppercase">
+                <span>Depth Limit</span>
+                <span className="font-mono text-xs font-bold text-(--text)">{targetDepth}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => onDepthChange(Math.max(10, targetDepth - 1))}
+                  disabled={targetDepth <= 10}
+                  aria-label="Decrease depth"
+                  className="p-1 rounded bg-(--bg-secondary) border border-(--border) text-(--text-secondary) hover:text-(--text) disabled:opacity-40"
+                >
+                  <Minus size={11} />
+                </button>
+                <input
+                  type="range"
+                  min={10}
+                  max={25}
+                  step={1}
+                  value={targetDepth}
+                  onChange={(e) => onDepthChange(Number(e.target.value))}
+                  aria-label="Engine depth limit"
+                  className="w-full accent-(--accent-primary) cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() => onDepthChange(Math.min(25, targetDepth + 1))}
+                  disabled={targetDepth >= 25}
+                  aria-label="Increase depth"
+                  className="p-1 rounded bg-(--bg-secondary) border border-(--border) text-(--text-secondary) hover:text-(--text) disabled:opacity-40"
+                >
+                  <Plus size={11} />
+                </button>
+              </div>
+            </div>
+
+            {/* 2. Worker Threads Selector */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex justify-between items-center text-[10px] text-(--text-tertiary) font-semibold uppercase">
+                <span>Worker Threads</span>
+                <span className="font-mono text-xs font-bold text-(--text)">{threads} core{threads === 1 ? "" : "s"}</span>
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                {[1, 2, 3, 4].map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => onThreadsChange?.(t)}
+                    aria-label={`${t} thread${t === 1 ? "" : "s"}`}
+                    className={`py-1 rounded text-[11px] font-semibold border transition-all ${
+                      threads === t
+                        ? "bg-(--accent-primary)/15 border-(--accent-primary) text-(--text) font-bold"
+                        : "bg-(--bg-secondary) border-(--border) text-(--text-tertiary) hover:text-(--text)"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 3. Hash Memory Size Selector */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex justify-between items-center text-[10px] text-(--text-tertiary) font-semibold uppercase">
+                <span>Hash Memory</span>
+                <span className="font-mono text-xs font-bold text-(--text)">{hashSizeMb} MB</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {[16, 32, 64].map((mb) => (
+                  <button
+                    key={mb}
+                    type="button"
+                    onClick={() => onHashSizeChange?.(mb)}
+                    aria-label={`${mb} megabytes hash table`}
+                    className={`py-1 rounded text-[11px] font-semibold border transition-all ${
+                      hashSizeMb === mb
+                        ? "bg-(--accent-primary)/15 border-(--accent-primary) text-(--text) font-bold"
+                        : "bg-(--bg-secondary) border-(--border) text-(--text-tertiary) hover:text-(--text)"
+                    }`}
+                  >
+                    {mb}M
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Controls: Target Depth Slider & Multi-PV */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-(--border)/60">
         {/* Depth Slider */}
@@ -131,7 +267,7 @@ export default function AnalysisControlBar({
           <input
             type="range"
             min={10}
-            max={24}
+            max={25}
             step={1}
             value={targetDepth}
             onChange={(e) => onDepthChange(Number(e.target.value))}

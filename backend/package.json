@@ -13,6 +13,8 @@
         "migrate": "node database/migrate.js up",
         "migrate:down": "node database/migrate.js down",
         "migrate:status": "node database/migrate.js status",
+        "seed": "node database/seed.js",
+        "db:seed": "node database/seed.js",
         "db:seed:puzzles": "node database/seeds/seedPuzzles.js",
         "prisma:generate": "prisma generate",
         "prisma:push": "prisma db push",
