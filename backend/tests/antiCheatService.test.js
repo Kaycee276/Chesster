@@ -670,3 +670,65 @@ describe("FIDE centipawn loss (ACPL) distribution profiling (Issue #744)", () =>
 		]));
 	});
 });
+
+describe("client tab visibility and blur telemetry tracking (Issue #794)", () => {
+	const {
+		assessBlurMoveCorrelation,
+		analyzeTabSwitchingTelemetry,
+		INTEGRITY_SUSPICIOUS_TAB_SWITCHING,
+	} = require("../services/antiCheatService");
+
+	it("correlates blur-focus sequence when away 2-10s and move submitted within 2s of focus", () => {
+		const baseTime = 100000;
+		const blurEvents = [
+			{ eventType: "BLUR", timestamp: baseTime },
+			{ eventType: "FOCUS", timestamp: baseTime + 3000 }, // away for 3s (within 1.5s - 15s)
+		];
+		const moveTimestamp = baseTime + 3800; // moved 800ms after focus (<= 2000ms)
+
+		const isCorrelated = assessBlurMoveCorrelation(blurEvents, moveTimestamp);
+		expect(isCorrelated).toBe(true);
+	});
+
+	it("does not flag quick casual blurs under 1.5s", () => {
+		const baseTime = 100000;
+		const blurEvents = [
+			{ eventType: "BLUR", timestamp: baseTime },
+			{ eventType: "FOCUS", timestamp: baseTime + 800 }, // away for only 800ms
+		];
+		const moveTimestamp = baseTime + 1200;
+
+		const isCorrelated = assessBlurMoveCorrelation(blurEvents, moveTimestamp);
+		expect(isCorrelated).toBe(false);
+	});
+
+	it("does not flag moves made long after focus returns (> 2s)", () => {
+		const baseTime = 100000;
+		const blurEvents = [
+			{ eventType: "BLUR", timestamp: baseTime },
+			{ eventType: "FOCUS", timestamp: baseTime + 4000 }, // away 4s
+		];
+		const moveTimestamp = baseTime + 8000; // moved 4s after focus
+
+		const isCorrelated = assessBlurMoveCorrelation(blurEvents, moveTimestamp);
+		expect(isCorrelated).toBe(false);
+	});
+
+	it("flags INTEGRITY_SUSPICIOUS_TAB_SWITCHING when correlated moves reach threshold", () => {
+		const telemetry = [];
+		const moves = [];
+		let t = 100000;
+
+		for (let i = 1; i <= 10; i++) {
+			telemetry.push({ eventType: "BLUR", timestamp: t });
+			telemetry.push({ eventType: "FOCUS", timestamp: t + 3000 });
+			moves.push({ move_number: i, created_at: new Date(t + 3500).toISOString() });
+			t += 10000;
+		}
+
+		const report = analyzeTabSwitchingTelemetry(telemetry, moves);
+		expect(report.correlatedCount).toBe(10);
+		expect(report.suspicious).toBe(true);
+		expect(report.flag).toBe(INTEGRITY_SUSPICIOUS_TAB_SWITCHING);
+	});
+});

@@ -1084,6 +1084,65 @@ class AntiCheatService {
 	}
 }
 
+const INTEGRITY_SUSPICIOUS_TAB_SWITCHING = "INTEGRITY_SUSPICIOUS_TAB_SWITCHING";
+const TAB_BLUR_MIN_DURATION_MS = 1500;
+const TAB_BLUR_MAX_DURATION_MS = 15000;
+const TAB_FOCUS_TO_MOVE_MAX_MS = 2000;
+const TAB_SWITCH_CORRELATION_THRESHOLD = 8;
+
+function assessBlurMoveCorrelation(blurEvents = [], moveTimestamp) {
+	if (!Array.isArray(blurEvents) || blurEvents.length === 0 || !moveTimestamp) return false;
+
+	// Find the most recent focus event before or at the move
+	const recentFocus = blurEvents
+		.filter((e) => (e.type === "FOCUS" || e.eventType === "FOCUS") && e.timestamp <= moveTimestamp)
+		.sort((a, b) => b.timestamp - a.timestamp)[0];
+
+	if (!recentFocus) return false;
+
+	// Find the blur event preceding that focus
+	const precedingBlur = blurEvents
+		.filter((e) => (e.type === "BLUR" || e.eventType === "BLUR") && e.timestamp < recentFocus.timestamp)
+		.sort((a, b) => b.timestamp - a.timestamp)[0];
+
+	if (!precedingBlur) return false;
+
+	const blurredDurationMs = recentFocus.timestamp - precedingBlur.timestamp;
+	const focusToMoveMs = moveTimestamp - recentFocus.timestamp;
+
+	// Away for 1.5s - 15s and played within 2s of return
+	return (
+		blurredDurationMs >= TAB_BLUR_MIN_DURATION_MS &&
+		blurredDurationMs <= TAB_BLUR_MAX_DURATION_MS &&
+		focusToMoveMs <= TAB_FOCUS_TO_MOVE_MAX_MS &&
+		focusToMoveMs >= 0
+	);
+}
+
+function analyzeTabSwitchingTelemetry(telemetryEvents = [], moves = []) {
+	let correlatedCount = 0;
+	const correlatedMoves = [];
+
+	for (const move of moves) {
+		const moveTime = typeof move.created_at === "string" ? new Date(move.created_at).getTime() : (move.timestamp || move.created_at);
+		if (!moveTime) continue;
+		if (assessBlurMoveCorrelation(telemetryEvents, moveTime)) {
+			correlatedCount++;
+			correlatedMoves.push(move.move_number ?? move.ply);
+		}
+	}
+
+	const suspicious = correlatedCount >= TAB_SWITCH_CORRELATION_THRESHOLD;
+
+	return {
+		totalEvents: telemetryEvents.length,
+		correlatedCount,
+		correlatedMoves,
+		suspicious,
+		flag: suspicious ? INTEGRITY_SUSPICIOUS_TAB_SWITCHING : null,
+	};
+}
+
 module.exports = new AntiCheatService();
 module.exports.AntiCheatService = AntiCheatService;
 module.exports.FLAG_THRESHOLD = FLAG_THRESHOLD;
@@ -1132,3 +1191,10 @@ module.exports.FIDE_MIN_NON_BOOK_PLIES = FIDE_MIN_NON_BOOK_PLIES;
 module.exports.FIDE_MIN_SAMPLE_PLIES = FIDE_MIN_SAMPLE_PLIES;
 module.exports.FIDE_ACPL_THRESHOLD = FIDE_ACPL_THRESHOLD;
 module.exports.FIDE_TOP1_MATCH_RATE_THRESHOLD = FIDE_TOP1_MATCH_RATE_THRESHOLD;
+module.exports.INTEGRITY_SUSPICIOUS_TAB_SWITCHING = INTEGRITY_SUSPICIOUS_TAB_SWITCHING;
+module.exports.TAB_BLUR_MIN_DURATION_MS = TAB_BLUR_MIN_DURATION_MS;
+module.exports.TAB_BLUR_MAX_DURATION_MS = TAB_BLUR_MAX_DURATION_MS;
+module.exports.TAB_FOCUS_TO_MOVE_MAX_MS = TAB_FOCUS_TO_MOVE_MAX_MS;
+module.exports.TAB_SWITCH_CORRELATION_THRESHOLD = TAB_SWITCH_CORRELATION_THRESHOLD;
+module.exports.assessBlurMoveCorrelation = assessBlurMoveCorrelation;
+module.exports.analyzeTabSwitchingTelemetry = analyzeTabSwitchingTelemetry;
