@@ -290,9 +290,31 @@ describe("GET /api/games/:gameCode/pgn (Issue #463)", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain("application/x-chess-pgn");
+    expect(response.headers["content-disposition"]).toMatch(/attachment;\s*filename="chesster-.*\.pgn"/);
     expect(response.text).toContain('[WhiteElo "1200"]');
     expect(response.text).toContain('[TimeControl "60+1"]');
     expect(response.text).toContain('[Termination "time forfeit"]');
     expect(response.text).toContain("1. e4 { [%clk 0:00:57] } 0-1");
+  });
+
+  test("generates sanitized filename and content-disposition header (Issue #791)", async () => {
+    gameModel.getGame.mockResolvedValue({
+      id: "game-2",
+      game_code: "XYZ999",
+      status: "finished",
+      whitePlayer: { username: 'alice"; --\r\nmalicious' },
+      blackPlayer: { username: "bob/hack" },
+      createdAt: "2026-11-23T12:00:00.000Z",
+    });
+    gameModel.getMoves.mockResolvedValue([]);
+    jest.spyOn(replayService, "fetchPlayerRatings").mockResolvedValue({ white: 1500, black: 1500 });
+
+    const response = await request(buildApp()).get("/api/games/XYZ999/pgn");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toBe("application/x-chess-pgn; charset=utf-8");
+    expect(response.headers["content-disposition"]).toBe(
+      'attachment; filename="chesster-alice_______malicious-vs-bob_hack-2026-11-23.pgn"'
+    );
   });
 });

@@ -265,6 +265,28 @@ async function importPgn(input, { batchSize = DEFAULT_BATCH_SIZE, persistBatch }
 	return summary;
 }
 
+function sanitizeFilenameSegment(str) {
+	if (!str || typeof str !== 'string') return 'player';
+	return str.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 24);
+}
+
+function generatePgnFilename(game = {}) {
+	const white = sanitizeFilenameSegment(game.whitePlayer?.username || game.player_white_username || game.white || game.player_white_address || 'white');
+	const black = sanitizeFilenameSegment(game.blackPlayer?.username || game.player_black_username || game.black || game.player_black_address || 'black');
+	const rawDate = game.createdAt || game.created_at || game.game_started_at || game.date || Date.now();
+	const date = new Date(rawDate);
+	const dateStr = Number.isNaN(date.valueOf()) ? new Date().toISOString().slice(0, 10) : date.toISOString().slice(0, 10);
+	return `chesster-${white}-vs-${black}-${dateStr}.pgn`;
+}
+
+function getPgnDownloadHeaders(game = {}) {
+	const filename = generatePgnFilename(game);
+	return {
+		'Content-Type': 'application/x-chess-pgn; charset=utf-8',
+		'Content-Disposition': `attachment; filename="${filename}"`,
+	};
+}
+
 module.exports = {
 	STR_TAGS,
 	escapePgnTag,
@@ -277,4 +299,7 @@ module.exports = {
 	tokenizeMoveText,
 	validateAndFormat,
 	importPgn,
+	sanitizeFilenameSegment,
+	generatePgnFilename,
+	getPgnDownloadHeaders,
 };
