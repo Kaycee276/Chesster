@@ -101,4 +101,88 @@ function getPubSubClients() {
 	return { pubClient, subClient };
 }
 
-module.exports = { getRedisClient, getRedisConnection, closeRedis, getPubSubClients };
+/** Push item to a Redis queue/list (RPUSH). */
+async function pushQueue(queueName, item) {
+	const redis = getRedisClient();
+	if (!redis) return false;
+	const payload = typeof item === "string" ? item : JSON.stringify(item);
+	return await redis.rpush(queueName, payload);
+}
+
+/** Pop item from a Redis queue/list (LPOP). */
+async function popQueue(queueName) {
+	const redis = getRedisClient();
+	if (!redis) return null;
+	const res = await redis.lpop(queueName);
+	if (!res) return null;
+	try {
+		return JSON.parse(res);
+	} catch (_) {
+		return res;
+	}
+}
+
+/** Get length of a Redis queue/list (LLEN). */
+async function getQueueLength(queueName) {
+	const redis = getRedisClient();
+	if (!redis) return 0;
+	return await redis.llen(queueName);
+}
+
+function parseRedisInfoValue(infoText, key) {
+	if (typeof infoText !== "string") return null;
+	const match = infoText.match(new RegExp(`^${key}:(\\d+(?:\\.\\d+)?)`, "m"));
+	if (!match) return null;
+	const value = Number(match[1]);
+	return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Safely collect Redis ping latency, connected clients, and memory usage.
+ * Never throws; returns connected: false when Redis is unavailable or errors.
+ */
+async function getRedisHealthInfo(redisClient = getRedisClient()) {
+	const disconnected = {
+		connected: false,
+		pingLatencyMs: null,
+		connectedClients: null,
+		usedMemoryBytes: null,
+	};
+
+	if (!redisClient || redisClient.status !== "ready") {
+		return disconnected;
+	}
+
+	try {
+		const startNs = process.hrtime.bigint();
+		await redisClient.ping();
+		const elapsedNs = process.hrtime.bigint() - startNs;
+		const pingLatencyMs = Number(elapsedNs) / 1e6;
+
+		const [clientsInfo, memoryInfo] = await Promise.all([
+			redisClient.info("clients"),
+			redisClient.info("memory"),
+		]);
+
+		return {
+			connected: true,
+			pingLatencyMs,
+			connectedClients: parseRedisInfoValue(clientsInfo, "connected_clients"),
+			usedMemoryBytes: parseRedisInfoValue(memoryInfo, "used_memory"),
+		};
+	} catch (_) {
+		return disconnected;
+	}
+}
+
+
+module.exports = {
+	getRedisClient,
+	getRedisConnection,
+	closeRedis,
+	getPubSubClients,
+	pushQueue,
+	popQueue,
+	getQueueLength,
+	getRedisHealthInfo,
+};

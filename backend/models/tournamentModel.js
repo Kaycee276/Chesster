@@ -78,6 +78,11 @@ class TournamentModel {
 		return data || null;
 	}
 
+	/** HTTP controller compatibility alias for the existing tournament lookup. */
+	async getTournamentById(tournamentId) {
+		return this.getTournament(tournamentId);
+	}
+
 	/**
 	 * Lists tournaments with optional status filtering.
 	 *
@@ -126,6 +131,58 @@ class TournamentModel {
 
 		if (error) throw error;
 		return data;
+	}
+
+	/**
+	 * Creates refund ledger rows for participants, ignoring existing rows so
+	 * repeated cancellation calls never reset refund progress.
+	 *
+	 * @param {Array<{tournament_id: string, wallet_address: string, amount: number}>} rows
+	 */
+	async ensureRefundEntries(rows) {
+		if (!rows.length) return;
+		const { error } = await supabase
+			.from("tournament_refund_ledger")
+			.upsert(rows, { onConflict: "tournament_id,wallet_address", ignoreDuplicates: true });
+		if (error) throw error;
+	}
+
+	async listRefundEntries(tournamentId) {
+		const { data, error } = await supabase
+			.from("tournament_refund_ledger")
+			.select("*")
+			.eq("tournament_id", tournamentId);
+		if (error) throw error;
+		return data || [];
+	}
+
+	/**
+	 * Atomically moves a ledger row to "processing" if it is currently in one
+	 * of fromStatuses. Returns the row, or null if another worker owns it.
+	 */
+	async claimRefundEntry(tournamentId, walletAddress, fromStatuses = ["pending", "failed"]) {
+		const { data, error } = await supabase
+			.from("tournament_refund_ledger")
+			.update({ status: "processing", updated_at: new Date().toISOString() })
+			.eq("tournament_id", tournamentId)
+			.eq("wallet_address", walletAddress)
+			.in("status", fromStatuses)
+			.select();
+		if (error) throw error;
+		return data && data.length > 0 ? data[0] : null;
+	}
+
+	async markRefundResult(tournamentId, walletAddress, { txHash = null, error: failure = null }) {
+		const now = new Date().toISOString();
+		const updates = failure
+			? { status: "failed", last_error: String(failure), updated_at: now }
+			: { status: "refunded", tx_hash: txHash, last_error: null, updated_at: now };
+		const { error } = await supabase
+			.from("tournament_refund_ledger")
+			.update(updates)
+			.eq("tournament_id", tournamentId)
+			.eq("wallet_address", walletAddress);
+		if (error) throw error;
 	}
 
 	/**
@@ -224,6 +281,28 @@ class TournamentModel {
 	 */
 	async getParticipants(tournamentId) {
 		return this.listParticipants(tournamentId);
+	}
+
+	/** Count registrations without loading their full rows. */
+	async countParticipants(tournamentId) {
+		const { count, error } = await supabase
+			.from("tournament_participants")
+			.select("id", { count: "exact", head: true })
+			.eq("tournament_id", tournamentId);
+		if (error) throw error;
+		return count || 0;
+	}
+
+	/** Check one wallet's registration within this tournament. */
+	async isParticipant(tournamentId, walletAddress) {
+		const { data, error } = await supabase
+			.from("tournament_participants")
+			.select("wallet_address")
+			.eq("tournament_id", tournamentId)
+			.eq("wallet_address", walletAddress)
+			.maybeSingle();
+		if (error) throw error;
+		return Boolean(data);
 	}
 
 	/**

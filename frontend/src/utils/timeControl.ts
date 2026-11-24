@@ -33,3 +33,33 @@ export function isValidTimeControl(baseMinutes: number, incrementSeconds: number
     incrementSeconds <= 30
   );
 }
+
+/** Remaining-seconds marks that trigger a screen reader announcement (#646), descending. */
+export const ANNOUNCE_THRESHOLDS = [30, 10, 5] as const;
+
+function plural(count: number, unit: string): string {
+	return `${count} ${unit}${count === 1 ? "" : "s"}`;
+}
+
+/** Natural-language duration for screen readers, e.g. "1 minute 45 seconds". */
+export function describeDuration(ms: number): string {
+	const total = Number.isFinite(ms) ? Math.max(0, Math.ceil(ms / 1000)) : 0;
+	const minutes = Math.floor(total / 60);
+	const seconds = total % 60;
+	if (minutes === 0) return plural(seconds, "second");
+	if (seconds === 0) return plural(minutes, "minute");
+	return `${plural(minutes, "minute")} ${plural(seconds, "second")}`;
+}
+
+/**
+ * The tightest announcement threshold the clock is currently at or under, or
+ * null when above all of them. Derived from the remaining time rather than
+ * from tick events, so a clock update that skips an exact second still lands
+ * in the right bucket and re-renders within a bucket do not re-announce.
+ */
+export function announcementThreshold(ms: number): number | null {
+	const seconds = Math.ceil(Math.max(0, ms) / 1000);
+	let found: number | null = null;
+	for (const t of ANNOUNCE_THRESHOLDS) if (seconds <= t) found = t;
+	return found;
+}

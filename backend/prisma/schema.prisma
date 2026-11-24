@@ -56,6 +56,9 @@ model Game {
   // Soft-delete + retention archival (#471):
   // deleted_at covers deletedAt, is_archived covers isArchived.
   is_archived            Boolean   @default(false)
+  pgn                    String?   @db.Text
+  move_archive           String?   @db.Text
+  moves_archived_at      DateTime? @db.Timestamptz(6)
   move_history           Json?     @default("[]") @db.JsonB
   is_draw                Boolean?  @default(false)
   draw_reason            String?   @db.VarChar(50)
@@ -86,6 +89,7 @@ model Game {
   @@index([variant], map: "idx_games_variant")
   @@index([player_white_address, created_at(sort: Desc)], map: "idx_games_white_player_created_at")
   @@index([player_black_address, created_at(sort: Desc)], map: "idx_games_black_player_created_at")
+  // Lobby and matchmaking polling: filter by status, newest games first.
   @@index([status, created_at(sort: Desc)], map: "idx_games_status_created_at")
   @@index([deleted_at], map: "idx_games_deleted_at")
   @@index([archival_status], map: "idx_games_archival_status")
@@ -94,7 +98,7 @@ model Game {
 }
 
 model Move {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                String   @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   game_id           String   @db.Uuid
   move_number       Int
   player            String   @db.VarChar(10)
@@ -109,7 +113,9 @@ model Move {
 
   game Game @relation(fields: [game_id], references: [id], onDelete: Cascade)
 
-  @@index([game_id, move_number], map: "idx_moves_game")
+  // Monthly partitions are managed by SQL migration 031 and archivalService.
+  @@id([id, created_at])
+  @@index([game_id, move_number(sort: Asc)], map: "idx_moves_game_id_move_number")
   @@map("moves")
 }
 
@@ -244,6 +250,22 @@ model MatchAuditLog {
   @@map("match_audit_logs")
 }
 
+/// Idempotent execution ledger for on-chain escrow settlements (Issue #645).
+model EscrowSettlementLedger {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  match_id     String   @unique @db.VarChar(64)
+  tx_hash      String?
+  status       String   @default("pending") @db.VarChar(16)
+  attempts     Int      @default(1)
+  last_error   String?
+  version      Int      @default(0)
+  submitted_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at   DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([status, submitted_at], map: "idx_escrow_settlement_ledger_status")
+  @@map("escrow_settlement_ledger")
+}
+
 model PlayerFlag {
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   player_address String    @db.VarChar(255)
@@ -305,14 +327,34 @@ model Tournament {
   reminder_15m_sent_at DateTime? @db.Timestamptz(6)
   reminder_5m_sent_at  DateTime? @db.Timestamptz(6)
   winner_announced_at  DateTime? @db.Timestamptz(6)
+  cancellation_reason  String?
   created_at           DateTime  @default(now()) @db.Timestamptz(6)
   updated_at           DateTime  @default(now()) @db.Timestamptz(6)
 
   participants    TournamentParticipant[]
   bracket_matches BracketMatch[]
+  refund_ledger   TournamentRefundLedger[]
 
   @@index([status], map: "idx_tournaments_status")
   @@map("tournaments")
+}
+
+model TournamentRefundLedger {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tournament_id  String   @db.Uuid
+  wallet_address String
+  amount         Decimal  @db.Decimal(30, 7)
+  status         String   @default("pending") @db.VarChar(20)
+  tx_hash        String?
+  last_error     String?
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime @default(now()) @db.Timestamptz(6)
+
+  tournament Tournament @relation(fields: [tournament_id], references: [id], onDelete: Cascade)
+
+  @@unique([tournament_id, wallet_address])
+  @@index([tournament_id, status], map: "idx_tournament_refund_ledger_status")
+  @@map("tournament_refund_ledger")
 }
 
 model TournamentParticipant {
@@ -499,12 +541,15 @@ model WebhookDeadLetterQueue {
   last_status_code Int?
   status           String    @default("pending") @db.VarChar(20)
   replay_count     Int       @default(0)
+  next_retry_at    DateTime? @db.Timestamptz(6)
   last_replayed_at DateTime? @db.Timestamptz(6)
   replayed_at      DateTime? @db.Timestamptz(6)
+  resolved_at      DateTime? @db.Timestamptz(6)
   created_at       DateTime  @default(now()) @db.Timestamptz(6)
   updated_at       DateTime  @default(now()) @db.Timestamptz(6)
 
   @@index([status, created_at], map: "idx_webhook_dlq_status_created")
+  @@index([status, next_retry_at], map: "idx_webhook_dlq_status_retry")
   @@index([event_type], map: "idx_webhook_dlq_event_type")
   @@map("webhook_dead_letter_queue")
 }

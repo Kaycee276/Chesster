@@ -3,11 +3,13 @@ const userModel = require("../models/userModel");
 const timerService = require("../services/timerService");
 const eventBus = require("../services/eventBus");
 const replayService = require("../services/replayService");
+const zlib = require("zlib");
 
 // Comment line sent periodically so proxies don't drop an idle replay stream.
 const REPLAY_HEARTBEAT_MS = 15000;
 const auditService = require("../services/auditService");
 const leaderboardService = require("../services/leaderboardService");
+const analyticsService = require("../services/analyticsService");
 const pgnService = require("../services/pgnService");
 
 const AUDIT_FORMATS = new Set(["json", "csv"]);
@@ -223,12 +225,22 @@ class GameController {
 			const moves = await gameModel.getMoves(gameCode);
 			// Annotated export with per-move [%clk] / [%eval] comments (Issue #463).
 			const ratings = await replayService.fetchPlayerRatings(game);
-			const pgn = replayService.formatPgn(game, moves, { ratings });
+			const pgn = pgnService.generateGamePGN(game, moves, { ratings });
 			res.set({
 				"Content-Type": "application/x-chess-pgn",
 				"Content-Disposition": `attachment; filename=game-${game.game_code || game.id}.pgn`,
 			});
-			return res.send(pgn);
+
+			const acceptEncoding = req.headers['accept-encoding'] || '';
+			if (acceptEncoding.includes('gzip')) {
+				res.setHeader('Content-Encoding', 'gzip');
+				zlib.gzip(pgn, (err, buffer) => {
+					if (err) return res.status(500).json({ success: false, error: err.message });
+					res.send(buffer);
+				});
+			} else {
+				return res.send(pgn);
+			}
 		} catch (error) {
 			return res.status(500).json({ success: false, error: error.message });
 		}
@@ -287,6 +299,56 @@ class GameController {
 			res.json({ success: true, data: game });
 		} catch (error) {
 			res.status(400).json({ success: false, error: error.message });
+		}
+	}
+
+	/**
+	 * Handle abandonment forfeit when a disconnected player fails to reconnect
+	 * within the grace period (Issue #677).
+	 *
+	 * @param {string} gameCode - The game code
+	 * @param {string} forfeitedPlayerAddress - Address of the player who abandoned
+	 * @param {object} [io] - Optional socket.io instance for broadcasting
+	 * @returns {Promise<object>} Updated game object
+	 */
+	async handleForfeitByAbandonment(gameCode, forfeitedPlayerAddress, io = null) {
+		try {
+			const game = await gameModel.getGame(gameCode);
+			if (!game) throw new Error("Game not found");
+			if (game.status !== "active") throw new Error("Game is not active");
+
+			const forfeitedPlayerColor = game.player_white_address === forfeitedPlayerAddress ? "white" : "black";
+			const winningPlayerColor = forfeitedPlayerColor === "white" ? "black" : "white";
+
+			// Use resignGame logic to end the match
+			const updatedGame = await gameModel.resignGame(gameCode, forfeitedPlayerColor);
+			this.publishGameEnded(updatedGame, "abandonment");
+
+			timerService.clearTimer(gameCode);
+			timerService.clearClock(gameCode);
+			await userModel.invalidateProfilesForGame(updatedGame);
+
+			// If tournament match concluded, advance round
+			try {
+				const tournamentModel = require("../models/tournamentModel");
+				const tournamentService = require("../services/tournamentService");
+				const match = await tournamentModel.getMatchByGameCode(gameCode);
+				const winnerAddress = updatedGame.winner === "white"
+					? updatedGame.player_white_address
+					: updatedGame.player_black_address;
+				if (match && winnerAddress) {
+					tournamentService.advanceRound(match.tournament_id, match.id, winnerAddress).catch(() => {});
+				}
+			} catch { /* non-critical */ }
+
+			if (io) {
+				io.to(gameCode).emit("game-update", updatedGame);
+			}
+
+			return updatedGame;
+		} catch (error) {
+			console.error(`[GameController] handleForfeitByAbandonment failed for ${gameCode}:`, error.message);
+			throw error;
 		}
 	}
 
@@ -479,6 +541,22 @@ class GameController {
 		}
 	}
 
+	/**
+	 * GET /api/games/:id/verify-audit (Issue #667)
+	 * Verify SHA-256 match audit integrity by recomputing the move chain hash.
+	 * Public endpoint for independent verification without authentication.
+	 */
+	async verifyMatchAudit(req, res) {
+		try {
+			const { id } = req.params;
+			const result = await auditService.verifyMatchAuditIntegrity(id);
+			res.json({ success: true, data: result });
+		} catch (error) {
+			const isNotFound = error.message?.includes("not found");
+			res.status(isNotFound ? 404 : 500).json({ success: false, error: error.message });
+		}
+	}
+
 	async getChatMessages(req, res) {
 		try {
 			const { gameCode } = req.params;
@@ -660,6 +738,16 @@ class GameController {
 			res.json({ success: true, data: leaderboard });
 		} catch (error) {
 			res.status(500).json({ success: false, error: error.message });
+		}
+	}
+
+	async getRolling24HourVolume(req, res) {
+		try {
+			const volume = await analyticsService.getRolling24HourVolume();
+			res.setHeader("Cache-Control", "public, max-age=60");
+			res.json(volume);
+		} catch (error) {
+			res.status(500).json({ success: false, error: "Failed to fetch 24-hour volume" });
 		}
 	}
 }

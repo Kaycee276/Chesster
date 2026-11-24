@@ -111,7 +111,7 @@ async function handleDisconnect(deps, gameCode, playerColor) {
  * Does not touch socket.io room membership or presence maps directly -- the
  * caller owns that state and performs the actual join/broadcast.
  *
- * @param {object} deps - { gameModel, timerService }
+ * @param {object} deps - { gameModel, timerService, sessionService? }
  * @param {string} gameCode
  * @param {string} walletAddress - Authenticated wallet address of the caller.
  * @returns {Promise<{ ok: boolean, code?: string, message?: string, game?: object, playerColor?: "white"|"black" }>}
@@ -145,6 +145,10 @@ async function handleReconnect(deps, gameCode, walletAddress) {
 	// Cancel the pending auto-forfeit grace timer now that the player is
 	// provably back, before any further await lets it race against firing.
 	timerService.cancelReconnectGrace(gameCode, playerColor);
+	// Also clear the address-keyed disconnection grace (Issue #580) when provided.
+	if (deps.sessionService) {
+		deps.sessionService.cancelDisconnectionGrace(gameCode, walletAddress);
+	}
 
 	return { ok: true, game, playerColor };
 }
@@ -284,6 +288,104 @@ function clearMoveSubmissionTimestamps(gameCode) {
 	}
 }
 
+/**
+ * Move timing burst and premove validation (Issue #583).
+ *
+ * Per-game state tracks when the previous move landed on the board and which
+ * premoves a player registered ahead of time. A non-premove submission arriving
+ * within MOVE_BURST_MIN_DELTA_MS of the previous move is treated as automated
+ * burst abuse. A submission flagged as a premove is only honoured when that
+ * player registered it before the previous move landed, which stops clients
+ * from forging the flag to skip the burst check.
+ */
+const MOVE_BURST_MIN_DELTA_MS = 40;
+const PREMOVE_MIN_TURN_MS = 10;
+const RATE_LIMITED_MOVE_BURST = "RATE_LIMITED_MOVE_BURST";
+const INVALID_PREMOVE = "INVALID_PREMOVE";
+
+/** gameCode -> { lastMoveTimestamp: number|null, pendingPremoves: Map<color, { registeredAt: number }> } */
+const moveTimingState = new Map();
+
+function getTimingState(gameCode) {
+	let state = moveTimingState.get(gameCode);
+	if (!state) {
+		state = { lastMoveTimestamp: null, pendingPremoves: new Map() };
+		moveTimingState.set(gameCode, state);
+	}
+	return state;
+}
+
+/**
+ * Register that a player queued a premove. Registration time is server-side so
+ * clients cannot backdate it.
+ *
+ * @param {string} gameCode
+ * @param {"white"|"black"} color
+ * @param {number} [now=Date.now()]
+ * @returns {boolean} true if recorded
+ */
+function registerPremove(gameCode, color, now = Date.now()) {
+	if (!gameCode || !color) return false;
+	getTimingState(gameCode).pendingPremoves.set(color, { registeredAt: now });
+	return true;
+}
+
+/**
+ * Validate the timing of a move submission without mutating state.
+ *
+ * @param {string} gameCode
+ * @param {"white"|"black"} color
+ * @param {{ isPremove?: boolean, now?: number }} [opts]
+ * @returns {{ ok: boolean, code?: string, deltaMs: number|null, effectiveDeltaMs?: number, isPremove: boolean }}
+ */
+function checkMoveTiming(gameCode, color, { isPremove = false, now = Date.now() } = {}) {
+	const state = moveTimingState.get(gameCode);
+	const last = state ? state.lastMoveTimestamp : null;
+	const deltaMs = last === null ? null : now - last;
+
+	if (isPremove) {
+		const record = state ? state.pendingPremoves.get(color) : undefined;
+		// A premove is only legitimate if it was registered before the previous
+		// move landed. A missing or late registration means the flag is forged.
+		if (!record || last === null || !(record.registeredAt < last)) {
+			return { ok: false, code: INVALID_PREMOVE, deltaMs, isPremove: true };
+		}
+		return {
+			ok: true,
+			deltaMs,
+			effectiveDeltaMs: Math.max(deltaMs, PREMOVE_MIN_TURN_MS),
+			isPremove: true,
+		};
+	}
+
+	if (deltaMs !== null && deltaMs < MOVE_BURST_MIN_DELTA_MS) {
+		return { ok: false, code: RATE_LIMITED_MOVE_BURST, deltaMs, isPremove: false };
+	}
+	return { ok: true, deltaMs, effectiveDeltaMs: deltaMs, isPremove: false };
+}
+
+/**
+ * Record that a move completed on the board and consume the mover's premove.
+ *
+ * @param {string} gameCode
+ * @param {"white"|"black"} color - Color that just moved.
+ * @param {number} [now=Date.now()]
+ */
+function recordMoveCompleted(gameCode, color, now = Date.now()) {
+	if (!gameCode) return;
+	const state = getTimingState(gameCode);
+	state.lastMoveTimestamp = now;
+	if (color) state.pendingPremoves.delete(color);
+}
+
+/**
+ * Drop timing state for a game (call when it ends).
+ * @param {string} gameCode
+ */
+function clearMoveTimingState(gameCode) {
+	if (gameCode) moveTimingState.delete(gameCode);
+}
+
 module.exports = {
 	verifySocketToken,
 	resolvePlayerColor,
@@ -295,4 +397,12 @@ module.exports = {
 	recordMoveSubmissionTimestamp,
 	getMoveSubmissionTimestamps,
 	clearMoveSubmissionTimestamps,
+	MOVE_BURST_MIN_DELTA_MS,
+	PREMOVE_MIN_TURN_MS,
+	RATE_LIMITED_MOVE_BURST,
+	INVALID_PREMOVE,
+	registerPremove,
+	checkMoveTiming,
+	recordMoveCompleted,
+	clearMoveTimingState,
 };

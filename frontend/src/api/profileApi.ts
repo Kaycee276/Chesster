@@ -33,6 +33,11 @@ export interface RecentGame {
 	color: "white" | "black" | null;
 	ratingChange: number | null;
 	playedAt: string | null;
+	/** Optional authoritative metadata or an inferred broad family. */
+	openingName?: string | null;
+	openingEco?: string | null;
+	/** Omitted by the endpoint when it already selects only finished games. */
+	status?: string | null;
 }
 
 export interface PlayerProfile {
@@ -85,8 +90,14 @@ function toStringOrNull(value: unknown): string | null {
 }
 
 function toMode(value: unknown): GameMode | null {
-	const mode = typeof value === "string" ? value.toLowerCase() : "";
-	return (GAME_MODES as readonly string[]).includes(mode) ? (mode as GameMode) : null;
+	const mode = typeof value === "string" ? value.trim().toLowerCase() : "";
+	// Preset keys identify individual clocks; profile tabs group their families.
+	switch (mode) {
+		case "bullet2": return "bullet";
+		case "blitz5": return "blitz";
+		case "rapid15": return "rapid";
+		default: return (GAME_MODES as readonly string[]).includes(mode) ? (mode as GameMode) : null;
+	}
 }
 
 function toResult(value: unknown): GameResult | null {
@@ -126,11 +137,20 @@ function normalizeRecentGame(raw: Raw): RecentGame | null {
 	const gameCode = toStringOrNull(pick(raw, "gameCode", "game_code"));
 	const result = toResult(pick(raw, "result", "outcome"));
 	if (!gameCode || !result) return null;
+	const rawStatus = pick(raw, "status");
+	const status = typeof rawStatus === "string" ? rawStatus.toLowerCase() : undefined;
+	if (rawStatus !== undefined && status !== "finished" && status !== "completed") return null;
+	const openingName = toStringOrNull(pick(raw, "openingName", "opening_name"))?.trim();
+	const rawEco = toStringOrNull(pick(raw, "openingEco", "opening_eco", "eco"))?.trim().toUpperCase();
+	const openingEco = rawEco && /^[A-E][0-9]{2}$/.test(rawEco) ? rawEco : null;
 
 	const color = pick(raw, "color", "playerColor", "player_color");
 	return {
 		gameCode,
 		result,
+		...(openingName ? { openingName } : {}),
+		...(openingEco ? { openingEco } : {}),
+		...(status ? { status } : {}),
 		opponentAddress: toStringOrNull(pick(raw, "opponentAddress", "opponent_address", "opponent")),
 		opponentName: toStringOrNull(pick(raw, "opponentName", "opponent_name", "opponentUsername", "opponent_username")),
 		mode: toMode(pick(raw, "mode", "gameMode", "game_mode", "timeControl", "time_control_preset")),
@@ -162,7 +182,7 @@ export function normalizeProfile(raw: unknown, fallbackAddress: string): PlayerP
 		}
 	}
 
-	const rawGames = pick(data, "recentGames", "recent_games", "matches");
+	const rawGames = pick(data, "recentGames", "recent_games", "recentMatches", "recent_matches", "matches");
 	const recentGames = Array.isArray(rawGames)
 		? rawGames.flatMap((g) => {
 				const game = isObject(g) ? normalizeRecentGame(g) : null;

@@ -3,6 +3,10 @@
 //   mode "ok"   -> answers every `go` with `bestmove e2e4`
 //   mode "none" -> answers every `go` with `bestmove (none)` (no legal moves)
 //   mode "hang" -> never answers `go` (simulates a stuck search)
+//   mode "invalid" -> emits malformed UCI output to exercise recovery
+//   mode "illegal" -> emits valid-looking coordinates for an illegal move
+//   mode "promotion" -> chooses a legal knight underpromotion
+//   mode "castle" -> chooses white kingside castling
 const fs = require("fs");
 const readline = require("readline");
 
@@ -20,7 +24,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 	} else if (line.startsWith("go")) {
 		if (mode === "hang") return;
 		out("info depth 1 score cp 20 pv e2e4");
-		out(mode === "none" ? "bestmove (none)" : "bestmove e2e4 ponder e7e5");
+		out(mode === "none" ? "bestmove (none)" : mode === "invalid" ? "bestmove zz99" : mode === "illegal" ? "bestmove a1a1" : mode === "promotion" ? "bestmove a7a8n" : mode === "castle" ? "bestmove e1g1" : "bestmove e2e4 ponder e7e5");
 	} else if (line === "quit") {
 		process.exit(0);
 	}

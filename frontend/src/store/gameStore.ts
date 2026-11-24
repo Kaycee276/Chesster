@@ -1,3 +1,4 @@
+import { calculateNewRating, DEFAULT_PUZZLE_RATING } from "../utils/glickoCalculator";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { useEffect, useRef } from "react";
@@ -45,6 +46,11 @@ function stopLocalTimer() {
 }
 
 interface GameStore {
+  puzzleRating: number;
+  puzzleRD: number;
+  puzzleVolatility: number;
+  ratedPuzzleIds: string[];
+  updatePuzzleRating: (puzzleRating: number, isSolved: boolean, puzzleId: string) => number | null;
   gameCode: string | null;
   playerColor: "white" | "black" | null;
   // Network connection state (Issue #401)
@@ -112,11 +118,18 @@ interface GameStore {
   // Move confirmation for high-stakes games (Issue #493)
   isMoveConfirmationEnabled: boolean;
   toggleMoveConfirmation: () => void;
+  // Auto-queen promotion preference (Issue #671)
+  autoQueen: boolean;
+  toggleAutoQueen: () => void;
   // Piece set preference for rendering (Issue #495)
   pieceSet: PieceSetKey | "classic";
   setPieceSet: (set: PieceSetKey | "classic") => void;
   masterVolume: number;
   setMasterVolume: (volume: number) => void;
+  moveSoundsEnabled: boolean;
+  toggleMoveSounds: () => void;
+  alertSoundsEnabled: boolean;
+  toggleAlertSounds: () => void;
   // Settings modal visibility
   isSettingsOpen: boolean;
   setSettingsOpen: (open: boolean) => void;
@@ -150,6 +163,18 @@ interface GameStore {
 export const useGameStore = create<GameStore>()(
   persist(
     (set, get) => ({
+      puzzleRating: DEFAULT_PUZZLE_RATING.rating,
+      puzzleRD: DEFAULT_PUZZLE_RATING.rd,
+      puzzleVolatility: DEFAULT_PUZZLE_RATING.volatility,
+      ratedPuzzleIds: [],
+      updatePuzzleRating: (puzzleRating, isSolved, puzzleId) => {
+        const state = get();
+        if (state.ratedPuzzleIds.includes(puzzleId)) return null;
+        const next = calculateNewRating({ rating: state.puzzleRating, rd: state.puzzleRD, volatility: state.puzzleVolatility }, puzzleRating, isSolved);
+        set({ puzzleRating: next.rating, puzzleRD: next.rd, puzzleVolatility: next.volatility,
+          ratedPuzzleIds: [...state.ratedPuzzleIds, puzzleId] });
+        return Math.round(next.rating) - Math.round(state.puzzleRating);
+      },
       gameCode: null,
       playerColor: null,
       playerAddress: null,
@@ -193,8 +218,11 @@ export const useGameStore = create<GameStore>()(
       isStreamerMode: false,
       isHapticsEnabled: true,
       isMoveConfirmationEnabled: false,
+      autoQueen: false,
       pieceSet: "classic" as "classic" | "neo" | "wood",
       masterVolume: soundService.getVolume(),
+      moveSoundsEnabled: JSON.parse(localStorage.getItem("chesster:moveSoundsEnabled") ?? "true"),
+      alertSoundsEnabled: JSON.parse(localStorage.getItem("chesster:alertSoundsEnabled") ?? "true"),
       isSettingsOpen: false,
 
       setBlindfoldMode: (mode: "none" | "white" | "black" | "all") =>
@@ -215,6 +243,8 @@ export const useGameStore = create<GameStore>()(
         set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
       toggleMoveConfirmation: () =>
         set((s) => ({ isMoveConfirmationEnabled: !s.isMoveConfirmationEnabled })),
+      toggleAutoQueen: () =>
+        set((s) => ({ autoQueen: !s.autoQueen })),
       setPieceSet: (set_value: PieceSetKey | "classic") =>
         set({ pieceSet: set_value }),
       setMasterVolume: (volume: number) => {
@@ -222,6 +252,18 @@ export const useGameStore = create<GameStore>()(
         soundService.setMasterVolume(normalized);
         set({ masterVolume: normalized });
       },
+      toggleMoveSounds: () =>
+        set((s) => {
+          const newState = !s.moveSoundsEnabled;
+          localStorage.setItem("chesster:moveSoundsEnabled", JSON.stringify(newState));
+          return { moveSoundsEnabled: newState };
+        }),
+      toggleAlertSounds: () =>
+        set((s) => {
+          const newState = !s.alertSoundsEnabled;
+          localStorage.setItem("chesster:alertSoundsEnabled", JSON.stringify(newState));
+          return { alertSoundsEnabled: newState };
+        }),
       setSettingsOpen: (open: boolean) =>
         set({ isSettingsOpen: open }),
 
@@ -653,6 +695,10 @@ export const useGameStore = create<GameStore>()(
     {
       name: "chesster-game",
       partialize: (state) => ({
+        puzzleRating: state.puzzleRating,
+        puzzleRD: state.puzzleRD,
+        puzzleVolatility: state.puzzleVolatility,
+        ratedPuzzleIds: state.ratedPuzzleIds,
         gameCode: state.gameCode,
         playerColor: state.playerColor,
         blindfoldMode: state.blindfoldMode,

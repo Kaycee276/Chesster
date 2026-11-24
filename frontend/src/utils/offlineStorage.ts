@@ -1,443 +1,228 @@
-/**
- * Offline storage for PWA: IndexedDB wrapper for caching game replays and puzzles.
- * Handles quota exceeded errors, DB unavailability, and bounded storage with eviction.
- */
+import { Chess } from "chess.js";
+import { z } from "zod";
+import { parsePgn, splitPgnGames } from "./pgnParser";
 
-const DB_NAME = "chesster-offline";
-const DB_VERSION = 1;
-const REPLAYS_STORE = "replays";
-const PUZZLES_STORE = "puzzles";
-export const MAX_REPLAYS = 10;
-export const MAX_PUZZLES = 5;
+const resultSchema = z.enum(["1-0", "0-1", "1/2-1/2", "*"]);
+const gameSchema = z.object({
+  id: z.string().min(1).max(200),
+  createdAt: z.string().datetime({ offset: true }),
+  whitePlayer: z.string().min(1).max(200),
+  blackPlayer: z.string().min(1).max(200),
+  result: resultSchema,
+  pgn: z.string().min(1).max(1_000_000),
+});
+const archiveSchema = z.object({
+  version: z.literal(1),
+  games: z.array(gameSchema).max(10_000),
+});
+export type OfflineGame = z.infer<typeof gameSchema>;
+export const OFFLINE_DB_NAME = "chesster-offline";
+export const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
+const STORE = "games";
 
-export interface ReplayMetadata {
-  gameCode: string;
-  pgn: string;
-  players?: { white?: string; black?: string };
-  result?: string; // "1-0", "0-1", "1/2-1/2"
-  endReason?: string;
-  timeControl?: string;
-  savedAt: number; // timestamp
-}
-
-export interface PuzzleData {
-  id: string;
-  fen: string;
-  sideToMove: "white" | "black";
-  solution: Array<{ from: [number, number]; to: [number, number]; promotion?: string }>;
-  rating: number;
-  themes: string[];
-  title?: string;
-  description?: string;
-  savedAt: number; // timestamp
-}
-
-export interface OfflineStorageResult<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-}
-
-let currentDb: IDBDatabase | null = null;
-
-/**
- * Open or create the Chesster offline database.
- */
-export async function openChessterDB(): Promise<IDBDatabase> {
-  if (currentDb) {
-    return currentDb;
-  }
-
+function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onerror = () => {
-      reject(new Error(`Failed to open IndexedDB: ${request.error}`));
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("This browser does not support offline game storage."));
+      return;
+    }
+    const request = indexedDB.open(OFFLINE_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(STORE, { keyPath: "id" });
     };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error("Close other Chesster tabs and try again."));
+  });
+}
 
-    request.onsuccess = () => {
-      const db = request.result;
-      currentDb = db;
-      db.onversionchange = () => {
-        db.close();
-        if (currentDb === db) {
-          currentDb = null;
-        }
-      };
-      resolve(db);
+export async function getAllOfflineGames(): Promise<OfflineGame[]> {
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly");
+    const request = tx.objectStore(STORE).getAll();
+    tx.oncomplete = () => {
+      db.close();
+      resolve(
+        (request.result as OfflineGame[]).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      );
     };
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-
-      // Create replays store
-      if (!db.objectStoreNames.contains(REPLAYS_STORE)) {
-        db.createObjectStore(REPLAYS_STORE, { keyPath: "gameCode" });
-      }
-
-      // Create puzzles store
-      if (!db.objectStoreNames.contains(PUZZLES_STORE)) {
-        db.createObjectStore(PUZZLES_STORE, { keyPath: "id" });
-      }
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
     };
   });
 }
 
-/**
- * Explicitly close the Chesster database connection.
- */
-export function closeChessterDB(): void {
-  if (currentDb) {
-    currentDb.close();
-    currentDb = null;
+/** chess.js does not parse PGN escaped tag values; decode them independently. */
+export function loadOfflinePgn(pgn: string): Chess {
+  const { headers } = parsePgn(pgn);
+  const decoded = Object.fromEntries(
+    Object.entries(headers).map(([tag, value]) => [tag, value.replace(/\\(["\\])/g, "$1")])
+  );
+  const safe = pgn.replace(
+    /^\s*\[(\w+)\s+"((?:\\.|[^"])*)"\]\s*$/gm,
+    (_line, tag: string) => `[${tag} "${decoded[tag].replace(/["\\]/g, "'")}"]`
+  );
+  const chess = new Chess();
+  chess.loadPgn(safe);
+  if (decoded.Result && decoded.Result !== chess.getHeaders().Result) {
+    throw new Error("The PGN header result does not match its move text result.");
   }
+  for (const [tag, value] of Object.entries(decoded)) chess.setHeader(tag, value);
+  return chess;
 }
 
-/**
- * Save a game replay to offline storage.
- * If storage quota is exceeded, evict oldest replays and retry once.
- */
-export async function saveGameToOfflineCache(
-  replay: ReplayMetadata,
-): Promise<OfflineStorageResult<void>> {
-  try {
-    const db = await openChessterDB();
-    const tx = db.transaction([REPLAYS_STORE], "readwrite");
-    const store = tx.objectStore(REPLAYS_STORE);
+function validatedGame(value: unknown): OfflineGame {
+  const game = gameSchema.parse(value);
+  const chess = loadOfflinePgn(game.pgn);
+  if (!chess.history().length) throw new Error("A replay must contain at least one move.");
+  if (chess.getHeaders().Result && chess.getHeaders().Result !== game.result) {
+    throw new Error("The replay result does not match its PGN result.");
+  }
+  return { ...game, createdAt: new Date(game.createdAt).toISOString() };
+}
 
-    return new Promise((resolve) => {
-      const putRequest = store.put(replay);
+/** Timestamp and canonical move digest identify a replay across browsers and formats. */
+async function replayKey(game: OfflineGame): Promise<string> {
+  const chess = loadOfflinePgn(game.pgn);
+  const moves = chess.history({ verbose: true });
+  const canonical = JSON.stringify([moves[0].before, moves.map((m) => m.lan)]);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return `${new Date(game.createdAt).toISOString()}:${Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
 
-      putRequest.onsuccess = () => {
-        const getAllRequest = store.getAll();
-        getAllRequest.onsuccess = () => {
-          const allReplays = getAllRequest.result as ReplayMetadata[];
-          if (allReplays.length > MAX_REPLAYS) {
-            const sorted = allReplays.sort((a, b) => a.savedAt - b.savedAt);
-            const toDelete = sorted.slice(0, allReplays.length - MAX_REPLAYS);
-            for (const r of toDelete) {
-              store.delete(r.gameCode);
-            }
-          }
-          resolve({ success: true, error: undefined });
-        };
-        getAllRequest.onerror = () => {
-          resolve({ success: true, error: undefined });
-        };
-      };
-
-      putRequest.onerror = async (event) => {
-        const error = (event.target as IDBRequest).error;
-        if (error?.name === "QuotaExceededError") {
-          // Evict oldest replay and retry
-          const evictResult = await evictOldestReplays(1);
-          if (evictResult) {
-            const retryResult = await saveGameToOfflineCache(replay);
-            resolve(retryResult);
-          } else {
-            resolve({
-              success: false,
-              error: "Storage quota exceeded and could not evict old data",
-            });
-          }
-        } else {
-          resolve({
-            success: false,
-            error: `Failed to save replay: ${error?.message || "unknown error"}`,
-          });
+async function insertGames(games: OfflineGame[]): Promise<{ imported: number; skipped: number }> {
+  // Hash before opening the write transaction: async work would otherwise let it close.
+  const incoming = await Promise.all(
+    games.map(async (game) => ({ game, key: await replayKey(game) }))
+  );
+  const existing = await getAllOfflineGames();
+  const existingKeys = new Map(
+    await Promise.all(existing.map(async (g) => [g.id, await replayKey(g)] as const))
+  );
+  const db = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    let imported = 0;
+    let skipped = 0;
+    // Read again under the write lock so simultaneous imports cannot overwrite each other.
+    const request = store.getAll();
+    request.onsuccess = () => {
+      const current = request.result as OfflineGame[];
+      const keys = new Set(current.map((g) => existingKeys.get(g.id) ?? g.id));
+      const ids = new Set(current.map((g) => g.id));
+      for (const { game, key } of incoming) {
+        // New records use the digest as their ID, making concurrent duplicate imports safe.
+        if (keys.has(key) || ids.has(key)) {
+          skipped++;
+          continue;
         }
-      };
-
-      tx.onerror = () => {
-        resolve({
-          success: false,
-          error: `Transaction failed: ${tx.error?.message || "unknown error"}`,
-        });
-      };
-    });
-  } catch (err) {
-    // IndexedDB unavailable (private mode, blocked, etc.)
-    return {
-      success: false,
-      error: `IndexedDB unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
+        store.add({ ...game, id: key });
+        keys.add(key);
+        ids.add(key);
+        imported++;
+      }
     };
-  }
-}
-
-/**
- * Retrieve a cached game replay by code.
- */
-export async function getOfflineGame(
-  gameCode: string,
-): Promise<OfflineStorageResult<ReplayMetadata>> {
-  try {
-    const db = await openChessterDB();
-    const tx = db.transaction([REPLAYS_STORE], "readonly");
-    const store = tx.objectStore(REPLAYS_STORE);
-
-    return new Promise((resolve) => {
-      const request = store.get(gameCode);
-
-      request.onsuccess = () => {
-        const replay = request.result as ReplayMetadata | undefined;
-        if (replay) {
-          resolve({ success: true, data: replay });
-        } else {
-          resolve({ success: false, error: "Game not found in cache" });
-        }
-      };
-
-      request.onerror = () => {
-        resolve({
-          success: false,
-          error: `Failed to retrieve game: ${request.error?.message || "unknown error"}`,
-        });
-      };
-    });
-  } catch (err) {
-    return {
-      success: false,
-      error: `IndexedDB unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
+    tx.oncomplete = () => {
+      db.close();
+      resolve({ imported, skipped });
     };
-  }
-}
-
-/**
- * List all cached replays, ordered by most recent first.
- */
-export async function listOfflineGames(): Promise<OfflineStorageResult<ReplayMetadata[]>> {
-  try {
-    const db = await openChessterDB();
-    const tx = db.transaction([REPLAYS_STORE], "readonly");
-    const store = tx.objectStore(REPLAYS_STORE);
-
-    return new Promise((resolve) => {
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const replays = (request.result as ReplayMetadata[]).sort(
-          (a, b) => b.savedAt - a.savedAt,
-        );
-        resolve({ success: true, data: replays });
-      };
-
-      request.onerror = () => {
-        resolve({
-          success: false,
-          error: `Failed to list games: ${request.error?.message || "unknown error"}`,
-        });
-      };
-    });
-  } catch (err) {
-    return {
-      success: false,
-      error: `IndexedDB unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error ?? new Error("Import failed. No games were saved."));
     };
-  }
+  });
 }
 
-/**
- * Save a puzzle to offline storage.
- * Prunes oldest puzzles if exceeding MAX_PUZZLES.
- */
-export async function savePuzzleToOfflineCache(
-  puzzle: PuzzleData,
-): Promise<OfflineStorageResult<void>> {
-  try {
-    const db = await openChessterDB();
-    const tx = db.transaction([PUZZLES_STORE], "readwrite");
-    const store = tx.objectStore(PUZZLES_STORE);
-
-    return new Promise((resolve) => {
-      const putRequest = store.put(puzzle);
-
-      putRequest.onsuccess = () => {
-        // Check if we need to prune
-        const getAllRequest = store.getAll();
-        getAllRequest.onsuccess = () => {
-          const allPuzzles = getAllRequest.result as PuzzleData[];
-          if (allPuzzles.length > MAX_PUZZLES) {
-            const sorted = allPuzzles.sort((a, b) => a.savedAt - b.savedAt);
-            const toDelete = sorted.slice(0, allPuzzles.length - MAX_PUZZLES);
-            for (const puz of toDelete) {
-              store.delete(puz.id);
-            }
-          }
-
-          resolve({ success: true, error: undefined });
-        };
-        getAllRequest.onerror = () => {
-          resolve({ success: true, error: undefined });
-        };
-      };
-
-      putRequest.onerror = async (event) => {
-        const error = (event.target as IDBRequest).error;
-        if (error?.name === "QuotaExceededError") {
-          // Evict oldest puzzle and retry
-          const evictResult = await evictOldestPuzzles(1);
-          if (evictResult) {
-            const retryResult = await savePuzzleToOfflineCache(puzzle);
-            resolve(retryResult);
-          } else {
-            resolve({
-              success: false,
-              error: "Storage quota exceeded and could not evict old data",
-            });
-          }
-        } else {
-          resolve({
-            success: false,
-            error: `Failed to save puzzle: ${error?.message || "unknown error"}`,
-          });
-        }
-      };
-
-      tx.onerror = () => {
-        resolve({
-          success: false,
-          error: `Transaction failed: ${tx.error?.message || "unknown error"}`,
-        });
-      };
-    });
-  } catch (err) {
-    return {
-      success: false,
-      error: `IndexedDB unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
-    };
-  }
+export async function saveOfflineGame(game: OfflineGame): Promise<void> {
+  await insertGames([validatedGame(game)]);
 }
 
-/**
- * Retrieve a cached puzzle by id.
- */
-export async function getOfflinePuzzle(
-  puzzleId: string,
-): Promise<OfflineStorageResult<PuzzleData>> {
-  try {
-    const db = await openChessterDB();
-    const tx = db.transaction([PUZZLES_STORE], "readonly");
-    const store = tx.objectStore(PUZZLES_STORE);
-
-    return new Promise((resolve) => {
-      const request = store.get(puzzleId);
-
-      request.onsuccess = () => {
-        const puzzle = request.result as PuzzleData | undefined;
-        if (puzzle) {
-          resolve({ success: true, data: puzzle });
-        } else {
-          resolve({ success: false, error: "Puzzle not found in cache" });
-        }
-      };
-
-      request.onerror = () => {
-        resolve({
-          success: false,
-          error: `Failed to retrieve puzzle: ${request.error?.message || "unknown error"}`,
-        });
-      };
-    });
-  } catch (err) {
-    return {
-      success: false,
-      error: `IndexedDB unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
-    };
-  }
+async function selectedGames(ids?: readonly string[]): Promise<OfflineGame[]> {
+  const games = await getAllOfflineGames();
+  return ids ? games.filter((g) => ids.includes(g.id)) : games;
 }
 
-/**
- * Retrieve the most recent cached puzzle.
- */
-export async function getLatestOfflinePuzzle(): Promise<OfflineStorageResult<PuzzleData>> {
-  try {
-    const db = await openChessterDB();
-    const tx = db.transaction([PUZZLES_STORE], "readonly");
-    const store = tx.objectStore(PUZZLES_STORE);
-
-    return new Promise((resolve) => {
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const puzzles = (request.result as PuzzleData[]).sort((a, b) => b.savedAt - a.savedAt);
-        if (puzzles.length > 0) {
-          resolve({ success: true, data: puzzles[0] });
-        } else {
-          resolve({ success: false, error: "No puzzles in cache" });
-        }
-      };
-
-      request.onerror = () => {
-        resolve({
-          success: false,
-          error: `Failed to retrieve puzzles: ${request.error?.message || "unknown error"}`,
-        });
-      };
-    });
-  } catch (err) {
-    return {
-      success: false,
-      error: `IndexedDB unavailable: ${err instanceof Error ? err.message : "unknown error"}`,
-    };
-  }
+export async function exportOfflineGamesToJSON(ids?: readonly string[]): Promise<string> {
+  return JSON.stringify({ version: 1, games: await selectedGames(ids) }, null, 2);
 }
 
-/**
- * Evict the oldest N replays from storage.
- */
-async function evictOldestReplays(count: number): Promise<boolean> {
-  try {
-    const db = await openChessterDB();
-    const tx = db.transaction([REPLAYS_STORE], "readwrite");
-    const store = tx.objectStore(REPLAYS_STORE);
-
-    return new Promise((resolve) => {
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const replays = (request.result as ReplayMetadata[]).sort(
-          (a, b) => a.savedAt - b.savedAt,
-        );
-        const toDelete = replays.slice(0, count);
-        for (const replay of toDelete) {
-          store.delete(replay.gameCode);
-        }
-
-        resolve(true);
-      };
-
-      request.onerror = () => resolve(false);
-    });
-  } catch {
-    return false;
-  }
+export async function exportOfflineGamesToPGN(ids?: readonly string[]): Promise<string> {
+  const games = await selectedGames(ids);
+  return (
+    games
+      .map((game) => {
+        const chess = loadOfflinePgn(game.pgn);
+        // Preserve FEN, annotations and other source headers while supplying standard metadata.
+        chess.setHeader("Event", "Chesster Offline Game");
+        chess.setHeader("Site", "Chesster");
+        chess.setHeader("Date", game.createdAt.slice(0, 10).replaceAll("-", "."));
+        chess.setHeader("Round", chess.getHeaders().Round || "?");
+        chess.setHeader("White", game.whitePlayer);
+        chess.setHeader("Black", game.blackPlayer);
+        chess.setHeader("Result", game.result);
+        chess.setHeader("ChessterCreatedAt", game.createdAt);
+        const text = chess.pgn({ maxWidth: 80 });
+        const escapeTag = (value: string) =>
+          value
+            .replace(/\\/g, "\\\\")
+            .replace(/"/g, '\\"')
+            .replace(/[\r\n]/g, " ");
+        const headers = Object.entries(chess.getHeaders())
+          .map(([tag, value]) => `[${tag} "${escapeTag(value)}"]`)
+          .join("\n");
+        return `${headers}\n\n${text.slice(text.indexOf("\n\n") + 2)}`;
+      })
+      .join("\n\n") + (games.length ? "\n" : "")
+  );
 }
 
-/**
- * Evict the oldest N puzzles from storage.
- */
-async function evictOldestPuzzles(count: number): Promise<boolean> {
-  try {
-    const db = await openChessterDB();
-    const tx = db.transaction([PUZZLES_STORE], "readwrite");
-    const store = tx.objectStore(PUZZLES_STORE);
-
-    return new Promise((resolve) => {
-      const request = store.getAll();
-
-      request.onsuccess = () => {
-        const puzzles = (request.result as PuzzleData[]).sort((a, b) => a.savedAt - b.savedAt);
-        const toDelete = puzzles.slice(0, count);
-        for (const puzzle of toDelete) {
-          store.delete(puzzle.id);
-        }
-
-        resolve(true);
-      };
-
-      request.onerror = () => resolve(false);
-    });
-  } catch {
-    return false;
+/** Validate the entire archive before starting an atomic IndexedDB write. */
+export async function importOfflineGames(
+  fileContent: string
+): Promise<{ imported: number; skipped: number }> {
+  if (new Blob([fileContent]).size > MAX_IMPORT_BYTES)
+    throw new Error("Choose a file smaller than 10 MB.");
+  const content = fileContent.replace(/^\uFEFF/, "").trim();
+  if (!content) throw new Error("The selected file is empty.");
+  let games: OfflineGame[];
+  if (/^[{[]/.test(content)) {
+    // A PGN also starts with '['; only parse JSON when it looks like an array or object.
+    if (content.startsWith("{") || /^\[\s*(?:\{|\]|"|\d)/.test(content)) {
+      const parsed: unknown = JSON.parse(content);
+      const values = Array.isArray(parsed)
+        ? z.array(gameSchema).max(10_000).parse(parsed)
+        : archiveSchema.parse(parsed).games;
+      games = values.map(validatedGame);
+    } else {
+      games = parsePgnArchive(content);
+    }
+  } else {
+    games = parsePgnArchive(content);
   }
+  return insertGames(games);
+}
+
+function parsePgnArchive(content: string): OfflineGame[] {
+  const segments = splitPgnGames(content);
+  if (!segments.length || segments.length > 10_000)
+    throw new Error("Choose an archive containing up to 10,000 games.");
+  return segments.map(({ pgn }) => {
+    const chess = loadOfflinePgn(pgn);
+    const headers = chess.getHeaders();
+    // Missing/unknown PGN dates use a stable sentinel, so importing twice still skips duplicates.
+    const date = /^\d{4}\.\d{2}\.\d{2}$/.test(headers.Date ?? "")
+      ? `${headers.Date.replaceAll(".", "-")}T00:00:00.000Z`
+      : "1970-01-01T00:00:00.000Z";
+    return validatedGame({
+      id: crypto.randomUUID(),
+      createdAt: headers.ChessterCreatedAt ?? date,
+      whitePlayer: headers.White || "White",
+      blackPlayer: headers.Black || "Black",
+      result: headers.Result || "*",
+      pgn,
+    });
+  });
 }

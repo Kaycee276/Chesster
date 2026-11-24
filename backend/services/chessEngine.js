@@ -1,3 +1,28 @@
+const MAX_FEN_LENGTH = 128;
+
+/**
+ * Lightweight structural pre-validation for FEN strings. Runs before any
+ * parsing so oversized or malformed input is rejected cheaply.
+ * @param {*} fen - Candidate FEN string
+ * @returns {boolean} true when the FEN has a valid overall structure
+ */
+function isValidFenStructure(fen) {
+  if (typeof fen !== 'string' || fen.length === 0 || fen.length > MAX_FEN_LENGTH) {
+    return false;
+  }
+  const tokens = fen.trim().split(/\s+/);
+  if (tokens.length !== 6) return false;
+
+  const [placement, activeColor, castling, enPassant, halfmove, fullmove] = tokens;
+  if (placement.split('/').length !== 8) return false;
+  if (activeColor !== 'w' && activeColor !== 'b') return false;
+  if (!/^[KQRBNPkqrbnp1-8/]+$/.test(placement)) return false;
+  if (!/^([KQkq]{1,4}|-)$/.test(castling)) return false;
+  if (!/^([a-h][36]|-)$/.test(enPassant)) return false;
+  if (!/^\d{1,5}$/.test(halfmove) || !/^\d{1,5}$/.test(fullmove)) return false;
+  return true;
+}
+
 class ChessEngine {
   constructor() {
     this.initBoard();
@@ -398,6 +423,9 @@ class ChessEngine {
    * @returns {object} { board, currentColor, moveCount, fullmoveNumber }
    */
   fenToBoard(fen) {
+    if (!isValidFenStructure(fen)) {
+      throw new Error('Invalid FEN structure');
+    }
     const parts = fen.trim().split(/\s+/);
     const position = parts[0];
     const currentColor = parts[1] === 'w' ? 'white' : 'black';
@@ -636,19 +664,14 @@ class ChessEngine {
    * `evaluationCp`/`centipawns`; missing telemetry is intentionally omitted.
    */
   generateRichPgn(moves = [], metadata = {}) {
+    const { getSevenTagRoster, escapePgnTag } = require("./pgnService");
     const headers = {
-      Event: metadata.event || "Chesster Game",
-      Site: metadata.site || "Chesster",
-      Date: metadata.date || (metadata.createdAt ? String(metadata.createdAt).slice(0, 10).replaceAll("-", ".") : "????.??.??"),
-      Round: metadata.round || "-",
-      White: metadata.white || "?",
-      Black: metadata.black || "?",
-      Result: metadata.result || "*",
+      ...getSevenTagRoster(metadata),
       TimeControl: metadata.timeControl || "-",
       Termination: metadata.termination || "normal",
     };
     const tagText = Object.entries(headers)
-      .map(([name, value]) => `[${name} "${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"]`)
+      .map(([name, value]) => `[${name} "${escapePgnTag(value)}"]`)
       .join("\n");
     let board = (metadata.startBoard || this.initBoard()).map((row) => [...row]);
     const tokens = [];
@@ -749,4 +772,7 @@ class ChessEngine {
   }
 }
 
-module.exports = new ChessEngine();
+const chessEngine = new ChessEngine();
+chessEngine.isValidFenStructure = isValidFenStructure;
+
+module.exports = chessEngine;

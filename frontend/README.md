@@ -71,3 +71,11 @@ export default defineConfig([
   },
 ])
 ```
+
+## Offline play and installation
+
+The production build precaches the app shell, compiled workers and the vendored Stockfish JS/WASM engine. Open Chesster online once and allow its service worker to finish installing before disconnecting. Development mode intentionally does not register a service worker.
+
+Supported browsers show **Install Chesster** when they offer installation; iOS users can use Safari's **Add to Home Screen**. Offline visits open the saved-game launcher. **Play offline against Stockfish** starts a device-only game at /offline-play, with no wallet, multiplayer API or wager calls. Save a replay to review it in /offline-games. Local games are kept in the current tab until saved; use **Save replay** before closing or starting another game.
+
+The worker precaches public build assets and runtime-caches only same-origin public images under /assets and /pieces, plus the app icons; private API responses are never cached. The production PWA browser checks run from playwright.pwa.config.ts.

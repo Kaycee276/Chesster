@@ -1,264 +1,126 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import type { SpectatorPresence } from "../../src/api/socket";
 import SpectatorListModal from "../../src/components/SpectatorListModal";
+import { filterAndSortSpectators } from "../../src/utils/spectatorList";
+
+const spectators: SpectatorPresence[] = [
+	{ address: "GBZX-ALICE", name: "alice", rating: 1500, joinedAt: 3000, badge: "master" },
+	{ address: "GCQW-BOB", name: "Bob", rating: 2100, joinedAt: 1000 },
+	{ address: "GDRT-CAROL", joinedAt: 2000 },
+	{ address: "GAAA-DAN", name: "Dan", rating: 1800 },
+];
+
+const names = (list: SpectatorPresence[]) => list.map((s) => s.name ?? s.address);
+
+describe("filterAndSortSpectators", () => {
+	it("matches name or address case-insensitively", () => {
+		expect(names(filterAndSortSpectators(spectators, "BOB", "alphabetical"))).toEqual(["Bob"]);
+		expect(names(filterAndSortSpectators(spectators, "gdrt", "alphabetical"))).toEqual([
+			"GDRT-CAROL",
+		]);
+	});
+
+	it("returns everyone for a blank query and does not mutate the input", () => {
+		const before = spectators.map((s) => s.address);
+		const result = filterAndSortSpectators(spectators, "   ", "rating");
+		expect(result).toHaveLength(spectators.length);
+		expect(spectators.map((s) => s.address)).toEqual(before);
+	});
+
+	it("sorts alphabetically by display name", () => {
+		expect(names(filterAndSortSpectators(spectators, "", "alphabetical"))).toEqual([
+			"alice",
+			"Bob",
+			"Dan",
+			"GDRT-CAROL",
+		]);
+	});
+
+	it("sorts by rating from highest, treating missing ratings as zero", () => {
+		expect(names(filterAndSortSpectators(spectators, "", "rating"))).toEqual([
+			"Bob",
+			"Dan",
+			"alice",
+			"GDRT-CAROL",
+		]);
+	});
+
+	it("sorts by join time from earliest, with missing join times last", () => {
+		expect(names(filterAndSortSpectators(spectators, "", "joined"))).toEqual([
+			"Bob",
+			"GDRT-CAROL",
+			"alice",
+			"Dan",
+		]);
+	});
+});
 
 describe("SpectatorListModal", () => {
-  const mockOnClose = vi.fn();
+	const renderModal = (list: SpectatorPresence[], onClose = vi.fn()) =>
+		render(<SpectatorListModal spectators={list} onClose={onClose} />);
 
-  beforeEach(() => {
-    mockOnClose.mockClear();
-  });
+	const listItems = () => screen.getAllByRole("listitem").map((item) => item.textContent ?? "");
 
-  it("does not render when not open", () => {
-    render(
-      <SpectatorListModal
-        isOpen={false}
-        onClose={mockOnClose}
-        spectatorCount={0}
-        spectatorList={[]}
-      />
-    );
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  });
+	it("shows the live spectator count and every spectator by default", () => {
+		renderModal(spectators);
 
-  it("renders when open with proper ARIA attributes", () => {
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={1}
-        spectatorList={[]}
-      />
-    );
-    const dialog = screen.getByRole("dialog");
-    expect(dialog).toBeInTheDocument();
-    expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dialog).toHaveAttribute("aria-labelledby", "spectator-modal-title");
-  });
+		expect(screen.getByTestId("spectator-count").textContent).toBe("(4)");
+		expect(screen.getAllByRole("listitem")).toHaveLength(4);
+	});
 
-  it("displays title with 'Spectators'", () => {
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={2}
-        spectatorList={[]}
-      />
-    );
-    expect(screen.getByText("Spectators")).toBeInTheDocument();
-  });
+	it("updates the count when the spectator list changes", () => {
+		const { rerender } = renderModal(spectators);
+		rerender(<SpectatorListModal spectators={spectators.slice(0, 2)} />);
 
-  it("shows correct singular count message", () => {
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={1}
-        spectatorList={[]}
-      />
-    );
-    expect(screen.getByText("1 spectator watching")).toBeInTheDocument();
-  });
+		expect(screen.getByTestId("spectator-count").textContent).toBe("(2)");
+		expect(screen.getAllByRole("listitem")).toHaveLength(2);
+	});
 
-  it("shows correct plural count message", () => {
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={5}
-        spectatorList={[]}
-      />
-    );
-    expect(screen.getByText("5 spectators watching")).toBeInTheDocument();
-  });
+	it("filters the list as the user types in the search box", () => {
+		renderModal(spectators);
 
-  it("displays empty state when no spectators", () => {
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={0}
-        spectatorList={[]}
-      />
-    );
-    expect(screen.getByText("No spectators right now")).toBeInTheDocument();
-  });
+		fireEvent.change(screen.getByRole("searchbox"), { target: { value: "dan" } });
 
-  it("renders spectators with usernames when available", () => {
-    const spectators = [
-      { address: "GABC1234567890WXYZ", username: "Alice" },
-      { address: "GDEF9876543210MNOP", username: "Bob" },
-    ];
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={2}
-        spectatorList={spectators}
-      />
-    );
-    expect(screen.getByText("Alice")).toBeInTheDocument();
-    expect(screen.getByText("Bob")).toBeInTheDocument();
-  });
+		expect(screen.getAllByRole("listitem")).toHaveLength(1);
+		expect(listItems()[0]).toContain("Dan");
+		// The header count reflects everyone watching, not the filtered view.
+		expect(screen.getByTestId("spectator-count").textContent).toBe("(4)");
+	});
 
-  it("falls back to truncated address when username is not available", () => {
-    const spectators = [
-      { address: "GABC1234567890WXYZ", username: null },
-    ];
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={1}
-        spectatorList={spectators}
-      />
-    );
-    expect(screen.getByText("GABC...WXYZ")).toBeInTheDocument();
-  });
+	it("re-sorts when a sort option is picked", () => {
+		renderModal(spectators);
 
-  it("closes on close button click", async () => {
-    const user = userEvent.setup();
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={0}
-        spectatorList={[]}
-      />
-    );
-    const closeButton = screen.getByLabelText("Close spectators list");
-    await user.click(closeButton);
-    expect(mockOnClose).toHaveBeenCalled();
-  });
+		fireEvent.change(screen.getByLabelText("Sort spectators"), {
+			target: { value: "rating" },
+		});
 
-  it("closes on Escape key", async () => {
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={0}
-        spectatorList={[]}
-      />
-    );
-    fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
-    expect(mockOnClose).toHaveBeenCalled();
-  });
+		expect(listItems()[0]).toContain("Bob");
+		expect(listItems()[0]).toContain("2100");
+	});
 
-  it("closes on backdrop click", async () => {
-    const user = userEvent.setup();
-    const { container } = render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={0}
-        spectatorList={[]}
-      />
-    );
-    const backdrop = container.querySelector("[class*='fixed inset-0']");
-    if (backdrop) {
-      await user.click(backdrop);
-    }
-    expect(mockOnClose).toHaveBeenCalled();
-  });
+	it("shows a badge label for distinguished spectators", () => {
+		renderModal(spectators);
 
-  it("does not close when dialog content is clicked", async () => {
-    const user = userEvent.setup();
-    render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={0}
-        spectatorList={[]}
-      />
-    );
-    const dialog = screen.getByRole("dialog");
-    await user.click(dialog);
-    expect(mockOnClose).not.toHaveBeenCalled();
-  });
+		expect(screen.getByText("Master")).toBeTruthy();
+	});
 
-  it("updates spectator count reactively", () => {
-    const { rerender } = render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={2}
-        spectatorList={[]}
-      />
-    );
-    expect(screen.getByText("2 spectators watching")).toBeInTheDocument();
+	it("shows an empty state when nothing matches the search", () => {
+		renderModal(spectators);
 
-    rerender(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={3}
-        spectatorList={[]}
-      />
-    );
-    expect(screen.getByText("3 spectators watching")).toBeInTheDocument();
-  });
+		fireEvent.change(screen.getByRole("searchbox"), { target: { value: "zzz" } });
 
-  it("updates spectator list reactively", () => {
-    const spectators1 = [{ address: "GABC1234567890WXYZ", username: "Alice" }];
-    const spectators2 = [
-      { address: "GABC1234567890WXYZ", username: "Alice" },
-      { address: "GDEF9876543210MNOP", username: "Bob" },
-    ];
+		expect(screen.getByText("No spectators match your search.")).toBeTruthy();
+		expect(screen.queryAllByRole("listitem")).toHaveLength(1);
+	});
 
-    const { rerender } = render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={1}
-        spectatorList={spectators1}
-      />
-    );
-    expect(screen.getByText("Alice")).toBeInTheDocument();
-    expect(screen.queryByText("Bob")).not.toBeInTheDocument();
+	it("calls onClose from the close button", () => {
+		const onClose = vi.fn();
+		renderModal(spectators, onClose);
 
-    rerender(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={2}
-        spectatorList={spectators2}
-      />
-    );
-    expect(screen.getByText("Alice")).toBeInTheDocument();
-    expect(screen.getByText("Bob")).toBeInTheDocument();
-  });
+		fireEvent.click(screen.getByLabelText("Close spectator list"));
 
-  it("is scrollable when list is long", () => {
-    const spectators = Array.from({ length: 20 }, (_, i) => ({
-      address: `GABC${String(i).padStart(48, '0')}`,
-      username: `User${i}`,
-    }));
-
-    const { container } = render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={20}
-        spectatorList={spectators}
-      />
-    );
-
-    const scrollArea = container.querySelector("[class*='overflow-y-auto']");
-    expect(scrollArea).toBeInTheDocument();
-  });
-
-  it("has visual indicator (dot) before each spectator name", () => {
-    const spectators = [{ address: "GABC1234567890WXYZ", username: "Alice" }];
-    const { container } = render(
-      <SpectatorListModal
-        isOpen={true}
-        onClose={mockOnClose}
-        spectatorCount={1}
-        spectatorList={spectators}
-      />
-    );
-    const dots = container.querySelectorAll("[class*='rounded-full']");
-    expect(dots.length).toBeGreaterThan(0);
-  });
+		expect(onClose).toHaveBeenCalledTimes(1);
+	});
 });

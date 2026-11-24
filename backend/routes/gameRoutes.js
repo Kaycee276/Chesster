@@ -89,6 +89,21 @@ router.get('/leaderboard', gameController.getLeaderboard);
 
 /**
  * @openapi
+ * /api/analytics/volume-24h:
+ *   get:
+ *     summary: Rolling 24-hour wager volume by asset
+ *     description: Returns match count, unique players, total and average wager per token asset for the trailing 24 hours. Cached for 5 minutes.
+ *     tags: [Analytics]
+ *     responses:
+ *       200:
+ *         description: Aggregated volume per asset
+ *       500:
+ *         description: Failed to compute volume
+ */
+router.get('/analytics/volume-24h', gameController.getRolling24HourVolume);
+
+/**
+ * @openapi
  * /api/games/pending:
  *   get:
  *     summary: Get pending open games in lobby
@@ -484,5 +499,43 @@ router.get('/games/:id/stream', gameController.streamGameReplay);
  *         description: Game not found
  */
 router.get('/games/:id/audit-export', requireAuth, gameController.exportMatchAudit);
+
+/**
+ * @openapi
+ * /api/games/{id}/verify-audit:
+ *   get:
+ *     summary: Verify SHA-256 match audit integrity
+ *     tags: [Games]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Game UUID or game code
+ *     responses:
+ *       200:
+ *         description: Audit verification result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 verified:
+ *                   type: boolean
+ *                   description: Whether the move chain hash matches
+ *                 expectedHash:
+ *                   type: string
+ *                   description: SHA-256 hash stored in audit package
+ *                 calculatedHash:
+ *                   type: string
+ *                   description: SHA-256 hash computed from moves
+ *                 moveCount:
+ *                   type: integer
+ *                   description: Number of moves in the game
+ *       404:
+ *         description: Game not found
+ */
+router.get('/games/:id/verify-audit', gameController.verifyMatchAudit);
 
 module.exports = router;

@@ -12,12 +12,23 @@ interface RatingChartProps {
 	history: RatingPoint[];
 }
 
+type TimeRange = '1W' | '1M' | '3M' | '1Y' | 'ALL';
+
 const formatDate = (iso: string) =>
 	new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
 const formatChange = (change: number) => (change > 0 ? `+${change}` : String(change));
 
 const MIN_CHART_WIDTH = 240;
+
+const getCutoffDate = (range: TimeRange): Date => {
+	const now = new Date();
+	if (range === '1W') return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+	if (range === '1M') return new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+	if (range === '3M') return new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+	if (range === '1Y') return new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+	return new Date(0);
+};
 
 /**
  * SVG line chart of a player's rating over their most recent games (up to 30).
@@ -32,7 +43,15 @@ export default function RatingChart({ history }: RatingChartProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [width, setWidth] = useState(CHART_WIDTH);
 	const [activeIndex, setActiveIndex] = useState<number | null>(null);
-	const chart = useMemo(() => buildRatingChart(history, { width }), [history, width]);
+	const [timeRange, setTimeRange] = useState<TimeRange>('ALL');
+
+	const filteredHistory = useMemo(() => {
+		if (timeRange === 'ALL') return history;
+		const cutoff = getCutoffDate(timeRange);
+		return history.filter(point => new Date(point.date) >= cutoff);
+	}, [history, timeRange]);
+
+	const chart = useMemo(() => buildRatingChart(filteredHistory, { width }), [filteredHistory, width]);
 	const { points } = chart;
 	const hasPoints = points.length > 0;
 
@@ -64,21 +83,39 @@ export default function RatingChart({ history }: RatingChartProps) {
 
 	return (
 		<div className="w-full rounded-lg border border-(--border) bg-(--bg-secondary) p-3">
-			<div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 text-xs text-(--text-secondary)">
-				<span>
-					Last {points.length} {points.length === 1 ? "game" : "games"}
-					{history.length > MAX_CHART_POINTS && (
-						<span className="text-(--text-tertiary)"> of {history.length}</span>
-					)}
-				</span>
-				<span className="flex gap-3 font-mono">
+			<div className="mb-3 flex flex-col gap-3">
+				<div className="flex flex-wrap items-baseline justify-between gap-2 text-xs text-(--text-secondary)">
 					<span>
-						Peak <span className="text-(--text)">{chart.maxRating}</span>
+						Last {points.length} {points.length === 1 ? "game" : "games"}
+						{filteredHistory.length > MAX_CHART_POINTS && (
+							<span className="text-(--text-tertiary)"> of {filteredHistory.length}</span>
+						)}
 					</span>
-					<span className={netChange > 0 ? "text-green-500" : netChange < 0 ? "text-red-400" : ""}>
-						{formatChange(netChange)}
+					<span className="flex gap-3 font-mono">
+						<span>
+							Peak <span className="text-(--text)">{chart.maxRating}</span>
+						</span>
+						<span className={netChange > 0 ? "text-green-500" : netChange < 0 ? "text-red-400" : ""}>
+							{formatChange(netChange)}
+						</span>
 					</span>
-				</span>
+				</div>
+
+				<div className="flex gap-2 flex-wrap">
+					{(['1W', '1M', '3M', '1Y', 'ALL'] as const).map((range) => (
+						<button
+							key={range}
+							onClick={() => setTimeRange(range)}
+							className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+								timeRange === range
+									? "bg-(--accent-primary) text-(--bg)"
+									: "bg-(--bg) border border-(--border) text-(--text-secondary) hover:border-(--accent-primary)/50"
+							}`}
+						>
+							{range}
+						</button>
+					))}
+				</div>
 			</div>
 
 			<div ref={containerRef} className="relative">

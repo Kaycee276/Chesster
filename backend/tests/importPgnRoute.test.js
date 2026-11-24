@@ -18,6 +18,9 @@ function buildApp() {
 }
 
 const SIMPLE_GAME = `[Event "Casual Game"]
+[Site "Chesster"]
+[Date "2026.11.19"]
+[Round "1"]
 [White "Alice"]
 [Black "Bob"]
 [Result "1-0"]
@@ -26,6 +29,9 @@ const SIMPLE_GAME = `[Event "Casual Game"]
 `;
 
 const MALFORMED_GAME = `[Event "Broken"]
+[Site "Chesster"]
+[Date "2026.11.19"]
+[Round "1"]
 [White "A"]
 [Black "B"]
 [Result "*"]

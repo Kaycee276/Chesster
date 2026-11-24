@@ -58,6 +58,8 @@ describe("GET /api/leaderboard", () => {
 			},
 		]);
 		jest.spyOn(leaderboardService, "getPlayerProfiles").mockResolvedValue(new Map());
+		// Keep route tests isolated even when Prisma has been generated locally.
+		jest.spyOn(leaderboardService, "syncPlayerStats").mockResolvedValue(undefined);
 	});
 
 	afterEach(() => {

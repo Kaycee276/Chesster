@@ -114,6 +114,36 @@ describe("userModel profile cache", () => {
 			expect(profile.recentMatches[2]).toMatchObject({ opponent: "GOPPONENT", endReason: "checkmate", wagerAmount: 10, moveCount: 40 });
 		});
 
+		it("classifies the first stored moves for each recent finished game without exposing move logs", async () => {
+      supabase.__tables.games = supabase.__tables.games.map((game) => ({ ...game, id: game.game_code }));
+      supabase.__tables.moves = [
+        { game_id: "G2", move_number: 1, from_position: [6, 4], to_position: [4, 4] },
+        { game_id: "G2", move_number: 2, from_position: [1, 2], to_position: [3, 2] },
+        { game_id: "G1", move_number: 1, from_position: [6, 4], to_position: [4, 4] },
+        { game_id: "G1", move_number: 2, from_position: [1, 4], to_position: [2, 4] },
+      ];
+      const profile = await userModel.fetchProfileFromDB(ME);
+      expect(profile.recentMatches[0]).toMatchObject({ gameCode: "G2", color: "black", result: "loss", openingName: "Sicilian Defense", openingEco: null });
+      expect(profile.recentMatches[2]).toMatchObject({ gameCode: "G1", openingName: "French Defense" });
+      expect(profile.recentMatches[0]).not.toHaveProperty("moves");
+      expect(supabase.__reads.filter((table) => table === "moves")).toHaveLength(3);
+    });
+
+		it("forwards every supported clock preset in the frontend recentMatches shape", async () => {
+      const presets = Object.keys(require("../services/timerService").TIME_CONTROLS);
+      supabase.__tables.games = presets.map((preset) => ({
+        game_code: preset, time_control_preset: preset, status: "finished", winner: "black",
+        player_white_address: ME, player_black_address: "GOPPONENT",
+        updated_at: "2026-03-01T10:00:00.000Z",
+      }));
+      const profile = await userModel.fetchProfileFromDB(ME);
+      expect(profile.recentMatches.map((game) => ({
+        gameCode: game.gameCode, mode: game.mode, color: game.color, result: game.result,
+      }))).toEqual(presets.map((preset) => ({
+        gameCode: preset, mode: preset, color: "white", result: "loss",
+      })));
+    });
+
 		it("reports zeroed stats for a player without a stats row", async () => {
 			const profile = await userModel.fetchProfileFromDB("GOPPONENT");
 

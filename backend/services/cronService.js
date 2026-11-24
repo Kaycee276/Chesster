@@ -6,7 +6,7 @@ const { refreshTorExitList } = require("../middlewares/proxyDetection");
 const eloService = require("./eloService");
 
 class CronService {
-	constructor({ db = supabase, notifications = notificationService, archival = archivalService, escrow = null, game = null } = {}) {
+	constructor({ db = supabase, notifications = notificationService, archival = archivalService, escrow = null, game = null, referral = null, webhook = null } = {}) {
 		this.db = db;
 		this.notifications = notifications;
 		this.archival = archival;
@@ -15,6 +15,8 @@ class CronService {
 		// test suites that don't need escrow don't need to mock it.
 		this._escrow = escrow;
 		this._game = game;
+		this._referral = referral;
+		this._webhook = webhook;
 		this.isRunning = false;
 		this.cronIntervalMs = 60 * 1000;
 		this.cleanupIntervalMs = 60 * 60 * 1000;
@@ -27,8 +29,17 @@ class CronService {
 		this.archivalAgeDays = 90;
 		this.lastHourlyAggregationAt = 0;
 		this.hourlyAggregationIntervalMs = 60 * 60 * 1000; // 1 hour
+		this.lastAutoClaimBatchAt = 0;
+		this.autoClaimBatchIntervalMs = 24 * 60 * 60 * 1000; // 24 hours
+		this.lastWebhookReplayAt = 0;
+		this.webhookReplayIntervalMs = 5 * 60 * 1000; // 5 minutes
 		this.cronHandle = null;
 		this.archivalHandle = null;
+		this.lastPartitionMonth = null;
+		this.partitionCheckPending = false;
+		this.lastSoftDeletePurgeAt = 0;
+		this.softDeletePurgeIntervalMs = 7 * 24 * 60 * 60 * 1000; // 7 days
+		this.softDeleteRetentionDays = 90;
 	}
 
 	get escrow() {
@@ -39,6 +50,16 @@ class CronService {
 	get game() {
 		if (!this._game) this._game = require("../models/gameModel");
 		return this._game;
+	}
+
+	get referral() {
+		if (!this._referral) this._referral = require("./referralService");
+		return this._referral;
+	}
+
+	get webhook() {
+		if (!this._webhook) this._webhook = require("./webhookService");
+		return this._webhook;
 	}
 
 	async refreshTorNodes() {
@@ -299,8 +320,40 @@ class CronService {
 		}
 	}
 
+	async purgeSoftDeletedGames() {
+		try {
+			const purged = await this.archival.purgeExpiredSoftDeletedGames(
+				this.softDeleteRetentionDays,
+				500
+			);
+			console.log(`[CronService] Soft-deleted games purge completed: ${purged} games deleted`);
+			return { success: true, purged };
+		} catch (error) {
+			console.error("[CronService] Soft-deleted games purge failed:", error.message);
+			return { success: false, error: error.message };
+		}
+	}
+
+	async ensureMovePartitions(now = new Date()) {
+		const month = `${now.getUTCFullYear()}-${now.getUTCMonth()}`;
+		if (this.lastPartitionMonth === month || this.partitionCheckPending) return;
+		this.partitionCheckPending = true;
+		try {
+			await this.archival.ensureMonthlyPartitionsExist(now);
+			this.lastPartitionMonth = month;
+		} catch (error) {
+			console.error("[CronService] Move partition maintenance failed:", error.message);
+			// Leave the month unset so the next minute retries after failure.
+		} finally {
+			this.partitionCheckPending = false;
+		}
+	}
+
 	async runScheduledTasks(now = new Date()) {
 		const tasks = [
+			// Runs at startup and at the first tick on the 1st of each UTC month.
+			// A restart after the 1st also catches up missed maintenance.
+			this.ensureMovePartitions(now),
 			this.dispatchTournamentReminders(15, now),
 			this.dispatchTournamentReminders(5, now),
 			this.dispatchWinnerAnnouncements(now),
@@ -318,7 +371,44 @@ class CronService {
 			this.lastHourlyAggregationAt = now.getTime();
 			tasks.push(this.aggregateHourlyMetrics(now));
 		}
+		if (now.getTime() - this.lastSoftDeletePurgeAt >= this.softDeletePurgeIntervalMs) {
+			this.lastSoftDeletePurgeAt = now.getTime();
+			tasks.push(this.purgeSoftDeletedGames());
+		if (now.getTime() - this.lastAutoClaimBatchAt >= this.autoClaimBatchIntervalMs) {
+			this.lastAutoClaimBatchAt = now.getTime();
+			tasks.push(this.processAutoClaimBatch());
+		}
+		if (now.getTime() - this.lastWebhookReplayAt >= this.webhookReplayIntervalMs) {
+			this.lastWebhookReplayAt = now.getTime();
+			tasks.push(this.replayWebhookBatch());
+		}
 		return Promise.allSettled(tasks);
+	}
+
+	async processAutoClaimBatch() {
+		try {
+			if (this.referral && typeof this.referral.processAutoClaimBatch === "function") {
+				const result = await this.referral.processAutoClaimBatch(10);
+				return { success: true, results: result };
+			}
+			return { success: false, error: "Referral service not available" };
+		} catch (error) {
+			console.error("[CronService] Auto-claim batch processing failed:", error.message);
+			return { success: false, error: error.message };
+		}
+	}
+
+	async replayWebhookBatch() {
+		try {
+			if (this.webhook && typeof this.webhook.replayDeadLetterWebhooks === "function") {
+				const result = await this.webhook.replayDeadLetterWebhooks();
+				return { success: true, ...result };
+			}
+			return { success: false, error: "Webhook service not available" };
+		} catch (error) {
+			console.error("[CronService] Webhook replay batch failed:", error.message);
+			return { success: false, error: error.message };
+		}
 	}
 
 	start() {

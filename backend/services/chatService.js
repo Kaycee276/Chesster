@@ -1,5 +1,8 @@
+const { getRedisConnection } = require("../config/redis");
+
 const MAX_MESSAGE_LENGTH = 500;
 const DEFAULT_BLOCKED_TERMS = ['fuck', 'shit', 'bitch', 'asshole', 'cunt'];
+const SPECTATOR_MESSAGE_THROTTLE_MS = 3000;
 
 const terms = () => (process.env.CHAT_BLOCKED_TERMS
   ? process.env.CHAT_BLOCKED_TERMS.split(',').map((term) => term.trim().toLowerCase()).filter(Boolean)
@@ -123,6 +126,43 @@ function resetChatRateLimits() {
   chatRateBuckets.clear();
 }
 
+/**
+ * Check if a spectator can send a chat message based on Redis-backed throttling.
+ * Per spectator (by wallet address or IP), enforce a 3-second delay between messages
+ * in a given game channel.
+ *
+ * @param {string} gameId - The game ID
+ * @param {string} userId - The spectator's wallet address or IP
+ * @returns {Promise<{ allowed: boolean, nextAvailableIn: number }>}
+ */
+async function canSpectatorSendMessage(gameId, userId) {
+  if (!gameId || !userId) return { allowed: false, nextAvailableIn: 0 };
+
+  const client = await getRedisConnection();
+  if (!client) {
+    // Redis unavailable, allow message (graceful degradation)
+    return { allowed: true, nextAvailableIn: 0 };
+  }
+
+  const key = `ratelimit:chat:${gameId}:${userId}`;
+  try {
+    const exists = await client.get(key);
+    if (exists) {
+      const ttl = await client.ttl(key);
+      const nextAvailableIn = Math.max(1, ttl);
+      return { allowed: false, nextAvailableIn };
+    }
+
+    // Set throttle key with 3-second expiry
+    await client.set(key, '1', 'EX', Math.ceil(SPECTATOR_MESSAGE_THROTTLE_MS / 1000));
+    return { allowed: true, nextAvailableIn: 0 };
+  } catch (err) {
+    // Redis error, log and allow message (graceful degradation)
+    console.error(`[chatService] Redis throttle check failed for ${gameId}:${userId}:`, err.message);
+    return { allowed: true, nextAvailableIn: 0 };
+  }
+}
+
 module.exports = {
   moderateMessage,
   MAX_MESSAGE_LENGTH,
@@ -136,5 +176,7 @@ module.exports = {
   clearChatRateLimit,
   resetChatRateLimits,
   chatRateBuckets,
+  SPECTATOR_MESSAGE_THROTTLE_MS,
+  canSpectatorSendMessage,
 };
 

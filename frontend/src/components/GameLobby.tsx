@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Trophy,
   BarChart3,
+  History,
   Share2,
   Copy,
   Check,
@@ -614,6 +615,15 @@ export default function GameLobby() {
             >
               <Trophy size={14} className="text-(--accent-primary) shrink-0" />
               <span className="hidden sm:inline">Tournaments</span>
+            </button>
+            <button
+              onClick={() => navigate("/offline-games")}
+              aria-label="Offline games"
+              title="Offline games"
+              className="flex items-center gap-1 sm:gap-1.5 rounded-lg px-2 sm:px-3 py-1.5 text-xs sm:text-sm font-semibold text-(--text-secondary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors"
+            >
+              <History size={14} className="text-(--accent-primary) shrink-0" />
+              <span className="hidden sm:inline">Offline games</span>
             </button>
             <button
               onClick={() => navigate("/leaderboard")}

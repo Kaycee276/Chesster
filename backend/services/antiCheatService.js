@@ -22,6 +22,38 @@ const HIGH_ENTROPY_MIN_ENGINE_CORRELATION = 0.9;
 const ANTI_CHEAT_FLAG_LOW_ENTROPY = "low_time_variance_entropy";
 const ANTI_CHEAT_FLAG_HIGH_ENTROPY = "high_time_variance_entropy_engine_correlation";
 
+// Instant tactical refutation heuristic (Issue #643). A reply to a volatile
+// position (the opponent's last move swung the eval by more than 200cp) that
+// is the engine's top line, is chosen among many legal moves and is played in
+// under 300ms is a bot hallmark; humans stop to evaluate such positions.
+const TACTICAL_BURST_FLAG = "TACTICAL_BURST_FLAG";
+const TACTICAL_EVAL_SWING_CP = 200;
+const TACTICAL_MIN_LEGAL_MOVES = 15;
+const TACTICAL_BURST_MAX_MS = 300;
+const TACTICAL_MIN_BURSTS = 2;
+const TACTICAL_BURST_SCORE_STEP = 10;
+const TACTICAL_BURST_SCORE_MAX = 40;
+
+// Mouse trajectory biometric verification (Issue #682).
+const MOUSE_TRAJECTORY_FLAG = "SYNTHETIC_INPUT_FLAG";
+const MIN_TRAJECTORY_POINTS = 5;
+const SYNTHETIC_LINEARITY_THRESHOLD = 0.999;
+const MICRO_JITTER_THRESHOLD = 0.05;
+const HUMAN_MAX_VELOCITY_PX_S = 5000;
+// Move duration outlier Z-score analysis (Issue #700). Detect unnatural timing homogeneity
+// where move durations are suspiciously uniform across all moves (bot hallmark).
+const TIMING_HOMOGENEITY_FLAG = "TIMING_HOMOGENEITY_FLAG";
+const MIN_MOVES_FOR_ZSCORE = 15;
+const Z_SCORE_THRESHOLD = 1.0;
+const STD_DEV_THRESHOLD_MS = 400;
+// FIDE Centipawn Loss (ACPL) distribution profiling (Issue #744).
+const FIDE_OPENING_BOOK_PLIES = 8;
+const FIDE_MIN_NON_BOOK_PLIES = 20;
+const FIDE_MIN_SAMPLE_PLIES = 15;
+const FIDE_ACPL_THRESHOLD = 12;
+const FIDE_TOP1_MATCH_RATE_THRESHOLD = 0.90;
+const ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY = "SUSPICIOUS_ENGINE_ACCURACY";
+
 function mean(values) {
 	return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
@@ -314,12 +346,98 @@ function analyzeGameMoveTimes(moveHistory, { engineCorrelation = {} } = {}) {
 	const delays = extractMoveDelays(moveHistory);
 	const result = {};
 	for (const color of ["white", "black"]) {
-		const summary = summarizeMoveTimeEntropy(delays.filter((delay) => delay.color === color));
+		const colorDelays = delays.filter((delay) => delay.color === color);
+		const summary = summarizeMoveTimeEntropy(colorDelays);
 		const correlation = toFiniteNumber(engineCorrelation[color]);
-		const flags = entropyFlags(summary.timeVarianceEntropyScore, correlation);
-		result[color] = { ...summary, flags, flagged: flags.length > 0 };
+		const entropyFlagsList = entropyFlags(summary.timeVarianceEntropyScore, correlation);
+
+		// Check for unnatural timing homogeneity (Z-score based)
+		const moveDurations = colorDelays
+			.filter((d) => d.delayMs !== null && d.delayMs >= 0)
+			.map((d) => d.delayMs);
+		const timingHomogeneity = calculateTimingHomogeneity(moveDurations);
+
+		let flags = [...entropyFlagsList];
+		if (timingHomogeneity.flagged) {
+			flags.push({
+				type: TIMING_HOMOGENEITY_FLAG,
+				reason: timingHomogeneity.reason,
+				metrics: timingHomogeneity.metrics,
+			});
+		}
+
+		result[color] = { ...summary, flags, flagged: flags.length > 0, timingHomogeneity };
 	}
 	return result;
+}
+
+/**
+ * Classify whether a position is complex enough for response speed to be
+ * meaningful. Forced replies (one legal move, e.g. a recapture) and quiet
+ * positions are excluded because they are naturally played quickly.
+ * priorMoveEvalDiff is the centipawn swing caused by the opponent's last move.
+ * @returns {{complex: boolean, reason: string}}
+ */
+function evaluateMoveComplexity({ legalMovesCount, priorMoveEvalDiff } = {}) {
+	const legal = toFiniteNumber(legalMovesCount);
+	const swing = toFiniteNumber(priorMoveEvalDiff);
+	if (legal === null || swing === null) return { complex: false, reason: "insufficient_data" };
+	if (legal <= 1) return { complex: false, reason: "forced_move" };
+	if (legal <= TACTICAL_MIN_LEGAL_MOVES) return { complex: false, reason: "few_legal_moves" };
+	if (Math.abs(swing) <= TACTICAL_EVAL_SWING_CP) return { complex: false, reason: "low_volatility" };
+	return { complex: true, reason: "high_tactical_volatility" };
+}
+
+/**
+ * Flag a single move if it is an instant engine-top reply in a complex position.
+ * @param {{isTopEngineMove: boolean, durationMs: number|null, moveNumber?: number}} moveData
+ * @returns {{type: string, flag: string, severity: string, moveNumber: number|null, durationMs: number}|null}
+ */
+function evaluateTacticalResponse(moveData, priorMoveEvalDiff, legalMovesCount) {
+	if (!moveData || moveData.isTopEngineMove !== true) return null;
+	const durationMs = toFiniteNumber(moveData.durationMs);
+	if (durationMs === null || durationMs < 0 || durationMs >= TACTICAL_BURST_MAX_MS) return null;
+	if (!evaluateMoveComplexity({ legalMovesCount, priorMoveEvalDiff }).complex) return null;
+	return {
+		type: TACTICAL_BURST_FLAG,
+		flag: TACTICAL_BURST_FLAG,
+		severity: "high",
+		moveNumber: toFiniteNumber(moveData.moveNumber),
+		durationMs,
+	};
+}
+
+/**
+ * Scan one player's moves for repeated instant tactical refutations. A single
+ * fast reply is not enough: at least TACTICAL_MIN_BURSTS complex positions in
+ * the match must be answered instantly with the engine's top move.
+ * Each move: {moveNumber, durationMs, isTopEngineMove, priorMoveEvalDiff, legalMovesCount}.
+ * @returns {{bursts: object[], complexMoves: number, flags: object[], suspicionBoost: number}}
+ */
+function detectInstantTacticalRefutations(moves = []) {
+	const bursts = [];
+	let complexMoves = 0;
+	for (const move of moves || []) {
+		if (!move) continue;
+		if (evaluateMoveComplexity(move).complex) complexMoves += 1;
+		const flag = evaluateTacticalResponse(move, move.priorMoveEvalDiff, move.legalMovesCount);
+		if (flag) bursts.push(flag);
+	}
+	if (bursts.length < TACTICAL_MIN_BURSTS) return { bursts, complexMoves, flags: [], suspicionBoost: 0 };
+	return {
+		bursts,
+		complexMoves,
+		flags: [{
+			type: TACTICAL_BURST_FLAG,
+			flag: TACTICAL_BURST_FLAG,
+			severity: "high",
+			burstCount: bursts.length,
+			complexMoves,
+			thresholdMs: TACTICAL_BURST_MAX_MS,
+			moveNumbers: bursts.map((burst) => burst.moveNumber),
+		}],
+		suspicionBoost: Math.min(TACTICAL_BURST_SCORE_MAX, bursts.length * TACTICAL_BURST_SCORE_STEP),
+	};
 }
 
 function summarizeCentipawnLoss(losses) {
@@ -328,6 +446,117 @@ function summarizeCentipawnLoss(losses) {
 		mean: losses.length ? Math.round(mean(losses)) : null,
 		median: percentile(losses, 0.5),
 		p90: percentile(losses, 0.9),
+	};
+}
+
+function extractMoveCentipawnLoss(move) {
+	if (!move || typeof move !== "object") return null;
+	const best = toFiniteNumber(move.bestEval ?? move.bestScore);
+	const played = toFiniteNumber(move.playedEval ?? move.playedScore);
+	if (best !== null && played !== null) {
+		return Math.max(0, best - played);
+	}
+	const directLoss = toFiniteNumber(move.centipawnLoss);
+	return directLoss !== null ? Math.max(0, directLoss) : null;
+}
+
+function filterValidACPLMoves(moves = [], openingBookPlies = FIDE_OPENING_BOOK_PLIES) {
+	if (!Array.isArray(moves)) return [];
+	const valid = [];
+	for (const move of moves) {
+		if (!move || typeof move !== "object") continue;
+		const legalMoveCount = toFiniteNumber(move.legalMoveCount);
+		const isForced = move.isForced === true || (legalMoveCount !== null && legalMoveCount <= 1);
+		if (isForced) continue;
+
+		const ply = toFiniteNumber(move.ply);
+		const isBook = move.isBook === true || (ply !== null && ply <= openingBookPlies);
+		if (isBook) continue;
+
+		const cpl = extractMoveCentipawnLoss(move);
+		if (cpl === null) continue;
+
+		valid.push({
+			cpl,
+			isTop1: move.isTop1 === true || move.matchesTopMove === true,
+		});
+	}
+	return valid;
+}
+
+/**
+ * Compute mean Average Centipawn Loss (ACPL) over valid non-book, non-forced plies.
+ *
+ * @param {Array<{
+ *   bestEval?: number,
+ *   playedEval?: number,
+ *   bestScore?: number,
+ *   playedScore?: number,
+ *   centipawnLoss?: number,
+ *   isForced?: boolean,
+ *   isBook?: boolean,
+ *   ply?: number,
+ *   legalMoveCount?: number,
+ *   isTop1?: boolean,
+ *   matchesTopMove?: boolean
+ * }>} moves
+ * @returns {number|null}
+ */
+function calculateACPL(moves = []) {
+	const validPlies = filterValidACPLMoves(moves, FIDE_OPENING_BOOK_PLIES);
+	if (validPlies.length === 0) return null;
+	return Number(mean(validPlies.map((entry) => entry.cpl)).toFixed(4));
+}
+
+/**
+ * Profile FIDE Centipawn Loss (ACPL) distribution for engine-level accuracy detection (Issue #744).
+ *
+ * @param {Array<object>} evaluations
+ * @param {object} [options]
+ * @returns {{
+ *   acpl: number|null,
+ *   stdDev: number|null,
+ *   top1MatchRate: number|null,
+ *   sampleSize: number,
+ *   flagged: boolean,
+ *   flagType: string|null
+ * }}
+ */
+function profileACPLDistribution(evaluations = [], options = {}) {
+	const openingBookPlies = options.openingBookPlies ?? FIDE_OPENING_BOOK_PLIES;
+	const minSampleSize = options.minSampleSize ?? FIDE_MIN_SAMPLE_PLIES;
+	const minNonBookPlies = options.minNonBookPlies ?? FIDE_MIN_NON_BOOK_PLIES;
+	const acplThreshold = options.acplThreshold ?? FIDE_ACPL_THRESHOLD;
+	const top1MatchRateThreshold = options.top1MatchRateThreshold ?? FIDE_TOP1_MATCH_RATE_THRESHOLD;
+
+	const validPlies = filterValidACPLMoves(evaluations, openingBookPlies);
+	if (validPlies.length < minSampleSize) {
+		return {
+			acpl: null,
+			stdDev: null,
+			top1MatchRate: null,
+			sampleSize: validPlies.length,
+			flagged: false,
+			flagType: null,
+		};
+	}
+
+	const losses = validPlies.map((entry) => entry.cpl);
+	const acpl = Number(mean(losses).toFixed(4));
+	const stdDev = Number(standardDeviation(losses).toFixed(4));
+	const top1Matches = validPlies.filter((entry) => entry.isTop1).length;
+	const top1MatchRate = Number((top1Matches / validPlies.length).toFixed(4));
+	const flagged = acpl < acplThreshold
+		&& top1MatchRate > top1MatchRateThreshold
+		&& validPlies.length >= minNonBookPlies;
+
+	return {
+		acpl,
+		stdDev,
+		top1MatchRate,
+		sampleSize: validPlies.length,
+		flagged,
+		flagType: flagged ? ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY : null,
 	};
 }
 
@@ -354,6 +583,65 @@ function calculateAnomalyScore({ moveDurationsMs, engineMatches, centipawnLosses
 	const cpl = summarizeCentipawnLoss(centipawnLosses);
 	const engineAccuracy = cpl.median == null ? 0 : 1 - Math.min(1, cpl.median / 200);
 	return Number(Math.min(1, timingRegularity * 0.4 + engineCorrelation * 0.5 + engineAccuracy * 0.1).toFixed(4));
+}
+
+function computeTimingMetrics(moveDurations) {
+	if (!Array.isArray(moveDurations) || moveDurations.length < MIN_MOVES_FOR_ZSCORE) {
+		return {
+			isHomogeneous: false,
+			mean: null,
+			stdDev: null,
+			zScores: [],
+		};
+	}
+
+	const validDurations = moveDurations.filter((d) => Number.isFinite(d) && d >= 0);
+	if (validDurations.length < MIN_MOVES_FOR_ZSCORE) {
+		return {
+			isHomogeneous: false,
+			mean: null,
+			stdDev: null,
+			zScores: [],
+		};
+	}
+
+	const avg = mean(validDurations);
+	const variance = calculateVariance(validDurations);
+	const stdDev = Math.sqrt(variance);
+
+	const zScores = validDurations.map((duration) => {
+		if (stdDev === 0) return 0;
+		return (duration - avg) / stdDev;
+	});
+
+	const outlierCount = zScores.filter((z) => Math.abs(z) >= Z_SCORE_THRESHOLD).length;
+	const isHomogeneous = stdDev < STD_DEV_THRESHOLD_MS && outlierCount === 0;
+
+	return {
+		isHomogeneous,
+		mean: Number(avg.toFixed(2)),
+		stdDev: Number(stdDev.toFixed(2)),
+		zScores: zScores.map((z) => Number(z.toFixed(4))),
+		outlierCount,
+	};
+}
+
+function calculateTimingHomogeneity(moveDurations) {
+	const metrics = computeTimingMetrics(moveDurations);
+
+	if (!metrics.isHomogeneous) {
+		return {
+			flagged: false,
+			reason: null,
+			metrics,
+		};
+	}
+
+	return {
+		flagged: true,
+		reason: `Unnatural timing homogeneity detected: std dev ${metrics.stdDev}ms (threshold: ${STD_DEV_THRESHOLD_MS}ms), no Z-score outliers`,
+		metrics,
+	};
 }
 
 function coordsToSquare(coords) {
@@ -411,6 +699,30 @@ class AntiCheatService {
 		return { timestampMs, durationMs };
 	}
 
+	/**
+	 * Log a move timing burst / forged premove attempt to `anti_cheat_logs`
+	 * (Issue #583). Telemetry must never block or fail move handling, so errors
+	 * are logged and swallowed.
+	 *
+	 * @returns {Promise<boolean>} true if the row was written
+	 */
+	async logMoveBurst({ gameCode, walletAddress, ip, deltaMs, reason }) {
+		try {
+			const { error } = await this.db.from("anti_cheat_logs").insert({
+				game_code: gameCode,
+				wallet_address: walletAddress || null,
+				ip_address: ip || null,
+				delta_ms: Number.isFinite(deltaMs) ? Math.round(deltaMs) : null,
+				reason,
+			});
+			if (error) throw error;
+			return true;
+		} catch (error) {
+			this.logger.warn(`[AntiCheat] burst telemetry failed: ${error.message}`);
+			return false;
+		}
+	}
+
 	async getTelemetry(gameId) {
 		const { data, error } = await this.db
 			.from("match_audit_logs")
@@ -443,10 +755,44 @@ class AntiCheatService {
 		return {
 			matchesTopMove: playedMove === before.bestMove,
 			centipawnLoss,
+			evalBeforeCp: Number.isFinite(before.scoreCp) ? before.scoreCp : null,
 		};
 	}
 
-	buildPlayerAnalysis(color, playerAddress, telemetry, engineResults, rating = null, timing = null) {
+	/**
+	 * Per-move inputs for the tactical refutation heuristic: each of `color`'s
+	 * moves paired with the eval swing of the opponent move that preceded it.
+	 * evalBeforeCp is from the mover's view, so the opponent's move swung the
+	 * eval by |evalBefore(previous) + evalBefore(this)|.
+	 */
+	collectTacticalMoves(telemetry, color, engineByEntry) {
+		const moves = [];
+		telemetry.forEach((entry, index) => {
+			const event = entry.event_data;
+			const previous = telemetry[index - 1];
+			if (event?.color !== color || !previous || previous.event_data?.color === color) return;
+			const current = engineByEntry.get(entry);
+			const prior = engineByEntry.get(previous);
+			const hasEvals = Number.isFinite(current?.evalBeforeCp) && Number.isFinite(prior?.evalBeforeCp);
+			let legalMovesCount = null;
+			try {
+				legalMovesCount = toFiniteNumber(event.legalMoveCount)
+					?? countLegalMoves(event.boardBefore, color, TACTICAL_MIN_LEGAL_MOVES + 1);
+			} catch {
+				legalMovesCount = null;
+			}
+			moves.push({
+				moveNumber: toFiniteNumber(event.moveNumber),
+				durationMs: toFiniteNumber(entry.move_duration_ms),
+				isTopEngineMove: current?.matchesTopMove === true,
+				priorMoveEvalDiff: hasEvals ? current.evalBeforeCp + prior.evalBeforeCp : null,
+				legalMovesCount,
+			});
+		});
+		return moves;
+	}
+
+	buildPlayerAnalysis(color, playerAddress, telemetry, engineResults, rating = null, timing = null, tactical = null) {
 		const durations = telemetry
 			.map((entry) => entry.move_duration_ms)
 			.filter((value) => Number.isFinite(value) && value >= 0);
@@ -471,6 +817,7 @@ class AntiCheatService {
 		);
 		const ratingRisk = hasRating ? Math.max(0, Math.min(1, (2000 - Number(rating)) / 1200)) : 0;
 		const suspicionScore = Math.round(Math.min(100, Math.max(0,
+			(tactical?.suspicionBoost || 0) +
 			score * 35 +
 			(engineMatches.length ? engineMatches.filter(Boolean).length / engineMatches.length : 0) * 40 +
 			(centipawnLosses.length ? Math.max(0, 1 - mean(centipawnLosses) / 200) : 0) * 15 +
@@ -496,6 +843,36 @@ class AntiCheatService {
 				? "suspiciously uniform move time distribution (low time variance entropy)"
 				: "near-maximal move time entropy with over 90% engine correlation");
 		}
+		for (const flag of tactical?.flags || []) {
+			antiCheatFlags.push(flag);
+			reasons.push(`${flag.burstCount} instant (under ${TACTICAL_BURST_MAX_MS}ms) engine-top replies to complex tactical positions`);
+		}
+
+		const acplInputs = engineResults.map((result, index) => {
+			if (!result) return null;
+			const entry = telemetry[index];
+			const eventData = entry?.event_data;
+			const ply = toFiniteNumber(result.ply ?? eventData?.ply ?? eventData?.moveNumber);
+			const legalMoveCount = toFiniteNumber(result.legalMoveCount ?? eventData?.legalMoveCount);
+			return {
+				...result,
+				ply,
+				legalMoveCount,
+				isForced: result.isForced ?? (legalMoveCount !== null && legalMoveCount <= 1),
+				isBook: result.isBook ?? (ply !== null && ply <= FIDE_OPENING_BOOK_PLIES),
+			};
+		});
+		const acplProfile = profileACPLDistribution(acplInputs);
+		if (acplProfile.flagged) {
+			antiCheatFlags.push({
+				type: ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY,
+				acpl: acplProfile.acpl,
+				stdDev: acplProfile.stdDev,
+				top1MatchRate: acplProfile.top1MatchRate,
+				sampleSize: acplProfile.sampleSize,
+			});
+			reasons.push("suspicious engine-level accuracy (FIDE ACPL < 12 with > 90% top-1 move match rate)");
+		}
 
 		return {
 			color,
@@ -507,6 +884,7 @@ class AntiCheatService {
 			engineCorrelation: engineCorrelation == null ? null : Number(engineCorrelation.toFixed(4)),
 			engineMatchRate: engineCorrelation == null ? null : Number(engineCorrelation.toFixed(4)),
 			centipawnLoss: summarizeCentipawnLoss(centipawnLosses),
+			acplProfile,
 			evaluationWindows,
 			rating: hasRating ? Number(rating) : null,
 			timeVarianceEntropyScore: moveTiming.timeVarianceEntropyScore,
@@ -555,16 +933,19 @@ class AntiCheatService {
 		})));
 
 		const analysis = {};
+		const engineByEntry = new Map();
 		for (const color of ["white", "black"]) {
 			const entries = grouped[color];
 			const engineResults = [];
 			for (const entry of entries) {
+				let result = null;
 				try {
-					engineResults.push(await this.analyzeEngineMove(entry));
+					result = await this.analyzeEngineMove(entry);
 				} catch (error) {
 					this.logger.warn(`[AntiCheat] Engine analysis skipped: ${error.message}`);
-					engineResults.push(null);
 				}
+				engineByEntry.set(entry, result);
+				engineResults.push(result);
 			}
 			analysis[color] = this.buildPlayerAnalysis(
 				color,
@@ -573,11 +954,106 @@ class AntiCheatService {
 				engineResults,
 				ratings[color],
 				moveTimes[color],
+				detectInstantTacticalRefutations(this.collectTacticalMoves(telemetry, color, engineByEntry)),
 			);
 		}
 
 		await this.games.recordCheatAnalysis(gameId, analysis);
 		return analysis;
+	}
+
+	/**
+	 * Analyze cursor telemetry for synthetic input signatures. Detects bot automation
+	 * by measuring trajectory linearity, micro-jitter variance, and instant jumps.
+	 * Returns flags and suspicion score for accumulation in Game.anti_cheat_flags.
+	 */
+	analyzeCursorTelemetry(points, isMobileTouch = false) {
+		if (!points || points.length < MIN_TRAJECTORY_POINTS) {
+			return { isSynthetic: false, linearity: 0, avgJitter: 0, flagReason: null };
+		}
+
+		// Mobile touch events bypass cursor linearity tests (distinct tap signatures).
+		if (isMobileTouch) {
+			return { isSynthetic: false, linearity: 0, avgJitter: 0, flagReason: "mobile_touch_bypass" };
+		}
+
+		const linearity = this.calculateTrajectoryLinearity(points);
+		const jitter = this.calculateMicroJitter(points);
+		const hasInstantJump = this.detectInstantTeleportation(points);
+
+		const isSynthetic = linearity > SYNTHETIC_LINEARITY_THRESHOLD && jitter < MICRO_JITTER_THRESHOLD && !hasInstantJump;
+
+		return {
+			isSynthetic,
+			linearity: Number(linearity.toFixed(4)),
+			avgJitter: Number(jitter.toFixed(4)),
+			hasInstantJump,
+			flagReason: isSynthetic ? MOUSE_TRAJECTORY_FLAG : null,
+		};
+	}
+
+	calculateTrajectoryLinearity(points) {
+		if (points.length < 3) return 0;
+
+		// Fit a straight line through the points and calculate R² (coefficient of determination).
+		const xs = points.map((p) => p.x);
+		const ys = points.map((p) => p.y);
+
+		const n = xs.length;
+		const sumX = xs.reduce((a, b) => a + b, 0);
+		const sumY = ys.reduce((a, b) => a + b, 0);
+		const sumXY = xs.reduce((sum, x, i) => sum + x * ys[i], 0);
+		const sumX2 = xs.reduce((sum, x) => sum + x * x, 0);
+		const sumY2 = ys.reduce((sum, y) => sum + y * y, 0);
+
+		const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+		const intercept = (sumY - slope * sumX) / n;
+
+		const ssRes = ys.reduce((sum, y, i) => {
+			const predicted = slope * xs[i] + intercept;
+			return sum + (y - predicted) ** 2;
+		}, 0);
+
+		const ssTot = ys.reduce((sum, y) => sum + (y - sumY / n) ** 2, 0);
+
+		return ssTot === 0 ? 0 : 1 - ssRes / ssTot;
+	}
+
+	calculateMicroJitter(points) {
+		if (points.length < 3) return 0;
+
+		let totalJitterVariance = 0;
+		for (let i = 2; i < points.length; i++) {
+			const dx1 = points[i - 1].x - points[i - 2].x;
+			const dy1 = points[i - 1].y - points[i - 2].y;
+			const dx2 = points[i].x - points[i - 1].x;
+			const dy2 = points[i].y - points[i - 1].y;
+
+			const accel1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+			const accel2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+			totalJitterVariance += Math.abs(accel2 - accel1);
+		}
+
+		return totalJitterVariance / (points.length - 2);
+	}
+
+	detectInstantTeleportation(points) {
+		if (points.length < 2) return false;
+
+		for (let i = 1; i < points.length; i++) {
+			const dx = points[i].x - points[i - 1].x;
+			const dy = points[i].y - points[i - 1].y;
+			const distance = Math.sqrt(dx * dx + dy * dy);
+
+			const timeDeltaMs = (points[i].t || 0) - (points[i - 1].t || 0);
+			const timeInSeconds = timeDeltaMs / 1000;
+
+			if (timeInSeconds > 0 && distance / timeInSeconds > HUMAN_MAX_VELOCITY_PX_S) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -623,9 +1099,36 @@ module.exports.countLegalMoves = countLegalMoves;
 module.exports.analyzeGameMoveTimes = analyzeGameMoveTimes;
 module.exports.analyzeMoveTimeDistribution = analyzeMoveTimeDistribution;
 module.exports.calculateVariance = calculateVariance;
+module.exports.evaluateMoveComplexity = evaluateMoveComplexity;
+module.exports.evaluateTacticalResponse = evaluateTacticalResponse;
+module.exports.detectInstantTacticalRefutations = detectInstantTacticalRefutations;
+module.exports.TACTICAL_BURST_FLAG = TACTICAL_BURST_FLAG;
+module.exports.TACTICAL_BURST_MAX_MS = TACTICAL_BURST_MAX_MS;
+module.exports.TACTICAL_EVAL_SWING_CP = TACTICAL_EVAL_SWING_CP;
+module.exports.TACTICAL_MIN_LEGAL_MOVES = TACTICAL_MIN_LEGAL_MOVES;
+module.exports.TACTICAL_MIN_BURSTS = TACTICAL_MIN_BURSTS;
 module.exports.calculatePearsonCorrelation = calculatePearsonCorrelation;
 module.exports.ENTROPY_BIN_EDGES_MS = ENTROPY_BIN_EDGES_MS;
 module.exports.LOW_ENTROPY_THRESHOLD = LOW_ENTROPY_THRESHOLD;
 module.exports.HIGH_ENTROPY_THRESHOLD = HIGH_ENTROPY_THRESHOLD;
 module.exports.MIN_ENTROPY_SAMPLES = MIN_ENTROPY_SAMPLES;
 module.exports.OPENING_BOOK_MOVES = OPENING_BOOK_MOVES;
+module.exports.MOUSE_TRAJECTORY_FLAG = MOUSE_TRAJECTORY_FLAG;
+module.exports.MIN_TRAJECTORY_POINTS = MIN_TRAJECTORY_POINTS;
+module.exports.SYNTHETIC_LINEARITY_THRESHOLD = SYNTHETIC_LINEARITY_THRESHOLD;
+module.exports.MICRO_JITTER_THRESHOLD = MICRO_JITTER_THRESHOLD;
+module.exports.HUMAN_MAX_VELOCITY_PX_S = HUMAN_MAX_VELOCITY_PX_S;
+module.exports.computeTimingMetrics = computeTimingMetrics;
+module.exports.calculateTimingHomogeneity = calculateTimingHomogeneity;
+module.exports.TIMING_HOMOGENEITY_FLAG = TIMING_HOMOGENEITY_FLAG;
+module.exports.MIN_MOVES_FOR_ZSCORE = MIN_MOVES_FOR_ZSCORE;
+module.exports.Z_SCORE_THRESHOLD = Z_SCORE_THRESHOLD;
+module.exports.STD_DEV_THRESHOLD_MS = STD_DEV_THRESHOLD_MS;
+module.exports.calculateACPL = calculateACPL;
+module.exports.profileACPLDistribution = profileACPLDistribution;
+module.exports.ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY = ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY;
+module.exports.FIDE_OPENING_BOOK_PLIES = FIDE_OPENING_BOOK_PLIES;
+module.exports.FIDE_MIN_NON_BOOK_PLIES = FIDE_MIN_NON_BOOK_PLIES;
+module.exports.FIDE_MIN_SAMPLE_PLIES = FIDE_MIN_SAMPLE_PLIES;
+module.exports.FIDE_ACPL_THRESHOLD = FIDE_ACPL_THRESHOLD;
+module.exports.FIDE_TOP1_MATCH_RATE_THRESHOLD = FIDE_TOP1_MATCH_RATE_THRESHOLD;

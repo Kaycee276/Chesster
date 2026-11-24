@@ -22,15 +22,17 @@ const localStorageMock = (() => {
 // Mock AudioContext and related APIs
 class MockOscillator {
 	type: OscillatorType = "sine";
-	frequency = { setValueAtTime: vi.fn() };
+	frequency = { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() };
 	connect = vi.fn().mockReturnThis();
 	start = vi.fn();
 	stop = vi.fn();
+	disconnect = vi.fn();
 }
 
 class MockGain {
 	gain = { setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() };
 	connect = vi.fn().mockReturnThis();
+	disconnect = vi.fn();
 }
 
 class MockAudioContext {

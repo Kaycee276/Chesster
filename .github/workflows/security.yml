@@ -1,0 +1,145 @@
+name: Security & License Compliance Gate
+
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node-audit:
+    name: Node Security & Licenses (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: root
+            directory: .
+          - name: backend
+            directory: backend
+          - name: frontend
+            directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install pinned audit tools
+        run: |
+          npm install --global --ignore-scripts --no-audit --no-fund pnpm@11.18.0
+          npm install --prefix "$RUNNER_TEMP/license-checker" --ignore-scripts --no-audit --no-fund license-checker@25.0.1
+
+      - name: Cache pnpm store
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-11.18.0-${{ runner.os }}-${{ matrix.name }}-${{ hashFiles('pnpm-lock.yaml', 'backend/pnpm-lock.yaml', 'frontend/pnpm-lock.yaml') }}
+
+      # Raw outcomes are checked in the final gate; collecting every report does
+      # not convert a failed audit into a passing job.
+      - name: Audit all locked Node dependencies
+        id: vulnerabilities
+        continue-on-error: true
+        working-directory: ${{ matrix.directory }}
+        run: pnpm audit --audit-level=high
+
+      - name: Install locked dependencies for license inventory
+        id: inventory
+        continue-on-error: true
+        working-directory: ${{ matrix.directory }}
+        # Hoisting lets license-checker's npm tree reader visit all transitive
+        # dependencies. Ignore package hooks in this untrusted PR audit job.
+        run: pnpm install --frozen-lockfile --ignore-scripts --node-linker=hoisted
+
+      - name: Test license policy
+        id: policy_tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: node --test scripts/license-policy.test.cjs
+
+      - name: Check production licenses
+        id: licenses
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          PROJECT_DIRECTORY: ${{ matrix.directory }}
+        run: |
+          "$RUNNER_TEMP/license-checker/node_modules/.bin/license-checker" \
+            --start "$PROJECT_DIRECTORY" --production --unknown --json \
+            > "$RUNNER_TEMP/production-licenses.json"
+          node scripts/license-policy.cjs "$RUNNER_TEMP/production-licenses.json" "$PROJECT_DIRECTORY"
+
+      - name: Report and enforce all Node gates
+        if: always()
+        env:
+          PROJECT_NAME: ${{ matrix.name }}
+          VULNERABILITIES: ${{ steps.vulnerabilities.outcome }}
+          INVENTORY: ${{ steps.inventory.outcome }}
+          POLICY_TESTS: ${{ steps.policy_tests.outcome }}
+          LICENSES: ${{ steps.licenses.outcome }}
+        run: |
+          {
+            printf '## Security audit: %s\n\n' "$PROJECT_NAME"
+            printf '| Check | Result |\n| --- | --- |\n'
+            printf '| High/critical vulnerabilities | %s |\n' "$VULNERABILITIES"
+            printf '| Locked dependency inventory | %s |\n' "$INVENTORY"
+            printf '| License policy regression tests | %s |\n' "$POLICY_TESTS"
+            printf '| Production license compliance | %s |\n' "$LICENSES"
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$VULNERABILITIES" = success
+          test "$INVENTORY" = success
+          test "$POLICY_TESTS" = success
+          test "$LICENSES" = success
+
+  rust-audit:
+    name: Soroban Cargo Security Audit Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Rust audit dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/advisory-db
+          key: cargo-audit-0.22.0-${{ runner.os }}-${{ hashFiles('contracts/soroban/Cargo.lock') }}
+
+      - name: Install pinned cargo-audit
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-audit@0.22.0
+
+      - name: Audit locked Soroban dependencies
+        id: audit
+        continue-on-error: true
+        run: cargo audit --file contracts/soroban/Cargo.lock
+
+      - name: Report and enforce Rust gate
+        if: always()
+        env:
+          AUDIT_RESULT: ${{ steps.audit.outcome }}
+        run: |
+          {
+            printf '## Soroban security audit\n\n'
+            printf '| Check | Result |\n| --- | --- |\n'
+            printf '| RustSec vulnerability audit | %s |\n' "$AUDIT_RESULT"
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "$AUDIT_RESULT" = success

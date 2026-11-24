@@ -1,0 +1,59 @@
+name: Move Partition Migration Tests
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'backend/database/**'
+      - 'backend/prisma/schema.prisma'
+      - 'backend/services/archivalService.js'
+      - 'backend/tests/movesPartitioning.integration.test.js'
+      - 'backend/tests/moveArchival.integration.test.js'
+      - 'backend/services/moveArchive.js'
+      - 'backend/tests/archivalService.test.js'
+      - '.github/workflows/moves-partitioning.yml'
+  push:
+    branches: [dev]
+    paths:
+      - 'backend/database/**'
+      - 'backend/services/archivalService.js'
+      - '.github/workflows/moves-partitioning.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  partition-migration:
+    name: PostgreSQL Move Partition Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chesster_partition_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: 'backend/.nvmrc'
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Verify migration and transparent monthly inserts
+        run: pnpm test movesPartitioning.integration.test.js moveArchival.integration.test.js --runInBand
+        env:
+          PARTITION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chesster_partition_tests
+          MOVE_ARCHIVE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chesster_partition_tests

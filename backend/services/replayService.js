@@ -1,4 +1,6 @@
+const { restoreArchivedMoves } = require("./moveArchive");
 const chessEngine = require("./chessEngine");
+const { getSevenTagRoster, escapePgnTag } = require("./pgnService");
 const { boardToFEN } = require("./botService");
 
 /**
@@ -74,7 +76,7 @@ function capturedPiece(before, after, moverColor) {
  * @param {object[]} moves - moves rows for the game
  */
 function buildReplayFrames(game, moves) {
-	const ordered = [...moves].sort((a, b) => a.move_number - b.move_number);
+	const ordered = [...restoreArchivedMoves(game, moves)].sort((a, b) => a.move_number - b.move_number);
 	const baseMs = Number(game.time_control_seconds) > 0 ? Number(game.time_control_seconds) * 1000 : null;
 	const incrementMs = (Number(game.time_increment_seconds) || 0) * 1000;
 	const clock = baseMs === null ? null : { white: baseMs, black: baseMs };
@@ -183,14 +185,6 @@ function formatTimeControl(game = {}) {
 	return `${base}+${increment}`;
 }
 
-function pgnResult(game = {}) {
-	const winner = game.winner;
-	if (winner === "draw" || game.is_draw === true) return "1/2-1/2";
-	if (winner === "white" || (winner && winner === game.player_white_address)) return "1-0";
-	if (winner === "black" || (winner && winner === game.player_black_address)) return "0-1";
-	return "*";
-}
-
 /** Maps Chesster end reasons onto the PGN standard Termination values. */
 function pgnTermination(game = {}) {
 	if (game.status && game.status !== "finished" && game.status !== "completed") return "unterminated";
@@ -198,15 +192,6 @@ function pgnTermination(game = {}) {
 	if (["time", "timeout", "flag", "flag_fall", "time_forfeit"].includes(reason)) return "time forfeit";
 	if (["disconnect", "abandonment", "abandoned"].includes(reason)) return "abandoned";
 	return "normal";
-}
-
-function pgnDate(value) {
-	const ms = toMs(value);
-	return ms === null ? "????.??.??" : new Date(ms).toISOString().slice(0, 10).replaceAll("-", ".");
-}
-
-function escapeTag(value) {
-	return String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 function isOwnPiece(piece, color) {
@@ -278,19 +263,14 @@ function moveToSan(board, move, after) {
  * @param {string} [options.round] - Round tag override
  */
 function formatPgn(game, moves = [], { ratings = {}, event, round } = {}) {
-	const ordered = [...moves].sort((a, b) => a.move_number - b.move_number);
+	const ordered = [...restoreArchivedMoves(game, moves)].sort((a, b) => a.move_number - b.move_number);
 	const frames = buildReplayFrames(game, ordered);
 	const clockEnabled = Number(game.time_control_seconds) > 0;
-	const result = pgnResult(game);
+	const roster = getSevenTagRoster({ ...game, event: event ?? game.event, round: round ?? game.round });
+	const result = roster.Result;
 
 	const headers = [
-		["Event", event || "Chesster Game"],
-		["Site", "Chesster"],
-		["Date", pgnDate(game.game_started_at || game.created_at)],
-		["Round", round || "-"],
-		["White", game.player_white_address || "?"],
-		["Black", game.player_black_address || "?"],
-		["Result", result],
+		...Object.entries(roster),
 		["WhiteElo", Number.isFinite(ratings.white) ? ratings.white : "?"],
 		["BlackElo", Number.isFinite(ratings.black) ? ratings.black : "?"],
 		["TimeControl", formatTimeControl(game)],
@@ -330,7 +310,7 @@ function formatPgn(game, moves = [], { ratings = {}, event, round } = {}) {
 	});
 	tokens.push(result);
 
-	const tagText = headers.map(([name, value]) => `[${name} "${escapeTag(value)}"]`).join("\n");
+	const tagText = headers.map(([name, value]) => `[${name} "${escapePgnTag(value)}"]`).join("\n");
 	return `${tagText}\n\n${tokens.join(" ")}\n`;
 }
 
@@ -398,8 +378,10 @@ async function generatePgn(gameId, db = require("../config/supabase")) {
 		.order("move_number", { ascending: true });
 	if (movesError) throw movesError;
 
+	const retainedMoves = restoreArchivedMoves(game, moves || []);
+	if (game.moves_archived_at && typeof game.pgn === "string" && game.pgn) return game.pgn;
 	const ratings = await fetchPlayerRatings(game, db);
-	return formatPgn(game, moves || [], { ratings });
+	return formatPgn(game, retainedMoves, { ratings });
 }
 
 /** Build a multi-game PGN for completed tournament bracket games. */
@@ -433,7 +415,7 @@ async function generateTournamentPgnArchive(tournamentId, db = require("../confi
 		if (movesError) throw movesError;
 
 		const result = game.winner === "white" ? "1-0" : game.winner === "black" ? "0-1" : game.winner === "draw" ? "1/2-1/2" : "*";
-		games.push(chessEngine.generateRichPgn(moves || [], {
+		games.push(chessEngine.generateRichPgn(restoreArchivedMoves(game, moves || []), {
 			event: `Tournament #${tournamentId}`,
 			round: `${match.round}.${match.match_number}`,
 			white: game.player_white_address || match.player_white || match.player_one || "?",
