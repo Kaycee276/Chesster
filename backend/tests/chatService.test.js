@@ -3,6 +3,17 @@ const { Server } = require('socket.io');
 const { io: Client } = require('socket.io-client');
 const {
   moderateMessage,
+  filterProfanity,
+  truncateRepeatedChars,
+  sanitizeChatMessage,
+  checkDuplicateSpam,
+  processChatMessage,
+  clearDuplicateSpam,
+  resetDuplicateSpam,
+  duplicateSpamBuckets,
+  DUPLICATE_SPAM_MAX,
+  DUPLICATE_SPAM_WINDOW_MS,
+  CHAT_SPAM_DETECTED,
   CHAT_RATE_LIMIT_MAX,
   CHAT_RATE_LIMIT_WINDOW_MS,
   CHAT_RATE_LIMIT_EVENT,
@@ -147,6 +158,145 @@ describe('chat rate limiter', () => {
       client.disconnect();
       await disconnected;
       expect(chatRateBuckets.has(socketId)).toBe(false);
+    });
+  });
+});
+
+describe('profanity filter, character truncation, and duplicate spam limiter', () => {
+  const T0 = 2_000_000;
+
+  afterEach(() => {
+    resetDuplicateSpam();
+    delete process.env.CHAT_BLOCKED_TERMS;
+  });
+
+  describe('filterProfanity', () => {
+    it('masks recognized profane words with asterisks of equal length case-insensitively', () => {
+      expect(filterProfanity('What the fuck is this SHIT?')).toBe('What the **** is this ****?');
+      expect(filterProfanity('You bastard and asshole')).toBe('You ******* and *******');
+    });
+
+    it('preserves benign words containing blocked substrings', () => {
+      expect(filterProfanity('classic pass button document')).toBe('classic pass button document');
+    });
+
+    it('respects custom CHAT_BLOCKED_TERMS environment variable', () => {
+      process.env.CHAT_BLOCKED_TERMS = 'badword, explicitword';
+      expect(filterProfanity('This badword and EXPLICITWORD should be masked')).toBe(
+        'This ******* and ************ should be masked'
+      );
+    });
+
+    it('returns empty string for null, undefined, or non-string inputs', () => {
+      expect(filterProfanity('')).toBe('');
+      expect(filterProfanity(null)).toBe('');
+      expect(filterProfanity(undefined)).toBe('');
+      expect(filterProfanity(12345)).toBe('');
+    });
+  });
+
+  describe('truncateRepeatedChars', () => {
+    it('collapses sequences of 4 or more identical characters down to 2', () => {
+      expect(truncateRepeatedChars('noooooooo!!!!!!')).toBe('noo!!');
+      expect(truncateRepeatedChars('aaaaaaa')).toBe('aa');
+      expect(truncateRepeatedChars('gg    well    played')).toBe('gg  well  played');
+    });
+
+    it('leaves sequences of 3 or fewer identical characters unchanged', () => {
+      expect(truncateRepeatedChars('nooo!!!')).toBe('nooo!!!');
+      expect(truncateRepeatedChars('good game')).toBe('good game');
+    });
+
+    it('returns empty string for empty or non-string inputs', () => {
+      expect(truncateRepeatedChars('')).toBe('');
+      expect(truncateRepeatedChars(null)).toBe('');
+      expect(truncateRepeatedChars(undefined)).toBe('');
+    });
+  });
+
+  describe('sanitizeChatMessage', () => {
+    it('strips HTML/control chars, truncates repeated chars, masks profanity, and trims', () => {
+      expect(sanitizeChatMessage('  <b>noooooooo</b> fuck!!!!\u0000  ')).toBe('noo ****!!');
+    });
+
+    it('returns empty string for invalid inputs', () => {
+      expect(sanitizeChatMessage(null)).toBe('');
+      expect(sanitizeChatMessage(undefined)).toBe('');
+      expect(sanitizeChatMessage(42)).toBe('');
+    });
+  });
+
+  describe('checkDuplicateSpam', () => {
+    it('uses a default threshold of 3 identical messages per 10s window', () => {
+      expect(DUPLICATE_SPAM_MAX).toBe(3);
+      expect(DUPLICATE_SPAM_WINDOW_MS).toBe(10_000);
+    });
+
+    it('rejects the 3rd identical message within a 10s sliding window', () => {
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 + 1000 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 + 2000 })).toBe(true);
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 + 3000 })).toBe(true);
+    });
+
+    it('detects duplicates case-insensitively and ignores surrounding whitespace', () => {
+      expect(checkDuplicateSpam('user-1', 'Checkmate!', { now: T0 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', '  checkmate!  ', { now: T0 + 500 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', 'CHECKMATE!', { now: T0 + 1000 })).toBe(true);
+    });
+
+    it('allows distinct messages from the same user within the window', () => {
+      expect(checkDuplicateSpam('user-1', 'hello', { now: T0 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', 'good luck', { now: T0 + 1000 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', 'nice move', { now: T0 + 2000 })).toBe(false);
+    });
+
+    it('tracks users independently', () => {
+      expect(checkDuplicateSpam('user-a', 'gg', { now: T0 })).toBe(false);
+      expect(checkDuplicateSpam('user-a', 'gg', { now: T0 + 100 })).toBe(false);
+      expect(checkDuplicateSpam('user-b', 'gg', { now: T0 + 200 })).toBe(false);
+      expect(checkDuplicateSpam('user-a', 'gg', { now: T0 + 300 })).toBe(true);
+    });
+
+    it('allows the same message again after the 10s sliding window expires', () => {
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 + 1000 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 + 9_999 })).toBe(true);
+      // First message at T0 has expired at T0 + 10_000, leaving only 1 in the window.
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 + 10_000 })).toBe(false);
+    });
+
+    it('clears per-user spam state on clearDuplicateSpam', () => {
+      checkDuplicateSpam('user-1', 'gg', { now: T0 });
+      checkDuplicateSpam('user-1', 'gg', { now: T0 + 100 });
+      expect(duplicateSpamBuckets.has('user-1')).toBe(true);
+      expect(clearDuplicateSpam('user-1')).toBe(true);
+      expect(duplicateSpamBuckets.has('user-1')).toBe(false);
+      expect(checkDuplicateSpam('user-1', 'gg', { now: T0 + 200 })).toBe(false);
+    });
+
+    it('returns false for missing userId or empty/non-string messages', () => {
+      expect(checkDuplicateSpam('', 'gg', { now: T0 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', '   ', { now: T0 })).toBe(false);
+      expect(checkDuplicateSpam('user-1', null, { now: T0 })).toBe(false);
+    });
+  });
+
+  describe('processChatMessage', () => {
+    it('returns sanitized message when not duplicate spam', () => {
+      expect(processChatMessage('user-1', 'noooooooo shit!!!!', { now: T0 })).toBe('noo ****!!');
+    });
+
+    it('throws CHAT_SPAM_DETECTED error on 3rd identical message within 10s', () => {
+      expect(processChatMessage('user-1', 'spam', { now: T0 })).toBe('spam');
+      expect(processChatMessage('user-1', 'spam', { now: T0 + 100 })).toBe('spam');
+      try {
+        processChatMessage('user-1', 'spam', { now: T0 + 200 });
+        throw new Error('Expected CHAT_SPAM_DETECTED to be thrown');
+      } catch (err) {
+        expect(err.code).toBe(CHAT_SPAM_DETECTED);
+        expect(err.message).toContain('Duplicate spam detected');
+      }
     });
   });
 });
