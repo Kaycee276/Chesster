@@ -1,5 +1,6 @@
 const express = require("express");
 const client = require("prom-client");
+const redisConfig = require("../config/redis");
 
 const router = express.Router();
 const register = new client.Registry();
@@ -35,6 +36,26 @@ const escrowSettlements = new client.Counter({
   name: "chesster_escrow_settlements_total",
   help: "Escrow settlement attempts",
   labelNames: ["status"],
+  registers: [register],
+});
+const redisPingLatencyMs = new client.Gauge({
+  name: "chesster_redis_ping_latency_ms",
+  help: "Redis PING round-trip latency in milliseconds",
+  registers: [register],
+});
+const redisConnectedClients = new client.Gauge({
+  name: "chesster_redis_connected_clients",
+  help: "Number of connected Redis clients",
+  registers: [register],
+});
+const redisUsedMemoryBytes = new client.Gauge({
+  name: "chesster_redis_used_memory_bytes",
+  help: "Redis used memory in bytes",
+  registers: [register],
+});
+const redisIsConnected = new client.Gauge({
+  name: "chesster_redis_is_connected",
+  help: "Whether Redis is currently connected (1 = connected, 0 = disconnected)",
   registers: [register],
 });
 
@@ -155,7 +176,37 @@ function markSpectatorDisconnected() {
   connectedSpectatorsGauge.set(spectatorCount);
 }
 
+async function collectRedisMetrics(redisClient) {
+  try {
+    const info = await redisConfig.getRedisHealthInfo(redisClient);
+    if (info && info.connected) {
+      redisIsConnected.set(1);
+      redisPingLatencyMs.set(typeof info.pingLatencyMs === "number" ? info.pingLatencyMs : 0);
+      redisConnectedClients.set(typeof info.connectedClients === "number" ? info.connectedClients : 0);
+      redisUsedMemoryBytes.set(typeof info.usedMemoryBytes === "number" ? info.usedMemoryBytes : 0);
+    } else {
+      redisIsConnected.set(0);
+      redisPingLatencyMs.set(0);
+      redisConnectedClients.set(0);
+      redisUsedMemoryBytes.set(0);
+    }
+    return info;
+  } catch (_) {
+    redisIsConnected.set(0);
+    redisPingLatencyMs.set(0);
+    redisConnectedClients.set(0);
+    redisUsedMemoryBytes.set(0);
+    return {
+      connected: false,
+      pingLatencyMs: null,
+      connectedClients: null,
+      usedMemoryBytes: null,
+    };
+  }
+}
+
 router.get("/metrics", async (req, res) => {
+  await collectRedisMetrics();
   res.set("Content-Type", register.contentType);
   res.end(await register.metrics());
 });
@@ -166,11 +217,16 @@ router.activeGames = activeGames;
 router.activeTournaments = activeTournaments;
 router.moveLatency = moveLatency;
 router.escrowSettlements = escrowSettlements;
+router.redisPingLatencyMs = redisPingLatencyMs;
+router.redisConnectedClients = redisConnectedClients;
+router.redisUsedMemoryBytes = redisUsedMemoryBytes;
+router.redisIsConnected = redisIsConnected;
 router.setConnectedClients = setConnectedClients;
 router.markGameConnected = markGameConnected;
 router.markGameDisconnected = markGameDisconnected;
 router.observeMoveLatency = observeMoveLatency;
 router.recordEscrowSettlement = recordEscrowSettlement;
+router.collectRedisMetrics = collectRedisMetrics;
 
 // Issue #659 exports
 router.matchmakingWaitHistogram = matchmakingWaitHistogram;

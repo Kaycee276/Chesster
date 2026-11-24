@@ -46,6 +46,13 @@ const TIMING_HOMOGENEITY_FLAG = "TIMING_HOMOGENEITY_FLAG";
 const MIN_MOVES_FOR_ZSCORE = 15;
 const Z_SCORE_THRESHOLD = 1.0;
 const STD_DEV_THRESHOLD_MS = 400;
+// FIDE Centipawn Loss (ACPL) distribution profiling (Issue #744).
+const FIDE_OPENING_BOOK_PLIES = 8;
+const FIDE_MIN_NON_BOOK_PLIES = 20;
+const FIDE_MIN_SAMPLE_PLIES = 15;
+const FIDE_ACPL_THRESHOLD = 12;
+const FIDE_TOP1_MATCH_RATE_THRESHOLD = 0.90;
+const ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY = "SUSPICIOUS_ENGINE_ACCURACY";
 
 function mean(values) {
 	return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -442,6 +449,117 @@ function summarizeCentipawnLoss(losses) {
 	};
 }
 
+function extractMoveCentipawnLoss(move) {
+	if (!move || typeof move !== "object") return null;
+	const best = toFiniteNumber(move.bestEval ?? move.bestScore);
+	const played = toFiniteNumber(move.playedEval ?? move.playedScore);
+	if (best !== null && played !== null) {
+		return Math.max(0, best - played);
+	}
+	const directLoss = toFiniteNumber(move.centipawnLoss);
+	return directLoss !== null ? Math.max(0, directLoss) : null;
+}
+
+function filterValidACPLMoves(moves = [], openingBookPlies = FIDE_OPENING_BOOK_PLIES) {
+	if (!Array.isArray(moves)) return [];
+	const valid = [];
+	for (const move of moves) {
+		if (!move || typeof move !== "object") continue;
+		const legalMoveCount = toFiniteNumber(move.legalMoveCount);
+		const isForced = move.isForced === true || (legalMoveCount !== null && legalMoveCount <= 1);
+		if (isForced) continue;
+
+		const ply = toFiniteNumber(move.ply);
+		const isBook = move.isBook === true || (ply !== null && ply <= openingBookPlies);
+		if (isBook) continue;
+
+		const cpl = extractMoveCentipawnLoss(move);
+		if (cpl === null) continue;
+
+		valid.push({
+			cpl,
+			isTop1: move.isTop1 === true || move.matchesTopMove === true,
+		});
+	}
+	return valid;
+}
+
+/**
+ * Compute mean Average Centipawn Loss (ACPL) over valid non-book, non-forced plies.
+ *
+ * @param {Array<{
+ *   bestEval?: number,
+ *   playedEval?: number,
+ *   bestScore?: number,
+ *   playedScore?: number,
+ *   centipawnLoss?: number,
+ *   isForced?: boolean,
+ *   isBook?: boolean,
+ *   ply?: number,
+ *   legalMoveCount?: number,
+ *   isTop1?: boolean,
+ *   matchesTopMove?: boolean
+ * }>} moves
+ * @returns {number|null}
+ */
+function calculateACPL(moves = []) {
+	const validPlies = filterValidACPLMoves(moves, FIDE_OPENING_BOOK_PLIES);
+	if (validPlies.length === 0) return null;
+	return Number(mean(validPlies.map((entry) => entry.cpl)).toFixed(4));
+}
+
+/**
+ * Profile FIDE Centipawn Loss (ACPL) distribution for engine-level accuracy detection (Issue #744).
+ *
+ * @param {Array<object>} evaluations
+ * @param {object} [options]
+ * @returns {{
+ *   acpl: number|null,
+ *   stdDev: number|null,
+ *   top1MatchRate: number|null,
+ *   sampleSize: number,
+ *   flagged: boolean,
+ *   flagType: string|null
+ * }}
+ */
+function profileACPLDistribution(evaluations = [], options = {}) {
+	const openingBookPlies = options.openingBookPlies ?? FIDE_OPENING_BOOK_PLIES;
+	const minSampleSize = options.minSampleSize ?? FIDE_MIN_SAMPLE_PLIES;
+	const minNonBookPlies = options.minNonBookPlies ?? FIDE_MIN_NON_BOOK_PLIES;
+	const acplThreshold = options.acplThreshold ?? FIDE_ACPL_THRESHOLD;
+	const top1MatchRateThreshold = options.top1MatchRateThreshold ?? FIDE_TOP1_MATCH_RATE_THRESHOLD;
+
+	const validPlies = filterValidACPLMoves(evaluations, openingBookPlies);
+	if (validPlies.length < minSampleSize) {
+		return {
+			acpl: null,
+			stdDev: null,
+			top1MatchRate: null,
+			sampleSize: validPlies.length,
+			flagged: false,
+			flagType: null,
+		};
+	}
+
+	const losses = validPlies.map((entry) => entry.cpl);
+	const acpl = Number(mean(losses).toFixed(4));
+	const stdDev = Number(standardDeviation(losses).toFixed(4));
+	const top1Matches = validPlies.filter((entry) => entry.isTop1).length;
+	const top1MatchRate = Number((top1Matches / validPlies.length).toFixed(4));
+	const flagged = acpl < acplThreshold
+		&& top1MatchRate > top1MatchRateThreshold
+		&& validPlies.length >= minNonBookPlies;
+
+	return {
+		acpl,
+		stdDev,
+		top1MatchRate,
+		sampleSize: validPlies.length,
+		flagged,
+		flagType: flagged ? ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY : null,
+	};
+}
+
 function computeWindowedCentipawnLoss(evaluations, windowSize = ACPL_WINDOW_SIZE) {
 	if (!Number.isInteger(windowSize) || windowSize < 1) return [];
 	const windows = [];
@@ -730,6 +848,32 @@ class AntiCheatService {
 			reasons.push(`${flag.burstCount} instant (under ${TACTICAL_BURST_MAX_MS}ms) engine-top replies to complex tactical positions`);
 		}
 
+		const acplInputs = engineResults.map((result, index) => {
+			if (!result) return null;
+			const entry = telemetry[index];
+			const eventData = entry?.event_data;
+			const ply = toFiniteNumber(result.ply ?? eventData?.ply ?? eventData?.moveNumber);
+			const legalMoveCount = toFiniteNumber(result.legalMoveCount ?? eventData?.legalMoveCount);
+			return {
+				...result,
+				ply,
+				legalMoveCount,
+				isForced: result.isForced ?? (legalMoveCount !== null && legalMoveCount <= 1),
+				isBook: result.isBook ?? (ply !== null && ply <= FIDE_OPENING_BOOK_PLIES),
+			};
+		});
+		const acplProfile = profileACPLDistribution(acplInputs);
+		if (acplProfile.flagged) {
+			antiCheatFlags.push({
+				type: ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY,
+				acpl: acplProfile.acpl,
+				stdDev: acplProfile.stdDev,
+				top1MatchRate: acplProfile.top1MatchRate,
+				sampleSize: acplProfile.sampleSize,
+			});
+			reasons.push("suspicious engine-level accuracy (FIDE ACPL < 12 with > 90% top-1 move match rate)");
+		}
+
 		return {
 			color,
 			playerAddress,
@@ -740,6 +884,7 @@ class AntiCheatService {
 			engineCorrelation: engineCorrelation == null ? null : Number(engineCorrelation.toFixed(4)),
 			engineMatchRate: engineCorrelation == null ? null : Number(engineCorrelation.toFixed(4)),
 			centipawnLoss: summarizeCentipawnLoss(centipawnLosses),
+			acplProfile,
 			evaluationWindows,
 			rating: hasRating ? Number(rating) : null,
 			timeVarianceEntropyScore: moveTiming.timeVarianceEntropyScore,
@@ -979,3 +1124,11 @@ module.exports.TIMING_HOMOGENEITY_FLAG = TIMING_HOMOGENEITY_FLAG;
 module.exports.MIN_MOVES_FOR_ZSCORE = MIN_MOVES_FOR_ZSCORE;
 module.exports.Z_SCORE_THRESHOLD = Z_SCORE_THRESHOLD;
 module.exports.STD_DEV_THRESHOLD_MS = STD_DEV_THRESHOLD_MS;
+module.exports.calculateACPL = calculateACPL;
+module.exports.profileACPLDistribution = profileACPLDistribution;
+module.exports.ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY = ANTI_CHEAT_FLAG_SUSPICIOUS_ENGINE_ACCURACY;
+module.exports.FIDE_OPENING_BOOK_PLIES = FIDE_OPENING_BOOK_PLIES;
+module.exports.FIDE_MIN_NON_BOOK_PLIES = FIDE_MIN_NON_BOOK_PLIES;
+module.exports.FIDE_MIN_SAMPLE_PLIES = FIDE_MIN_SAMPLE_PLIES;
+module.exports.FIDE_ACPL_THRESHOLD = FIDE_ACPL_THRESHOLD;
+module.exports.FIDE_TOP1_MATCH_RATE_THRESHOLD = FIDE_TOP1_MATCH_RATE_THRESHOLD;

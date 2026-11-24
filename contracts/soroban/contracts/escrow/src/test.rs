@@ -10826,4 +10826,174 @@ fn test_get_player_matches_clamps_limit_to_max_page_size() {
     assert_eq!(tail.len(), 15);
     assert_eq!(tail.get(0), Some(51u64));
     assert_eq!(tail.get(14), Some(65u64));
+
+#[test]
+fn test_player_tier_calculate_discounted_fee_bps() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000;
+    });
+
+    // No tier set -> baseline
+    assert_eq!(client.get_player_tier(&player), None);
+    assert_eq!(client.calculate_discounted_fee_bps(&player, &500), 500);
+
+    // Standard -> 0% discount (500 bps)
+    client.set_player_tier(&coordinator, &player, &TierLevel::Standard, &2_000);
+    assert_eq!(
+        client.get_player_tier(&player),
+        Some(PlayerTierInfo {
+            tier: TierLevel::Standard,
+            expires_at: 2_000,
+        })
+    );
+    assert_eq!(client.calculate_discounted_fee_bps(&player, &500), 500);
+
+    // Bronze -> 10% discount (450 bps)
+    client.set_player_tier(&coordinator, &player, &TierLevel::Bronze, &2_000);
+    assert_eq!(client.calculate_discounted_fee_bps(&player, &500), 450);
+
+    // Silver -> 25% discount (375 bps)
+    client.set_player_tier(&coordinator, &player, &TierLevel::Silver, &2_000);
+    assert_eq!(client.calculate_discounted_fee_bps(&player, &500), 375);
+
+    // Gold -> 50% discount (250 bps)
+    client.set_player_tier(&coordinator, &player, &TierLevel::Gold, &2_000);
+    assert_eq!(client.calculate_discounted_fee_bps(&player, &500), 250);
+
+    // At exact expiration timestamp (<= expires_at) -> still active
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2_000;
+    });
+    assert_eq!(client.calculate_discounted_fee_bps(&player, &500), 250);
+
+    // After expiration (> expires_at) -> falls back to baseline
+    env.ledger().with_mut(|li| {
+        li.timestamp = 2_001;
+    });
+    assert_eq!(client.calculate_discounted_fee_bps(&player, &500), 500);
+}
+
+#[test]
+fn test_player_tier_fee_discounts_in_resolve_match() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, token_admin_client) = create_token_contract(&env, &token_admin);
+    token_admin_client.mint(&player1, &100_000);
+    token_admin_client.mint(&player2, &100_000);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &400); // 4% base fee (400 bps)
+    client.add_whitelisted_token(&token.address);
+
+    approve(&env, &token, &player1, &contract_id, 100_000);
+    approve(&env, &token, &player2, &contract_id, 100_000);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000;
+    });
+
+    // Each match: wager = 5_000 each -> total_staked = 10_000.
+    // Standard (400 bps): fee = 400
+    // Bronze (360 bps): fee = 360
+    // Silver (300 bps): fee = 300
+    // Gold (200 bps): fee = 200
+    let cases = [
+        ("TIER_STD", TierLevel::Standard, 400i128),
+        ("TIER_BRZ", TierLevel::Bronze, 360i128),
+        ("TIER_SLV", TierLevel::Silver, 300i128),
+        ("TIER_GLD", TierLevel::Gold, 200i128),
+    ];
+
+    let mut expected_coordinator_balance = 0i128;
+    for (code, tier, expected_fee) in cases {
+        client.set_player_tier(&coordinator, &player1, &tier, &5_000);
+        let game_code = String::from_str(&env, code);
+        client.create_match(&game_code, &player1, &token.address, &5_000);
+        client.join_match(&game_code, &player2);
+        client.resolve_match(&game_code, &Some(player1.clone()));
+
+        expected_coordinator_balance += expected_fee;
+        assert_eq!(token.balance(&coordinator), expected_coordinator_balance);
+    }
+
+    // Expired Gold tier falls back to full 400 bps fee (400)
+    env.ledger().with_mut(|li| {
+        li.timestamp = 5_001;
+    });
+    let expired_code = String::from_str(&env, "TIER_EXP");
+    client.create_match(&expired_code, &player1, &token.address, &5_000);
+    client.join_match(&expired_code, &player2);
+    client.resolve_match(&expired_code, &Some(player1.clone()));
+
+    expected_coordinator_balance += 400;
+    assert_eq!(token.balance(&coordinator), expected_coordinator_balance);
+}
+
+#[test]
+fn test_set_player_tier_designated_operator() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let operator = Address::generate(&env);
+    let player = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+    assert_eq!(client.get_tier_operator(), None);
+
+    client.set_tier_operator(&operator);
+    assert_eq!(client.get_tier_operator(), Some(operator.clone()));
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_000;
+    });
+
+    client.set_player_tier(&operator, &player, &TierLevel::Gold, &10_000);
+    assert_eq!(
+        client.get_player_tier(&player),
+        Some(PlayerTierInfo {
+            tier: TierLevel::Gold,
+            expires_at: 10_000,
+        })
+    );
+    assert_eq!(client.calculate_discounted_fee_bps(&player, &500), 250);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_set_player_tier_rejects_unauthorized_operator() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let player = Address::generate(&env);
+
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+
+    client.init(&coordinator, &500);
+
+    client.set_player_tier(&outsider, &player, &TierLevel::Gold, &10_000);
 }

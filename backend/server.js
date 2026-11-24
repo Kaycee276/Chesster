@@ -27,6 +27,7 @@ const cronService = require("./services/cronService");
 const eventConsumer = require("./workers/eventConsumer");
 const supabase = require("./config/supabase");
 const logger = require("./utils/logger");
+const { correlationMiddleware } = require("./middleware/correlationId");
 const { errorHandler, installGlobalHandlers } = require("./middleware/errorHandler");
 const { enforceHttps, enforceSecureSocket } = require("./middleware/enforceHttps");
 const gameModel = require("./models/gameModel");
@@ -127,7 +128,8 @@ const { createCspMiddleware } = require("./middleware/securityHeaders");
 app.use(createCspMiddleware());
 
 // Apply structured logging middleware
-app.use(logger.requestMiddleware());
+app.use(correlationMiddleware);
+    app.use(logger.requestMiddleware());
 
 app.use(
   cors({

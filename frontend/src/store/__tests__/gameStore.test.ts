@@ -27,6 +27,8 @@ vi.mock("../../api/socket", () => ({
 		sendChatMessage: vi.fn(),
 		onRematchRequested: vi.fn(),
 		offRematchRequested: vi.fn(),
+		onSpectatorCountUpdate: vi.fn(),
+		offSpectatorCountUpdate: vi.fn(),
 	},
 }));
 

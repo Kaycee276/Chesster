@@ -98,6 +98,10 @@ interface GameStore {
   chatMessages: ChatMessage[];
   unreadCount: number;
   chatOpen: boolean;
+  // Spectator count and list
+  spectatorCount: number;
+  spectatorList: Array<{ address: string; username?: string | null }>;
+  setSpectatorData: (count: number, list?: Array<{ address: string; username?: string | null }>) => void;
   isOpponentMuted: boolean;
   toggleOpponentMute: () => void;
   // Blindfold mode for training calculation skills
@@ -202,6 +206,8 @@ export const useGameStore = create<GameStore>()(
       chatMessages: [],
       unreadCount: 0,
       chatOpen: false,
+      spectatorCount: 0,
+      spectatorList: [],
       isOpponentMuted: false,
       // Network state (Issue #401)
       pingMs: 0,
@@ -231,6 +237,8 @@ export const useGameStore = create<GameStore>()(
         set((s) => ({ isStreamerMode: !s.isStreamerMode })),
       toggleOpponentMute: () =>
         set((s) => ({ isOpponentMuted: !s.isOpponentMuted })),
+      setSpectatorData: (count, list) =>
+        set({ spectatorCount: Math.max(0, count), spectatorList: Array.isArray(list) ? list : [] }),
       toggleHaptics: () =>
         set((s) => ({ isHapticsEnabled: !s.isHapticsEnabled })),
       toggleMoveConfirmation: () =>
@@ -304,6 +312,12 @@ export const useGameStore = create<GameStore>()(
           socketService.onChatMessage((msg) => {
             get().addChatMessage(msg);
           });
+          socketService.onSpectatorCountUpdate?.((event) => {
+            if (typeof event?.count === "number" && event.count >= 0) {
+              const list = Array.isArray(event.list) ? event.list : [];
+              get().setSpectatorData(event.count, list);
+            }
+          });
 
           await get().loadChatHistory();
 
@@ -361,6 +375,12 @@ export const useGameStore = create<GameStore>()(
           });
           socketService.onChatMessage((msg) => {
             get().addChatMessage(msg);
+          });
+          socketService.onSpectatorCountUpdate?.((event) => {
+            if (typeof event?.count === "number" && event.count >= 0) {
+              const list = Array.isArray(event.list) ? event.list : [];
+              get().setSpectatorData(event.count, list);
+            }
           });
 
           await get().loadChatHistory();
@@ -609,6 +629,7 @@ export const useGameStore = create<GameStore>()(
           socketService.offChatMessage();
           socketService.disconnect();
         }
+        socketService.offSpectatorCountUpdate?.();
         set({
           gameCode: null,
           playerColor: null,
@@ -632,6 +653,8 @@ export const useGameStore = create<GameStore>()(
           unreadCount: 0,
           chatOpen: false,
           isOpponentMuted: false,
+          spectatorCount: 0,
+          spectatorList: [],
         });
       },
 

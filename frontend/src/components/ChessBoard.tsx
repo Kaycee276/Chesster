@@ -66,6 +66,7 @@ import { socketService } from "../api/socket";
 import PromotionModal from "./PromotionModal";
 import ConfirmModal from "./ConfirmModal";
 import GameResultModal from "./GameResultModal";
+import SpectatorListModal from "./SpectatorListModal";
 import TurnTimer from "./TurnTimer";
 import ChatPanel from "./ChatPanel";
 import MoveInputBar from "./MoveInputBar";
@@ -412,6 +413,7 @@ function ChessBoardInner({ onOpenShortcuts }: ChessBoardProps) {
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [showResultModal, setShowResultModal] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"resign" | "leave" | null>(null);
+  const [showSpectatorList, setShowSpectatorList] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(() =>
     typeof soundService?.isEnabled === "function" ? soundService.isEnabled() : true
   );
@@ -435,6 +437,8 @@ function ChessBoardInner({ onOpenShortcuts }: ChessBoardProps) {
   const toggleStreamerMode = useGameStore((s) => s.toggleStreamerMode);
   const isHapticsEnabled = useGameStore((s) => s.isHapticsEnabled);
   const toggleHaptics = useGameStore((s) => s.toggleHaptics);
+  const spectatorCount = useGameStore((s) => s.spectatorCount);
+  const spectatorList = useGameStore((s) => s.spectatorList);
   const isMoveConfirmationEnabled = useGameStore((s) => s.isMoveConfirmationEnabled);
 
   const safeHaptic = (type: "pickup" | "drop" | "error") => {
@@ -1849,6 +1853,17 @@ function ChessBoardInner({ onOpenShortcuts }: ChessBoardProps) {
 
         {/* Right: Quick Controls */}
         <div className="flex items-center gap-1 shrink-0">
+          {/* Spectator count badge */}
+          <button
+            onClick={() => setShowSpectatorList(true)}
+            title={`${spectatorCount} ${spectatorCount === 1 ? "spectator" : "spectators"} watching`}
+            aria-label={`${spectatorCount} ${spectatorCount === 1 ? "spectator" : "spectators"} watching, open list`}
+            className="p-1.5 sm:p-2 rounded-lg text-(--text-tertiary) hover:text-(--text) hover:bg-(--bg-tertiary) transition-colors flex items-center gap-1"
+          >
+            <Eye size={15} />
+            <span className="text-xs font-semibold">{spectatorCount}</span>
+          </button>
+
           {/* Peek button - only show when blindfold mode is active */}
           {(isBlindfoldMode || (blindfoldMode && blindfoldMode !== "none")) && (
             <button
@@ -1939,6 +1954,14 @@ function ChessBoardInner({ onOpenShortcuts }: ChessBoardProps) {
           </button>
         </div>
       </header>
+
+      {/* ── Spectator List Modal ── */}
+      <SpectatorListModal
+        isOpen={showSpectatorList}
+        onClose={() => setShowSpectatorList(false)}
+        spectatorCount={spectatorCount}
+        spectatorList={spectatorList}
+      />
 
       {/* ── Main Workspace Area ── */}
       <div className="flex-1 min-h-0 min-w-0 flex flex-col lg:flex-row gap-2 lg:gap-3 overflow-hidden">
