@@ -226,10 +226,11 @@ class GameController {
 			// Annotated export with per-move [%clk] / [%eval] comments (Issue #463).
 			const ratings = await replayService.fetchPlayerRatings(game);
 			const pgn = pgnService.generateGamePGN(game, moves, { ratings });
-			res.set({
-				"Content-Type": "application/x-chess-pgn",
-				"Content-Disposition": `attachment; filename=game-${game.game_code || game.id}.pgn`,
-			});
+			const headers = pgnService.getPgnDownloadHeaders ? pgnService.getPgnDownloadHeaders(game) : {
+				"Content-Type": "application/x-chess-pgn; charset=utf-8",
+				"Content-Disposition": `attachment; filename="${pgnService.generatePgnFilename ? pgnService.generatePgnFilename(game) : `game-${game.game_code || game.id}.pgn`}"`,
+			};
+			res.set(headers);
 
 			const acceptEncoding = req.headers['accept-encoding'] || '';
 			if (acceptEncoding.includes('gzip')) {

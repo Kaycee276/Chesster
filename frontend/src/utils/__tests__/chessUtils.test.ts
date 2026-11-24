@@ -3,6 +3,7 @@ import {
 	buildFen,
 	parseFen,
 	validateFenPosition,
+	calculateMaterial,
 	INITIAL_BOARD,
 } from "../chessUtils";
 
@@ -89,5 +90,25 @@ describe("validateFenPosition", () => {
 		const result = validateFenPosition("not-a-fen");
 		expect(result.valid).toBe(false);
 		expect(result.error).toBeTruthy();
+	});
+});
+
+describe("calculateMaterial / getCapturedPiecesFromFen (Issue #792)", () => {
+	it("returns zero captures and zero advantage for starting position", () => {
+		const result = calculateMaterial(START_FEN);
+		expect(result.whiteCaptured).toEqual({ p: 0, n: 0, b: 0, r: 0, q: 0 });
+		expect(result.blackCaptured).toEqual({ p: 0, n: 0, b: 0, r: 0, q: 0 });
+		expect(result.materialAdvantage).toBe(0);
+	});
+
+	it("accurately detects captured pieces and material advantage", () => {
+		// Black is missing 1 pawn and 1 queen; White is missing 1 knight
+		const fen = "rnb1kbnr/pppp1ppp/8/8/8/8/PPPPPPPP/R1BQKBNR w KQkq - 0 1";
+		const result = calculateMaterial(fen);
+		expect(result.whiteCaptured.p).toBe(1);
+		expect(result.whiteCaptured.q).toBe(1);
+		expect(result.blackCaptured.n).toBe(1);
+		// White captured: 1 (p) + 9 (q) = 10. Black captured: 3 (n) = 3. Diff = 10 - 3 = +7
+		expect(result.materialAdvantage).toBe(7);
 	});
 });
