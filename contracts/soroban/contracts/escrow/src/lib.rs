@@ -59,6 +59,8 @@ pub const MAX_SIDE_BET_FEE_BPS: u32 = 500;
 pub const BPS_DENOMINATOR: i128 = 10_000;
 /// Mutual cancellation proposals expire after fifteen minutes.
 pub const CANCELLATION_PROPOSAL_TIMEOUT_SECS: u64 = 900;
+/// Maximum number of match IDs returned per page by `get_player_matches` (Issue #736).
+pub const MAX_PAGE_SIZE: u32 = 50;
 
 /// Errors returned by the Chesster Escrow smart contract.
 #[contracterror]
@@ -209,12 +211,14 @@ pub enum EscrowErrorExt {
     InvalidPayoutDistribution = 65,
     /// A payout for this tournament id has already been executed.
     TournamentPayoutAlreadyResolved = 66,
+    /// Requested token recovery amount exceeds unencumbered surplus balance (Issue #738).
+    InsufficientRecoverableBalance = 67,
     /// A cooldown unpause cannot be confirmed before its cooldown has elapsed (Issue #699).
-    CooldownActive = 67,
+    CooldownActive = 68,
     /// No cooldown unpause request is pending for this contract (Issue #699).
-    NoPendingUnpause = 68,
+    NoPendingUnpause = 69,
     /// The creator-cancel window for an unjoined match has not elapsed yet (Issue #666).
-    MatchNotExpired = 69,
+    MatchNotExpired = 70,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -1197,6 +1201,10 @@ pub enum DataKey {
     ArbiterThreshold,
     /// Pending dispute proposal for a match (Issue #681).
     Dispute(String),
+    /// Total locked wager balance per token address (Issue #738).
+    TotalLockedBalance(Address),
+    /// Historical match IDs (nonces) associated with a player address (Issue #736).
+    PlayerMatches(Address),
 }
 
 /// Aggregated operational metrics for off-chain indexing and monitoring (Issue #288).
@@ -1600,9 +1608,9 @@ impl ChessterEscrow {
         // The full balance (including any locked escrow) has moved to the secure
         // treasury vault, so the on-chain locked accounting no longer reflects
         // funds held by this contract. Clear it for the drained token.
-        env.storage()
-            .instance()
-            .set(&Self::locked_key(&env, &token), &0i128);
+        let locked_key = Self::locked_key(&token);
+        env.storage().persistent().set(&locked_key, &0i128);
+        Self::bump_entry_ttl(&env, &locked_key);
 
         // Consume the migration authorization so a single approval cannot be
         // replayed for a second drain.
@@ -2901,31 +2909,45 @@ impl ChessterEscrow {
     // Balance Invariant Helpers (Issue #42)
     // -----------------------------------------------------------------------
 
-    fn locked_key(env: &Env, token: &Address) -> (Symbol, Address) {
-        (Symbol::new(env, "lk_tok"), token.clone())
+    fn locked_key(token: &Address) -> DataKey {
+        DataKey::TotalLockedBalance(token.clone())
     }
 
     fn add_locked(env: &Env, token: &Address, amount: i128) {
-        let key = Self::locked_key(env, token);
-        let cur = env.storage().instance().get::<_, i128>(&key).unwrap_or(0);
+        let key = Self::locked_key(token);
+        let cur = env.storage().persistent().get::<_, i128>(&key).unwrap_or(0);
         env.storage()
-            .instance()
+            .persistent()
             .set(&key, &checked_add(env, cur, amount));
+        Self::bump_entry_ttl(env, &key);
     }
 
     fn sub_locked(env: &Env, token: &Address, amount: i128) {
-        let key = Self::locked_key(env, token);
-        let cur = env.storage().instance().get::<_, i128>(&key).unwrap_or(0);
+        let key = Self::locked_key(token);
+        let cur = env.storage().persistent().get::<_, i128>(&key).unwrap_or(0);
         env.storage()
-            .instance()
+            .persistent()
             .set(&key, &checked_sub(env, cur, amount));
+        Self::bump_entry_ttl(env, &key);
     }
 
     fn get_locked(env: &Env, token: &Address) -> i128 {
         env.storage()
-            .instance()
-            .get(&Self::locked_key(env, token))
+            .persistent()
+            .get(&Self::locked_key(token))
             .unwrap_or(0)
+    }
+
+    fn record_player_match(env: &Env, player: &Address, match_id: u64) {
+        let key = DataKey::PlayerMatches(player.clone());
+        let mut history: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        history.push_back(match_id);
+        env.storage().persistent().set(&key, &history);
+        Self::bump_entry_ttl(env, &key);
     }
 
     /// Asserts the contract token balance covers all currently escrowed (locked)
@@ -3698,6 +3720,7 @@ impl ChessterEscrow {
             .persistent()
             .set(&player1_key, &updated_matches);
         Self::bump_entry_ttl(&env, &player1_key);
+        Self::record_player_match(&env, &player1, next_nonce);
         Self::bump_instance_ttl(&env);
 
         emit_match_event(
@@ -3814,6 +3837,7 @@ impl ChessterEscrow {
             .persistent()
             .set(&player2_key, &updated_matches);
         Self::bump_entry_ttl(&env, &player2_key);
+        Self::record_player_match(&env, &player2, m.nonce);
 
         emit_match_event(
             &env,
@@ -4758,6 +4782,10 @@ impl ChessterEscrow {
                     .persistent()
                     .set(&fee_key, &checked_add(env, total, admin_fee));
                 Self::bump_entry_ttl(env, &fee_key);
+                env.events().publish(
+                    (symbol_short!("escrow"), symbol_short!("fee_paid")),
+                    (m.nonce, m.token.clone(), admin_fee, fee_recipient),
+                );
             }
         } else {
             token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
@@ -5710,8 +5738,16 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::Unauthorized);
         }
 
-        let t = if threshold == 0 { STORAGE_TTL_THRESHOLD } else { threshold };
-        let e = if extend_to == 0 { STORAGE_TTL_EXTENDED } else { extend_to };
+        let t = if threshold == 0 {
+            STORAGE_TTL_THRESHOLD
+        } else {
+            threshold
+        };
+        let e = if extend_to == 0 {
+            STORAGE_TTL_EXTENDED
+        } else {
+            extend_to
+        };
 
         env.storage().instance().extend_ttl(t, e);
     }
@@ -5938,12 +5974,7 @@ impl ChessterEscrow {
     /// * `admin` - Admin address authorization.
     /// * `arbiters` - Vector of arbiter addresses.
     /// * `threshold` - Required number of distinct approvals (M in M-of-N).
-    pub fn set_arbiters(
-        env: Env,
-        admin: Address,
-        arbiters: Vec<Address>,
-        threshold: u32,
-    ) {
+    pub fn set_arbiters(env: Env, admin: Address, arbiters: Vec<Address>, threshold: u32) {
         admin.require_auth();
         let _guard = ReentrancyGuard::new(&env);
 
@@ -5951,9 +5982,7 @@ impl ChessterEscrow {
             panic_with_error!(&env, EscrowError::InvalidTournament);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Arbiters, &arbiters);
+        env.storage().instance().set(&DataKey::Arbiters, &arbiters);
         env.storage()
             .instance()
             .set(&DataKey::ArbiterThreshold, &threshold);
@@ -5975,7 +6004,7 @@ impl ChessterEscrow {
         arbiter.require_auth();
         let _guard = ReentrancyGuard::new(&env);
 
-        Self::require_arbiter(&env, &arbiter);
+        let _ = Self::require_arbiter(&env, &arbiter);
 
         let proposal = DisputeProposal {
             match_id: match_id.clone(),
@@ -6003,7 +6032,7 @@ impl ChessterEscrow {
         arbiter.require_auth();
         let _guard = ReentrancyGuard::new(&env);
 
-        Self::require_arbiter(&env, &arbiter);
+        let _ = Self::require_arbiter(&env, &arbiter);
 
         let mut proposal: DisputeProposal = env
             .storage()
@@ -6032,9 +6061,7 @@ impl ChessterEscrow {
                 &mut m,
                 Some(proposal.winner.clone()),
             );
-            env.storage()
-                .instance()
-                .remove(&DataKey::Dispute(match_id));
+            env.storage().instance().remove(&DataKey::Dispute(match_id));
         } else {
             env.storage()
                 .instance()
@@ -6889,6 +6916,65 @@ impl ChessterEscrow {
             Self::bump_entry_ttl(&env, &key);
         }
         record
+    }
+
+    /// Returns a paginated slice of match IDs (nonces) for a player (Issue #736).
+    ///
+    /// Returns an empty vector if the player has no recorded matches or if `offset`
+    /// is greater than or equal to the total number of matches. Page size is clamped
+    /// to `MAX_PAGE_SIZE` (50).
+    pub fn get_player_matches(env: Env, player: Address, offset: u32, limit: u32) -> Vec<u64> {
+        let key = DataKey::PlayerMatches(player);
+        let all_matches: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        let total = all_matches.len();
+        if offset >= total {
+            return Vec::new(&env);
+        }
+        let page_limit = limit.min(MAX_PAGE_SIZE);
+        let end = offset.saturating_add(page_limit).min(total);
+        let mut page = Vec::new(&env);
+        for i in offset..end {
+            page.push_back(all_matches.get(i).unwrap());
+        }
+        page
+    }
+
+    /// Recovers accidentally transferred (non-wager) tokens from the escrow contract
+    /// without ever dipping into locked player wager balances (Issue #738).
+    pub fn recover_stranded_tokens(
+        env: Env,
+        admin: Address,
+        token: Address,
+        recipient: Address,
+        amount: i128,
+    ) {
+        let _guard = ReentrancyGuard::new(&env);
+        admin.require_auth();
+        let current_admin = Self::get_coordinator(env.clone());
+        if admin != current_admin {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+
+        let client = token::Client::new(&env, &token);
+        let current_balance = client.balance(&env.current_contract_address());
+        let locked_balance = Self::get_locked(&env, &token);
+        let available_surplus = current_balance
+            .checked_sub(locked_balance)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
+
+        if amount <= 0 || amount > available_surplus {
+            panic_with_error!(&env, EscrowErrorExt::InsufficientRecoverableBalance);
+        }
+
+        client.transfer(&env.current_contract_address(), &recipient, &amount);
+        env.events().publish(
+            (symbol_short!("escrow"), symbol_short!("recovered")),
+            (token, recipient, amount),
+        );
     }
 }
 

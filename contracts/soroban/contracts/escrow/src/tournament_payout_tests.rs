@@ -121,18 +121,18 @@ fn rejects_distribution_not_summing_to_10000() {
     let f = setup(2, 100, 500);
     // 7000 + 3000 + 500 fee = 10_500
     let over = vec![&f.env, r(&f, 0, 7_000), r(&f, 1, 3_000)];
-    let res = f
-        .client
-        .try_resolve_tournament_payout(&f.coordinator, &1, &f.token.address, &200, &over);
+    let res =
+        f.client
+            .try_resolve_tournament_payout(&f.coordinator, &1, &f.token.address, &200, &over);
     assert_eq!(
         res.err().unwrap().unwrap(),
         EscrowErrorExt::InvalidPayoutDistribution.into()
     );
     // Under-allocated: 5000 + 500 fee
     let under = vec![&f.env, r(&f, 0, 5_000)];
-    let res = f
-        .client
-        .try_resolve_tournament_payout(&f.coordinator, &1, &f.token.address, &200, &under);
+    let res =
+        f.client
+            .try_resolve_tournament_payout(&f.coordinator, &1, &f.token.address, &200, &under);
     assert!(res.is_err());
     assert_eq!(f.token.balance(&f.client.address), 200);
 }
@@ -164,19 +164,26 @@ fn rejects_non_coordinator_caller() {
     let f = setup(2, 100, 500);
     let impostor = Address::generate(&f.env);
     let recipients = vec![&f.env, r(&f, 0, 9_500)];
-    let res = f
-        .client
-        .try_resolve_tournament_payout(&impostor, &1, &f.token.address, &200, &recipients);
-    assert_eq!(res.err().unwrap().unwrap(), EscrowError::Unauthorized.into());
+    let res =
+        f.client
+            .try_resolve_tournament_payout(&impostor, &1, &f.token.address, &200, &recipients);
+    assert_eq!(
+        res.err().unwrap().unwrap(),
+        EscrowError::Unauthorized.into()
+    );
 }
 
 #[test]
 fn rejects_pool_larger_than_escrowed_balance() {
     let f = setup(2, 100, 500);
     let recipients = vec![&f.env, r(&f, 0, 9_500)];
-    let res = f
-        .client
-        .try_resolve_tournament_payout(&f.coordinator, &1, &f.token.address, &201, &recipients);
+    let res = f.client.try_resolve_tournament_payout(
+        &f.coordinator,
+        &1,
+        &f.token.address,
+        &201,
+        &recipients,
+    );
     assert_eq!(
         res.err().unwrap().unwrap(),
         EscrowError::InsufficientFunds.into()
@@ -203,9 +210,13 @@ fn same_tournament_id_cannot_be_paid_twice() {
     let recipients = vec![&f.env, r(&f, 0, 9_500)];
     f.client
         .resolve_tournament_payout(&f.coordinator, &5, &f.token.address, &100, &recipients);
-    let res = f
-        .client
-        .try_resolve_tournament_payout(&f.coordinator, &5, &f.token.address, &100, &recipients);
+    let res = f.client.try_resolve_tournament_payout(
+        &f.coordinator,
+        &5,
+        &f.token.address,
+        &100,
+        &recipients,
+    );
     assert_eq!(
         res.err().unwrap().unwrap(),
         EscrowErrorExt::TournamentPayoutAlreadyResolved.into()
