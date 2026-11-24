@@ -10,6 +10,7 @@ class MockOscillator {
   type: OscillatorType = "sine";
   frequency = {
     value: 0,
+    exponentialRampToValueAtTime: vi.fn(),
     setValueAtTime: vi.fn(function (this: { value: number }, v: number) {
       this.value = v;
     }),
@@ -17,6 +18,7 @@ class MockOscillator {
   connect = vi.fn().mockReturnThis();
   start = vi.fn();
   stop = vi.fn();
+  disconnect = vi.fn();
 }
 
 class MockGain {
@@ -27,6 +29,7 @@ class MockGain {
     exponentialRampToValueAtTime: vi.fn(),
   };
   connect = vi.fn().mockReturnThis();
+  disconnect = vi.fn();
 }
 
 class MockAudioContext {

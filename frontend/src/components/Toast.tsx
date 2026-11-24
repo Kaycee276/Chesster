@@ -28,8 +28,13 @@ const PROGRESS_STYLES: Record<string, string> = {
 function ToastItem({ toast }: { toast: ToastData }) {
 	const removeToast = useToastStore((s) => s.removeToast);
 	const [progress, setProgress] = useState(100);
-	const [isPaused, setIsPaused] = useState(false);
+	const [isHovered, setIsHovered] = useState(false);
+	const [isFocused, setIsFocused] = useState(false);
 	const [isLeaving, setIsLeaving] = useState(false);
+	// Hovering and keyboard focus are tracked separately so moving focus out
+	// of a toast while the pointer still rests on it keeps the countdown
+	// paused (and vice versa).
+	const isPaused = isHovered || isFocused;
 	const remainingRef = useRef(toast.duration ?? 0);
 	const leavingRef = useRef(false);
 	const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -74,8 +79,15 @@ function ToastItem({ toast }: { toast: ToastData }) {
 			} ${TYPE_STYLES[toast.type] ?? TYPE_STYLES.info} ${
 				toast.type === "loading" ? "cursor-default" : "cursor-pointer"
 			}`}
-			onMouseEnter={() => setIsPaused(true)}
-			onMouseLeave={() => setIsPaused(false)}
+			onMouseEnter={() => setIsHovered(true)}
+			onMouseLeave={() => setIsHovered(false)}
+			onFocus={() => setIsFocused(true)}
+			onBlur={(event) => {
+				// Ignore focus moving between controls inside the same toast.
+				if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+					setIsFocused(false);
+				}
+			}}
 			onClick={() => {
 				if (dismissible) dismiss();
 			}}

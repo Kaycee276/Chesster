@@ -72,6 +72,46 @@ describe("Toast (#585)", () => {
 		expect(screen.queryByTestId("toast")).toBeNull();
 	});
 
+	it("pauses on keyboard focus and resumes after focus leaves", () => {
+		render(<Toast />);
+		add("Focus me", "error");
+		const toast = screen.getByTestId("toast");
+		const dismiss = screen.getByLabelText("Dismiss");
+
+		advance(1000);
+		fireEvent.focus(dismiss);
+		const pausedAt = bar(toast);
+		expect(pausedAt).toBe(80);
+		expect(toast.getAttribute("data-paused")).toBe("true");
+
+		advance(10000);
+		expect(bar(toast)).toBe(pausedAt);
+
+		fireEvent.blur(dismiss);
+		advance(1000);
+		expect(bar(toast)).toBe(60);
+	});
+
+	it("stays paused while either hover or focus remains active", () => {
+		render(<Toast />);
+		add("Hover and focus", "info");
+		const toast = screen.getByTestId("toast");
+		const dismiss = screen.getByLabelText("Dismiss");
+
+		fireEvent.focus(dismiss);
+		fireEvent.mouseEnter(toast);
+		fireEvent.mouseLeave(toast);
+		expect(toast.getAttribute("data-paused")).toBe("true");
+
+		advance(10000);
+		expect(bar(toast)).toBe(100);
+
+		fireEvent.blur(dismiss);
+		advance(1000);
+		expect(toast.getAttribute("data-paused")).toBe("false");
+		expect(bar(toast)).toBe(80);
+	});
+
 	it("dismisses immediately when the close button is clicked", () => {
 		render(<Toast />);
 		add("Close me", "error");

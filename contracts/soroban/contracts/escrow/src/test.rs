@@ -3814,6 +3814,90 @@ fn test_timelocked_unpause_workflow() {
 }
 
 #[test]
+fn test_cooldown_unpause_confirms_only_after_cooldown() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.set_pause_guardian(&guardian);
+    client.guardian_pause(&guardian);
+    assert!(client.is_paused());
+
+    env.ledger().set_timestamp(1_000);
+    client.request_cooldown_unpause(&coordinator);
+    assert_eq!(client.get_cooldown_unpause_unlock_time(), Some(1_000 + UNPAUSE_COOLDOWN_SECONDS));
+
+    // One second before the cooldown ends, confirmation is rejected and the contract stays paused.
+    env.ledger()
+        .set_timestamp(1_000 + UNPAUSE_COOLDOWN_SECONDS - 1);
+    assert!(client.try_confirm_cooldown_unpause(&coordinator).is_err());
+    assert!(client.is_paused());
+
+    // Exactly at the unlock time, confirmation restores normal operation.
+    env.ledger().set_timestamp(1_000 + UNPAUSE_COOLDOWN_SECONDS);
+    client.confirm_cooldown_unpause(&coordinator);
+    assert!(!client.is_paused());
+    assert_eq!(client.get_cooldown_unpause_unlock_time(), None);
+}
+
+#[test]
+fn test_cooldown_unpause_can_be_aborted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+    client.set_pause_guardian(&guardian);
+    client.guardian_pause(&guardian);
+
+    env.ledger().set_timestamp(1_000);
+    client.request_cooldown_unpause(&coordinator);
+    client.abort_cooldown_unpause(&coordinator);
+    assert_eq!(client.get_cooldown_unpause_unlock_time(), None);
+
+    // With the request aborted, confirming even after the cooldown has no effect.
+    env.ledger()
+        .set_timestamp(1_000 + UNPAUSE_COOLDOWN_SECONDS + 1);
+    assert!(client.try_confirm_cooldown_unpause(&coordinator).is_err());
+    assert!(client.is_paused());
+
+    // Aborting again with nothing pending is rejected.
+    assert!(client.try_abort_cooldown_unpause(&coordinator).is_err());
+}
+
+#[test]
+fn test_cooldown_unpause_rejects_non_admin_and_unpaused_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let coordinator = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let contract_id = env.register(ChessterEscrow, ());
+    let client = ChessterEscrowClient::new(&env, &contract_id);
+    client.init(&coordinator, &500);
+
+    // A request on a contract that is not paused is rejected.
+    assert!(client.try_request_cooldown_unpause(&coordinator).is_err());
+
+    client.pause();
+    assert!(client.is_paused());
+
+    // Only the coordinator/admin may request, confirm, or abort.
+    assert!(client.try_request_cooldown_unpause(&attacker).is_err());
+    client.request_cooldown_unpause(&coordinator);
+    assert!(client.try_confirm_cooldown_unpause(&attacker).is_err());
+    assert!(client.try_abort_cooldown_unpause(&attacker).is_err());
+    assert!(client.is_paused());
+}
+
+#[test]
 fn test_set_fee_bps_rejects_values_above_100_percent() {
     let env = Env::default();
     env.mock_all_auths();
@@ -10009,6 +10093,77 @@ fn test_cancel_pending_match_emits_match_cancelled_event() {
             reason: Symbol::new(&env, "cancelled"),
         }
     );
+}
+
+#[test]
+fn test_creator_cancel_expired_match_refunds_creator_after_window() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CREATOR_EXP1");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    let balance_after_deposit = s.token.balance(&s.p1);
+    let created_at = s.client.get_match(&gc).created_at;
+
+    env.ledger().set_timestamp(created_at + CREATOR_CANCEL_WINDOW_SECS);
+    s.client.creator_cancel_expired_match(&gc, &s.p1);
+
+    assert_eq!(s.token.balance(&s.p1), balance_after_deposit + 100);
+    assert_eq!(s.client.get_match(&gc).status, MatchStatus::Refunded);
+    let events = collect_cancelled_events(&env, &s.contract_id);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].reason, Symbol::new(&env, "expired"));
+}
+
+#[test]
+fn test_creator_cancel_expired_match_rejects_before_window() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CREATOR_EXP2");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    let created_at = s.client.get_match(&gc).created_at;
+
+    env.ledger()
+        .set_timestamp(created_at + CREATOR_CANCEL_WINDOW_SECS - 1);
+    let res = s.client.try_creator_cancel_expired_match(&gc, &s.p1);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(contract_error(EscrowErrorExt::MatchNotExpired as u32))
+    );
+    assert_eq!(s.client.get_match(&gc).status, MatchStatus::Pending);
+}
+
+#[test]
+fn test_creator_cancel_expired_match_rejects_joined_match() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CREATOR_EXP3");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    s.client.join_match(&gc, &s.p2);
+    let created_at = s.client.get_match(&gc).created_at;
+
+    env.ledger().set_timestamp(created_at + CREATOR_CANCEL_WINDOW_SECS);
+    let res = s.client.try_creator_cancel_expired_match(&gc, &s.p1);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(contract_error(EscrowError::MatchNotPending as u32))
+    );
+}
+
+#[test]
+fn test_creator_cancel_expired_match_rejects_non_creator() {
+    let env = Env::default();
+    let s = setup_cancel_event_test(&env);
+    let gc = String::from_str(&env, "CREATOR_EXP4");
+    s.client.create_match(&gc, &s.p1, &s.token.address, &100);
+    let created_at = s.client.get_match(&gc).created_at;
+
+    env.ledger().set_timestamp(created_at + CREATOR_CANCEL_WINDOW_SECS);
+    let res = s.client.try_creator_cancel_expired_match(&gc, &s.p2);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(contract_error(EscrowError::Unauthorized as u32))
+    );
+    assert_eq!(s.client.get_match(&gc).status, MatchStatus::Pending);
 }
 
 #[test]

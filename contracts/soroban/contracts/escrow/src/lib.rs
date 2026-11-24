@@ -30,6 +30,9 @@ pub const MAX_BATCH_GC_MATCHES: u32 = 25;
 pub const MAX_GC_BATCH_SIZE: u32 = MAX_BATCH_GC_MATCHES;
 /// Default duration (in seconds) after which a pending or active match expires (1 hour).
 pub const MATCH_EXPIRATION_SECS: u64 = 3_600;
+/// Seconds after creation (24 hours) before the creator of an unjoined match may cancel it
+/// unilaterally and reclaim the wager, without coordinator involvement (Issue #666).
+pub const CREATOR_CANCEL_WINDOW_SECS: u64 = 86_400;
 /// Minimum allowable match duration in seconds (2 minutes) (Issue #287).
 pub const MIN_MATCH_DURATION_SECS: u64 = 120;
 /// Maximum allowable match duration in seconds (24 hours) (Issue #287).
@@ -41,6 +44,8 @@ pub const EMERGENCY_DRAIN_TIMELOCK_SECS: u64 = 604_800;
 pub const EMERGENCY_TIMEOUT_SECONDS: u64 = 259_200;
 /// Timelock delay in ledgers for unpause proposal execution (6 hours ~ 43,200 ledgers) (Issue #550).
 pub const UNPAUSE_DELAY_LEDGERS: u32 = 43_200;
+/// Cooldown in seconds between a timed unpause request and when it may be confirmed (6 hours) (Issue #699).
+pub const UNPAUSE_COOLDOWN_SECONDS: u64 = 21_600;
 pub const DEFAULT_MIN_WAGER: i128 = 1;
 /// Default maximum allowable wager amount (maximum positive i128).
 pub const DEFAULT_MAX_WAGER: i128 = i128::MAX;
@@ -208,6 +213,12 @@ pub enum EscrowErrorExt {
     TournamentPayoutAlreadyResolved = 66,
     /// Requested token recovery amount exceeds unencumbered surplus balance (Issue #738).
     InsufficientRecoverableBalance = 67,
+    /// A cooldown unpause cannot be confirmed before its cooldown has elapsed (Issue #699).
+    CooldownActive = 68,
+    /// No cooldown unpause request is pending for this contract (Issue #699).
+    NoPendingUnpause = 69,
+    /// The creator-cancel window for an unjoined match has not elapsed yet (Issue #666).
+    MatchNotExpired = 70,
 }
 
 /// Payload for player deposit authorization with nonce-based replay protection (Issue #284).
@@ -1174,6 +1185,8 @@ pub enum DataKey {
     PausedUntilLedger,
     /// Ledger sequence when admin requested unpause (Issue #550).
     UnpauseRequestedLedger,
+    /// Ledger timestamp after which a cooldown unpause may be confirmed (Issue #699).
+    UnpauseUnlockTime,
     /// Contract pause state boolean key (Issue #550).
     IsPaused,
     /// Protocol fee discount tier of an organizer (Issue #578).
@@ -1386,6 +1399,76 @@ impl ChessterEscrow {
             (Symbol::new(&env, "v1"), symbol_short!("unpause")),
             ContractUnpausedEvent { coordinator },
         );
+    }
+
+    /// Requests a cooldown unpause (coordinator/admin only) (Issue #699).
+    ///
+    /// The contract must be paused. The unlock time is `now + UNPAUSE_COOLDOWN_SECONDS`;
+    /// a repeated request restarts the cooldown. Cancel with `abort_cooldown_unpause`.
+    pub fn request_cooldown_unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        Self::require_coordinator_admin(&env, &admin);
+        if !Self::is_paused(env.clone()) {
+            panic_with_error!(&env, EscrowError::NotPaused);
+        }
+        let unlock_time = env
+            .ledger()
+            .timestamp()
+            .checked_add(UNPAUSE_COOLDOWN_SECONDS)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::ArithmeticOverflow));
+        env.storage()
+            .instance()
+            .set(&DataKey::UnpauseUnlockTime, &unlock_time);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Confirms a pending cooldown unpause once its cooldown has elapsed (coordinator/admin only) (Issue #699).
+    pub fn confirm_cooldown_unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        Self::require_coordinator_admin(&env, &admin);
+        let unlock_time: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::UnpauseUnlockTime)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowErrorExt::NoPendingUnpause));
+        if env.ledger().timestamp() < unlock_time {
+            panic_with_error!(&env, EscrowErrorExt::CooldownActive);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "paused"), &false);
+        env.storage().instance().set(&DataKey::IsPaused, &false);
+        env.storage().instance().remove(&DataKey::UnpauseUnlockTime);
+        Self::bump_instance_ttl(&env);
+
+        let coordinator = Self::get_coordinator(env.clone());
+        env.events().publish(
+            (Symbol::new(&env, "v1"), symbol_short!("unpause")),
+            ContractUnpausedEvent { coordinator },
+        );
+    }
+
+    /// Aborts a pending cooldown unpause, leaving the contract paused (coordinator/admin only) (Issue #699).
+    pub fn abort_cooldown_unpause(env: Env, admin: Address) {
+        admin.require_auth();
+        Self::require_coordinator_admin(&env, &admin);
+        if !env.storage().instance().has(&DataKey::UnpauseUnlockTime) {
+            panic_with_error!(&env, EscrowErrorExt::NoPendingUnpause);
+        }
+        env.storage().instance().remove(&DataKey::UnpauseUnlockTime);
+        Self::bump_instance_ttl(&env);
+    }
+
+    /// Returns the unlock timestamp of a pending cooldown unpause, if any (Issue #699).
+    pub fn get_cooldown_unpause_unlock_time(env: Env) -> Option<u64> {
+        env.storage().instance().get(&DataKey::UnpauseUnlockTime)
+    }
+
+    fn require_coordinator_admin(env: &Env, admin: &Address) {
+        if *admin != Self::get_coordinator(env.clone()) {
+            panic_with_error!(env, EscrowError::Unauthorized);
+        }
     }
 
     /// Returns whether the contract is currently paused.
@@ -4263,28 +4346,59 @@ impl ChessterEscrow {
         player1.require_auth();
         let _guard = ReentrancyGuard::new(&env);
 
-        let mut m = Self::load_match(&env, &game_code);
+        let m = Self::load_match(&env, &game_code);
 
         if m.player1 != player1 {
             panic_with_error!(&env, EscrowError::Unauthorized);
         }
+        Self::refund_unjoined_match(&env, &game_code, m, Symbol::new(&env, "cancelled"));
+    }
+
+    /// Lets the creator of a match that nobody has joined cancel it and reclaim the wager once
+    /// `CREATOR_CANCEL_WINDOW_SECS` (24 hours) has passed since creation (Issue #666). This keeps
+    /// funds from staying locked when the coordinator is unavailable.
+    ///
+    /// # Arguments
+    /// * `env` - Environment reference.
+    /// * `creator` - Address of the match creator (must be `player1`).
+    /// * `game_code` - Unique match game code.
+    pub fn creator_cancel_expired_match(env: Env, creator: Address, game_code: String) {
+        creator.require_auth();
+        let _guard = ReentrancyGuard::new(&env);
+
+        let m = Self::load_match(&env, &game_code);
+
+        if m.player1 != creator {
+            panic_with_error!(&env, EscrowError::Unauthorized);
+        }
+        let unlock_at = m.created_at.saturating_add(CREATOR_CANCEL_WINDOW_SECS);
+        if env.ledger().timestamp() < unlock_at {
+            panic_with_error!(&env, EscrowErrorExt::MatchNotExpired);
+        }
+        Self::refund_unjoined_match(&env, &game_code, m, Symbol::new(&env, "expired"));
+    }
+
+    /// Refunds the creator's wager on a match that has not been joined, marks it `Refunded`,
+    /// and emits a `MatchCancelledEvent` with `reason`. Callers must already have required the
+    /// creator's auth and checked that the caller is the match creator.
+    fn refund_unjoined_match(env: &Env, game_code: &String, mut m: Match, reason: Symbol) {
         if m.status != MatchStatus::Pending {
-            panic_with_error!(&env, EscrowError::MatchNotPending);
+            panic_with_error!(env, EscrowError::MatchNotPending);
         }
         if m.player2.is_some() {
-            panic_with_error!(&env, EscrowError::AlreadyJoined);
+            panic_with_error!(env, EscrowError::AlreadyJoined);
         }
 
-        Self::assert_balance_invariant(&env, &m.token);
-        let token_client = token::Client::new(&env, &m.token);
+        Self::assert_balance_invariant(env, &m.token);
+        let token_client = token::Client::new(env, &m.token);
         token_client.transfer(&env.current_contract_address(), &m.player1, &m.wager_amount);
 
-        Self::sub_locked(&env, &m.token, m.total_staked);
-        Self::settle_side_bets(&env, &game_code, &m, None);
-        Self::assert_balance_invariant(&env, &m.token);
+        Self::sub_locked(env, &m.token, m.total_staked);
+        Self::settle_side_bets(env, game_code, &m, None);
+        Self::assert_balance_invariant(env, &m.token);
 
         m.status = MatchStatus::Refunded;
-        Self::remove_from_active_lists(&env, &game_code, &m);
+        Self::remove_from_active_lists(env, game_code, &m);
 
         // Update platform metrics (Issue #288)
         let mut metrics = env
@@ -4299,12 +4413,12 @@ impl ChessterEscrow {
             });
         metrics.active_matches_count = metrics.active_matches_count.saturating_sub(1);
         env.storage().persistent().set(&DataKey::Metrics, &metrics);
-        Self::bump_entry_ttl(&env, &DataKey::Metrics);
+        Self::bump_entry_ttl(env, &DataKey::Metrics);
 
-        env.storage().persistent().set(&game_code, &m);
-        Self::bump_entry_ttl(&env, &game_code);
+        env.storage().persistent().set(game_code, &m);
+        Self::bump_entry_ttl(env, game_code);
 
-        Self::emit_match_cancelled(&env, &game_code, &m, Symbol::new(&env, "cancelled"));
+        Self::emit_match_cancelled(env, game_code, &m, reason);
     }
 
     /// Requests a cooperative mutual draw for an active match (Issue #20).
@@ -6866,6 +6980,8 @@ impl ChessterEscrow {
 
 #[cfg(test)]
 mod error_tests;
+#[cfg(test)]
+mod extended_tests;
 mod test;
 #[cfg(test)]
 mod tournament_payout_tests;

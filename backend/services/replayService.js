@@ -1,3 +1,4 @@
+const { restoreArchivedMoves } = require("./moveArchive");
 const chessEngine = require("./chessEngine");
 const { getSevenTagRoster, escapePgnTag } = require("./pgnService");
 const { boardToFEN } = require("./botService");
@@ -75,7 +76,7 @@ function capturedPiece(before, after, moverColor) {
  * @param {object[]} moves - moves rows for the game
  */
 function buildReplayFrames(game, moves) {
-	const ordered = [...moves].sort((a, b) => a.move_number - b.move_number);
+	const ordered = [...restoreArchivedMoves(game, moves)].sort((a, b) => a.move_number - b.move_number);
 	const baseMs = Number(game.time_control_seconds) > 0 ? Number(game.time_control_seconds) * 1000 : null;
 	const incrementMs = (Number(game.time_increment_seconds) || 0) * 1000;
 	const clock = baseMs === null ? null : { white: baseMs, black: baseMs };
@@ -262,7 +263,7 @@ function moveToSan(board, move, after) {
  * @param {string} [options.round] - Round tag override
  */
 function formatPgn(game, moves = [], { ratings = {}, event, round } = {}) {
-	const ordered = [...moves].sort((a, b) => a.move_number - b.move_number);
+	const ordered = [...restoreArchivedMoves(game, moves)].sort((a, b) => a.move_number - b.move_number);
 	const frames = buildReplayFrames(game, ordered);
 	const clockEnabled = Number(game.time_control_seconds) > 0;
 	const roster = getSevenTagRoster({ ...game, event: event ?? game.event, round: round ?? game.round });
@@ -377,8 +378,10 @@ async function generatePgn(gameId, db = require("../config/supabase")) {
 		.order("move_number", { ascending: true });
 	if (movesError) throw movesError;
 
+	const retainedMoves = restoreArchivedMoves(game, moves || []);
+	if (game.moves_archived_at && typeof game.pgn === "string" && game.pgn) return game.pgn;
 	const ratings = await fetchPlayerRatings(game, db);
-	return formatPgn(game, moves || [], { ratings });
+	return formatPgn(game, retainedMoves, { ratings });
 }
 
 /** Build a multi-game PGN for completed tournament bracket games. */
@@ -412,7 +415,7 @@ async function generateTournamentPgnArchive(tournamentId, db = require("../confi
 		if (movesError) throw movesError;
 
 		const result = game.winner === "white" ? "1-0" : game.winner === "black" ? "0-1" : game.winner === "draw" ? "1/2-1/2" : "*";
-		games.push(chessEngine.generateRichPgn(moves || [], {
+		games.push(chessEngine.generateRichPgn(restoreArchivedMoves(game, moves || []), {
 			event: `Tournament #${tournamentId}`,
 			round: `${match.round}.${match.match_number}`,
 			white: game.player_white_address || match.player_white || match.player_one || "?",
