@@ -76,6 +76,24 @@ afterEach(() => {
 	cleanup();
 });
 
+describe("AnalysisPage board editor (#757)", () => {
+	it("loads a validated custom position into the analysis board", async () => {
+		renderPage();
+
+		fireEvent.click(screen.getByRole("button", { name: /board editor/i }));
+		expect(screen.getByRole("dialog", { name: "Board Editor" })).toBeInTheDocument();
+
+		fireEvent.click(screen.getByText("Apply Position"));
+
+		await waitFor(() => {
+			expect(screen.queryByRole("dialog", { name: "Board Editor" })).not.toBeInTheDocument();
+		});
+		expect(
+			useToastStore.getState().toasts.some((toast) => toast.message === "Custom position loaded"),
+		).toBe(true);
+	});
+});
+
 describe("AnalysisPage PGN drag-and-drop (#318)", () => {
 	it("seeks a graph blunder to its board position and requests candidate analysis", async () => {
 		renderPage();

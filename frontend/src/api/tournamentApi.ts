@@ -29,7 +29,7 @@ export interface TournamentParticipant {
   status?: string | null;
 }
 
-export type TournamentMatchStatus = "pending" | "ready" | "live" | "completed";
+export type TournamentMatchStatus = "pending" | "ready" | "live" | "completed" | "bye" | "cancelled";
 
 export interface TournamentBracketMatch {
   id: string;
@@ -40,6 +40,33 @@ export interface TournamentBracketMatch {
   winner?: string | null;
   status: TournamentMatchStatus;
   game_code?: string | null;
+}
+
+interface BackendBracketMatch extends Omit<TournamentBracketMatch, "position" | "status"> {
+  position?: number;
+  match_number?: number;
+  match_order?: number;
+  status: TournamentMatchStatus | "in_progress";
+  winner_address?: string | null;
+}
+
+interface TournamentDetail extends Tournament {
+  participants?: TournamentParticipant[];
+  bracket_matches?: TournamentBracketMatch[];
+}
+
+type TournamentDetailResponse = Omit<TournamentDetail, "status" | "bracket_matches"> & {
+  status: TournamentStatus | "in_progress";
+  bracket_matches?: BackendBracketMatch[];
+};
+
+function normalizeBracketMatch(match: BackendBracketMatch, index: number): TournamentBracketMatch {
+  return {
+    ...match,
+    position: match.position ?? match.match_number ?? match.match_order ?? index + 1,
+    status: match.status === "in_progress" ? "live" : match.status,
+    winner: match.winner ?? match.winner_address ?? null,
+  };
 }
 
 /** Standard backend JSON envelope, shared with gameApi responses. */
@@ -76,12 +103,7 @@ export const fetchTournaments = async (
 /** Fetch a single tournament with its registered participants. */
 export const fetchTournamentById = async (
   tournamentId: string | number,
-): Promise<
-  Tournament & {
-    participants?: TournamentParticipant[];
-    bracket_matches?: TournamentBracketMatch[];
-  }
-> => {
+): Promise<TournamentDetail> => {
   const res = await fetch(`${API_URL}/tournaments/${tournamentId}`);
   if (!res.ok) {
     let errorMsg = `Server error (${res.status})`;
@@ -93,19 +115,19 @@ export const fetchTournamentById = async (
     }
     throw new Error(errorMsg);
   }
-  const json = (await res.json()) as ApiResponse<
-    Tournament & {
-      participants?: TournamentParticipant[];
-      bracket_matches?: TournamentBracketMatch[];
-    }
-  > & {
-    tournament?: Tournament & {
-      participants?: TournamentParticipant[];
-      bracket_matches?: TournamentBracketMatch[];
-    };
+  const json = (await res.json()) as ApiResponse<TournamentDetailResponse> & {
+    tournament?: TournamentDetailResponse;
   };
   if (!json.success) throw new Error(json.error || "Failed to fetch tournament");
-  return json.data || json.tournament!;
+  const tournament = json.data || json.tournament;
+  if (!tournament) throw new Error("Missing tournament data");
+  return {
+    ...tournament,
+    status: tournament.status === "in_progress" ? "active" : tournament.status,
+    bracket_matches: Array.isArray(tournament.bracket_matches)
+      ? tournament.bracket_matches.map(normalizeBracketMatch)
+      : [],
+  };
 };
 
 /**

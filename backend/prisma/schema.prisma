@@ -56,6 +56,9 @@ model Game {
   // Soft-delete + retention archival (#471):
   // deleted_at covers deletedAt, is_archived covers isArchived.
   is_archived            Boolean   @default(false)
+  pgn                    String?   @db.Text
+  move_archive           String?   @db.Text
+  moves_archived_at      DateTime? @db.Timestamptz(6)
   move_history           Json?     @default("[]") @db.JsonB
   is_draw                Boolean?  @default(false)
   draw_reason            String?   @db.VarChar(50)

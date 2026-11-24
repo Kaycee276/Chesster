@@ -5,8 +5,10 @@ import EvaluationBar from "../components/EvaluationBar";
 import { useStockfishEvaluation } from "../hooks/useStockfishEvaluation";
 import { toEngineFen } from "../utils/engineEvaluation";
 import { api } from "../api/gameApi";
-import { socketService, type SpectatorReaction } from "../api/socket";
+import { socketService, type SpectatorPresence, type SpectatorReaction } from "../api/socket";
+import SpectatorListModal from "../components/SpectatorListModal";
 import type { GameState } from "../types/game";
+import { useDelayedBroadcast, type SpectatorTimerSync } from "../hooks/useDelayedBroadcast";
 
 type Orientation = "white" | "black";
 
@@ -151,16 +153,26 @@ function FloatingReaction({ reaction }: { reaction: SpectatorReaction }) {
 
 export default function SpectatorPage() {
   const { gameCode } = useParams<{ gameCode: string }>();
-  const [board, setBoard] = useState(INITIAL_BOARD);
-  const [turn, setTurn] = useState<"white" | "black">("white");
-  const [gameLoaded, setGameLoaded] = useState(false);
+  const [delayMs, setDelayMs] = useState(30_000);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const { game: delayedGame, receiveGame, receiveClock, moveHistory, queuedCount, countdownSeconds, now, releasedAt } =
+    useDelayedBroadcast(gameCode, delayMs);
+  const board = delayedGame?.board_state ?? INITIAL_BOARD;
+  const turn = delayedGame?.current_turn ?? "white";
+  const gameLoaded = delayedGame !== null;
   const [orientation, setOrientation] = useState<Orientation>("white");
-  const [moveHistory] = useState<string[]>([]);
-  const [spectatorCount] = useState(1);
+  const [spectators, setSpectators] = useState<SpectatorPresence[]>([]);
+  const [isSpectatorListOpen, setSpectatorListOpen] = useState(false);
+  // The viewer is always watching, so the count never drops below one.
+  const spectatorCount = Math.max(spectators.length, 1);
   const [reactions, setReactions] = useState<SpectatorReaction[]>([]);
 
-  const fen = useMemo(() => toEngineFen(board, turn), [board, turn]);
-  const { evaluation, status: engineStatus } = useStockfishEvaluation(fen);
+  const fen = useMemo(() => gameLoaded ? toEngineFen(board, turn) : null, [board, turn, gameLoaded]);
+  const { evaluation: engineEvaluation, status: engineStatus } =
+    useStockfishEvaluation(fen, { enabled: gameLoaded });
+  // The engine retains its previous result while a new FEN is searched.
+  // Spectators must only see scores for the position released by this feed.
+  const evaluation = gameLoaded && engineEvaluation?.fen === fen ? engineEvaluation : null;
   const showEvaluation = fen !== null && engineStatus !== "error" && engineStatus !== "unsupported";
 
   const whiteMaterial = useMemo(() => {
@@ -193,42 +205,89 @@ export default function SpectatorPage() {
     const socket = socketService.connect();
     socketService.joinGame(gameCode);
 
-    const applyGameState = (game: GameState | undefined) => {
-      if (!active || !game || !Array.isArray(game.board_state)) return;
-      setBoard(game.board_state);
-      if (game.current_turn === "white" || game.current_turn === "black") {
-        setTurn(game.current_turn);
-      }
-      setGameLoaded(true);
+    const queueGameState = (game: GameState | undefined) => {
+      if (active) receiveGame(game);
+    };
+    const queueClock = (clock: SpectatorTimerSync) => {
+      if (active) receiveClock(clock);
+    };
+    // A conclusion notification alone is not a board snapshot. Confirm the
+    // persisted final state before releasing the remaining presentation buffer.
+    const confirmConclusion = (event: { gameCode?: string }) => {
+      if (!active || event?.gameCode !== gameCode) return;
+      api.getGame(gameCode).then((res) => {
+        if (active && res?.success && res.data &&
+          ["finished", "completed"].includes(String(res.data.status).toLowerCase())) {
+          queueGameState(res.data);
+        }
+      }).catch(() => {
+        if (active) setLoadError("Unable to confirm the result. Waiting for a game update.");
+      });
     };
 
-    socketService.onGameUpdate(applyGameState);
+    socketService.onGameUpdate(queueGameState);
+    socket.on("timer_sync", queueClock);
+    socket.on("game-ended", confirmConclusion);
+    let reactionTimers: number[] = [];
     socketService.onReaction((reaction) => {
       if (!active) return;
       setReactions((current) => [...current, reaction]);
-      window.setTimeout(() => {
-        setReactions((current) => current.filter((item) => item.id !== reaction.id));
+      const timer = window.setTimeout(() => {
+        if (active) setReactions((current) => current.filter((item) => item.id !== reaction.id));
+        reactionTimers = reactionTimers.filter((id) => id !== timer);
       }, 2000);
+      reactionTimers = [...reactionTimers, timer];
+    });
+
+    socketService.onSpectatorJoined((spectator) => {
+      if (!active) return;
+      setSpectators((current) =>
+        current.some((item) => item.address === spectator.address)
+          ? current
+          : [...current, spectator]
+      );
+    });
+    socketService.onSpectatorLeft(({ address }) => {
+      if (!active) return;
+      setSpectators((current) => current.filter((item) => item.address !== address));
     });
 
     // The API uses snake_case for persisted game fields.
     api
       .getGame(gameCode)
       .then((res) => {
-        if (active && res?.success) applyGameState(res.data);
+        if (active && res?.success) receiveGame(res.data, Date.now(), "snapshot");
       })
       .catch(() => {
-        // Keep showing the last known position; live updates may still arrive.
+        if (active) setLoadError("Unable to load this game. Waiting for a live update.");
       });
 
     return () => {
       active = false;
       socketService.offGameUpdate();
+      socket.off("timer_sync", queueClock);
+      socket.off("game-ended", confirmConclusion);
+      reactionTimers.forEach((timer) => window.clearTimeout(timer));
       socketService.offReaction();
+      socketService.offSpectatorPresence();
       socketService.leaveGame(gameCode);
-      socket.disconnect();
+      socketService.disconnect();
     };
-  }, [gameCode]);
+  }, [gameCode, receiveGame, receiveClock]);
+
+  const clockText = (color: "white" | "black") => {
+    if (!delayedGame) return "—";
+    const clock = delayedGame.clock;
+    const baseSeconds = clock
+      ? (color === "white" ? clock.whiteMs : clock.blackMs) / 1000
+      : color === "white" ? delayedGame.white_time_left : delayedGame.black_time_left;
+    if (typeof baseSeconds !== "number" || !Number.isFinite(baseSeconds)) return "—";
+    const activeColor = clock?.turn ?? turn;
+    const elapsed = delayedGame.status === "active" && !clock?.paused && color === activeColor
+      ? Math.max(0, now - releasedAt) / 1000 : 0;
+    const seconds = Math.max(0, Math.ceil(baseSeconds - elapsed));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  };
 
   return (
     <div className="min-h-screen bg-(--bg) flex flex-col">
@@ -254,11 +313,48 @@ export default function SpectatorPage() {
             <ArrowUpDown size={14} />
             <span className="hidden sm:inline">Flip</span>
           </button>
-          <div className="flex items-center gap-1 text-xs text-(--text-secondary)">
+          <button
+            type="button"
+            onClick={() => setSpectatorListOpen(true)}
+            className="flex items-center gap-1 text-xs text-(--text-secondary) hover:text-(--text) transition-colors"
+            title="Show spectators"
+            aria-label={`Show spectators (${spectatorCount})`}
+          >
             <Users size={14} />
             {spectatorCount}
-          </div>
+          </button>
         </div>
+      </div>
+
+      {isSpectatorListOpen && (
+        <SpectatorListModal
+          spectators={spectators}
+          onClose={() => setSpectatorListOpen(false)}
+        />
+      )}
+
+      <div className="flex flex-wrap items-center justify-center gap-3 border-b border-(--border) px-4 py-2 text-xs">
+        <span role="status" className="rounded-full bg-red-500/15 px-3 py-1 font-semibold text-red-300">
+          🔴 Broadcast Delayed ({delayMs / 1000}s)
+        </span>
+        <label className="flex items-center gap-2">
+          <span>Broadcast delay</span>
+          <select
+            aria-label="Broadcast delay"
+            value={delayMs}
+            onChange={(event) => setDelayMs(Number(event.target.value))}
+            className="rounded border border-(--border) bg-(--bg-secondary) px-2 py-1 focus-visible:outline-2 focus-visible:outline-(--accent-primary)"
+          >
+            <option value={15_000}>15 seconds</option>
+            <option value={30_000}>30 seconds</option>
+            <option value={60_000}>60 seconds</option>
+          </select>
+        </label>
+        <span aria-live="off" className="text-(--text-secondary)">
+          {queuedCount > 0 ? `Next update in ${countdownSeconds}s · ${queuedCount} buffered` : "Buffer clear"}
+        </span>
+        <span aria-label={`White clock ${clockText("white")}`} className="font-mono">White {clockText("white")}</span>
+        <span aria-label={`Black clock ${clockText("black")}`} className="font-mono">Black {clockText("black")}</span>
       </div>
 
       {/* Main content */}
@@ -286,18 +382,18 @@ export default function SpectatorPage() {
         {/* Move list */}
         <div className="hidden md:flex flex-col w-48 bg-(--bg-secondary) border border-(--border) rounded-xl p-3 gap-2 h-full max-h-[80vh]">
           <h3 className="text-xs font-bold uppercase tracking-wider text-(--text-tertiary)">
-            Moves
+            Received moves
           </h3>
           <div className="flex-1 overflow-y-auto text-xs font-mono text-(--text-secondary) space-y-0.5">
             {moveHistory.length === 0 && (
               <p className="text-(--text-tertiary) italic">No moves yet</p>
             )}
-            {moveHistory.map((move, i) => (
-              <div key={i} className={i % 2 === 0 ? "text-(--text)" : "text-(--text-secondary)"}>
-                {i % 2 === 0 && (
-                  <span className="text-(--text-tertiary) mr-1">{Math.floor(i / 2) + 1}.</span>
+            {moveHistory.map((move) => (
+              <div key={move.ply} className={move.ply % 2 === 1 ? "text-(--text)" : "text-(--text-secondary)"}>
+                {move.ply % 2 === 1 && (
+                  <span className="text-(--text-tertiary) mr-1">{Math.ceil(move.ply / 2)}.</span>
                 )}
-                {move}
+                {move.text}
               </div>
             ))}
           </div>
@@ -320,8 +416,10 @@ export default function SpectatorPage() {
           <Minus size={12} />
           <span>
             {gameLoaded
-              ? `${turn === "white" ? "White" : "Black"} to move`
-              : "Waiting for game updates..."}
+              ? ["finished", "completed"].includes(delayedGame?.status.toLowerCase() ?? "")
+                ? `Game finished · ${delayedGame?.winner === "draw" ? "Draw" : delayedGame?.winner ? `${delayedGame.winner} wins` : "Result confirmed"}`
+                : `${turn === "white" ? "White" : "Black"} to move`
+              : loadError ?? "Waiting for delayed game updates..."}
           </span>
           {evaluation && (
             <span className="font-mono text-(--text-tertiary)">

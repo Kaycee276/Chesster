@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge, FileUp, RotateCw } from "lucide-react";
+import { ArrowLeft, Upload, Hash, X, Loader2, GitBranch, Gauge, FileUp, RotateCw, LayoutGrid } from "lucide-react";
 import MoveNavigator from "../components/MoveNavigator";
 import EvaluationGraph from "../components/EvaluationGraph";
 import PromotionModal from "../components/PromotionModal";
+import BoardEditor from "../components/BoardEditor";
 import MoveBadge from "../components/analysis/MoveBadge";
 import { useToastStore } from "../store/toastStore";
 import { api } from "../api/gameApi";
@@ -19,7 +20,13 @@ import {
   calculateGameAccuracy,
   estimatePerformanceRating,
 } from "../utils/capsCalculator";
-import { INITIAL_BOARD, getPossibleMoves, applyMove, squareToAlgebraic } from "../utils/chessUtils";
+import {
+  INITIAL_BOARD,
+  getPossibleMoves,
+  applyMove,
+  squareToAlgebraic,
+  parseFen,
+} from "../utils/chessUtils";
 import { loadPgn, splitPgnGames, PgnParseError, type ReplayedMove } from "../utils/pgnParser";
 import EvaluationBar from "../components/EvaluationBar";
 import AnalysisControlBar from "../components/AnalysisControlBar";
@@ -115,6 +122,14 @@ export default function AnalysisPage() {
   } | null>(null);
 
   const [showPgnModal, setShowPgnModal] = useState(false);
+  const [showBoardEditor, setShowBoardEditor] = useState(false);
+  // Custom position loaded from the board editor (#757). When set, it
+  // replaces the standard starting board; imported games clear it.
+  const [customStart, setCustomStart] = useState<{
+    board: string[][];
+    turn: "white" | "black";
+    fen: string;
+  } | null>(null);
   const [pgnInput, setPgnInput] = useState("");
   const [matchIdInput, setMatchIdInput] = useState("");
   const [loadingMatch, setLoadingMatch] = useState(false);
@@ -248,12 +263,19 @@ export default function AnalysisPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [currentIndex, moves.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const baseBoard = currentIndex === -1 ? INITIAL_BOARD : moves[currentIndex].boardAfter;
+  const baseBoard =
+    currentIndex === -1 ? customStart?.board ?? INITIAL_BOARD : moves[currentIndex].boardAfter;
   const currentBoard =
     branch && branch.length > 0 ? branch[branch.length - 1].boardAfter : baseBoard;
 
   const pliesPlayed = currentIndex + 1 + (branch?.length ?? 0);
-  const turnToMove: "white" | "black" = pliesPlayed % 2 === 0 ? "white" : "black";
+  const baseTurn = customStart?.turn ?? "white";
+  const turnToMove: "white" | "black" =
+    pliesPlayed % 2 === 0
+      ? baseTurn
+      : baseTurn === "white"
+        ? "black"
+        : "white";
 
   // ── Engine Evaluation & Analysis Settings (#438) ─────────────────────────
   const [analysisPrefs, setAnalysisPrefs] = useState<AnalysisPreferences>(() =>
@@ -376,6 +398,24 @@ export default function AnalysisPage() {
     commitBranchMove(selectedSquare, [row, col]);
   };
 
+  // ── Custom position from the board editor (#757) ────────────────────────
+  const handleApplyPosition = (fen: string) => {
+    try {
+      const parsed = parseFen(fen);
+      setCustomStart({ board: parsed.board, turn: parsed.turn, fen });
+      setMoves([]);
+      setHeaders({ Event: "Custom position" });
+      setResult("*");
+      setCurrentIndex(-1);
+      setBranch(null);
+      setSelectedSquare(null);
+      setShowBoardEditor(false);
+      addToast("Custom position loaded", "success");
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : "Invalid position", "error");
+    }
+  };
+
   // ── PGN import ──────────────────────────────────────────────────────────
   const handleImportPgn = () => {
     try {
@@ -386,6 +426,7 @@ export default function AnalysisPage() {
       setCurrentIndex(-1);
       setBranch(null);
       setSelectedSquare(null);
+      setCustomStart(null);
       setShowPgnModal(false);
       setPgnInput("");
       addToast(`Imported ${parsed.moves.length} moves`, "success");
@@ -409,6 +450,7 @@ export default function AnalysisPage() {
         setCurrentIndex(-1);
         setBranch(null);
         setSelectedSquare(null);
+        setCustomStart(null);
         if (!keepSelector) setFileGames([]);
         addToast(`Imported ${parsed.moves.length} moves`, "success");
       } catch (err) {
@@ -526,6 +568,7 @@ export default function AnalysisPage() {
       setCurrentIndex(-1);
       setBranch(null);
       setSelectedSquare(null);
+      setCustomStart(null);
       addToast(`Loaded ${records.length} moves from match ${code}`, "success");
     } catch {
       addToast("Failed to load that match", "error");
@@ -584,6 +627,14 @@ export default function AnalysisPage() {
         </div>
       )}
 
+      {showBoardEditor && (
+        <BoardEditor
+          initialFen={customStart?.fen}
+          onApply={handleApplyPosition}
+          onClose={() => setShowBoardEditor(false)}
+        />
+      )}
+
       {showPgnModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
           <div className="bg-(--bg) border border-(--border) rounded-2xl p-4 w-full max-w-lg flex flex-col gap-3">
@@ -629,6 +680,13 @@ export default function AnalysisPage() {
               {result !== "*" ? ` · ${result}` : ""}
             </span>
           )}
+          <button
+            onClick={() => setShowBoardEditor(true)}
+            title="Set up a custom position"
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg bg-(--bg) border border-(--border) hover:border-(--accent-primary)/60 text-xs font-semibold transition-colors shrink-0"
+          >
+            <LayoutGrid size={13} /> <span className="hidden sm:inline">Board Editor</span>
+          </button>
           <button
             onClick={() => setShowPgnModal(true)}
             title="Paste PGN"

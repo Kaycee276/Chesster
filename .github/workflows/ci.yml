@@ -404,3 +404,89 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+  lighthouse-audit:
+    name: Lighthouse Web Vitals Audit
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.changes.outputs.frontend == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: "frontend/.nvmrc"
+          cache: "pnpm"
+          cache-dependency-path: "frontend/pnpm-lock.yaml"
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Production Artifact
+        run: pnpm run build
+
+      - name: Run Lighthouse Web Vitals Audit
+        run: pnpm run lhci:audit
+
+      - name: Upload Lighthouse HTML Reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lighthouse-web-vitals-reports
+          path: frontend/.lighthouseci
+          if-no-files-found: warn
+
+      - name: Summarize Web Vitals and Comment on PR
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const manifestPath = path.join('frontend', '.lighthouseci', 'manifest.json');
+            if (!fs.existsSync(manifestPath)) {
+              core.notice('No Lighthouse manifest found; skipping PR summary comment.');
+              return;
+            }
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            const representative = manifest.filter((entry) => entry.isRepresentativeRun);
+            const rows = (representative.length > 0 ? representative : manifest).map((entry) => {
+              const s = entry.summary || {};
+              const fmt = (v) => (typeof v === 'number' ? `${Math.round(v * 100)}` : 'N/A');
+              return `| \`${entry.url}\` | ${fmt(s.performance)} | ${fmt(s.accessibility)} | ${fmt(s['best-practices'])} |`;
+            });
+            const marker = '<!-- lighthouse-web-vitals-report -->';
+            const body = [
+              marker,
+              '### Lighthouse Web Vitals Audit Summary',
+              '',
+              '| URL | Performance | Accessibility | Best Practices |',
+              '| --- | ---: | ---: | ---: |',
+              ...rows,
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find(
+              (c) => c.user && c.user.type === 'Bot' && c.body && c.body.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

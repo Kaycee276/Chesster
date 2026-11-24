@@ -1,3 +1,4 @@
+const { restoreArchivedMoves } = require("../services/moveArchive");
 const supabase = require("../config/supabase");
 const { queryWithRetry } = require("../config/db");
 const chessEngine = require("../services/chessEngine");
@@ -928,7 +929,7 @@ class GameModel {
 			.order("move_number", { ascending: true });
 
 		if (error) throw error;
-		return data;
+		return restoreArchivedMoves(game, data || []);
 	}
 
 	async getChatMessages(gameCode) {

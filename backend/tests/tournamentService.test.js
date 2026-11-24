@@ -316,3 +316,149 @@ describe("Tournament Service - Bracket Generation & Seeding Algorithm (Issue #22
 		});
 	});
 });
+
+describe("Round-robin scheduling (Issue #660)", () => {
+	beforeEach(() => {
+		jest.clearAllMocks();
+	});
+
+	const addresses = (n) => Array.from({ length: n }, (_, i) => `P${i + 1}`);
+
+	/** Checks the structural guarantees of a round-robin schedule and returns it. */
+	function expectValidRoundRobin(participants) {
+		const n = participants.length;
+		const schedule = tournamentService.buildRoundRobinSchedule(participants);
+		expect(schedule).toHaveLength(n % 2 === 0 ? n - 1 : n);
+
+		const pairs = new Set();
+		const byeCounts = new Map(participants.map((p) => [p, 0]));
+		for (const round of schedule) {
+			const seenThisRound = [];
+			for (const game of round.games) {
+				expect(game.white).not.toBe(game.black);
+				const key = [game.white, game.black].sort().join("|");
+				expect(pairs.has(key)).toBe(false);
+				pairs.add(key);
+				seenThisRound.push(game.white, game.black);
+			}
+			if (round.bye) {
+				byeCounts.set(round.bye, byeCounts.get(round.bye) + 1);
+				seenThisRound.push(round.bye);
+			}
+			// Every participant appears exactly once in every round.
+			expect(seenThisRound).toHaveLength(n);
+			expect(new Set(seenThisRound).size).toBe(n);
+		}
+
+		expect(pairs.size).toBe((n * (n - 1)) / 2);
+		for (const count of byeCounts.values()) {
+			expect(count).toBe(n % 2 === 1 ? 1 : 0);
+		}
+		return schedule;
+	}
+
+	it.each([2, 4, 5, 8, 9])("pairs every participant once per round and every pair exactly once (%i players)", (n) => {
+		expectValidRoundRobin(addresses(n));
+	});
+
+	it("keeps each player's whites and blacks within one of each other in a 4-player field", () => {
+		const schedule = expectValidRoundRobin(addresses(4));
+		const balance = new Map(addresses(4).map((p) => [p, 0]));
+		for (const round of schedule) {
+			for (const game of round.games) {
+				balance.set(game.white, balance.get(game.white) + 1);
+				balance.set(game.black, balance.get(game.black) - 1);
+			}
+		}
+		for (const diff of balance.values()) {
+			expect(Math.abs(diff)).toBeLessThanOrEqual(1);
+		}
+	});
+
+	it("rejects fields with fewer than two players or duplicate addresses", () => {
+		expect(() => tournamentService.buildRoundRobinSchedule(["P1"])).toThrow("at least 2");
+		expect(() => tournamentService.buildRoundRobinSchedule(["P1", "P1"])).toThrow("unique");
+	});
+
+	it("stores every round, with round 1 ready, later rounds pending and byes marked", async () => {
+		tournamentModel.createBracketMatches.mockImplementation(async (rows) => rows.map((r, i) => ({ id: `m${i}`, ...r })));
+		tournamentModel.updateTournamentStatus.mockResolvedValue({});
+		const players = addresses(5).map((wallet_address, i) => ({ wallet_address, elo: 1500 - i }));
+
+		const result = await tournamentService.generateRoundRobinSchedule("T1", players);
+
+		const rows = tournamentModel.createBracketMatches.mock.calls[0][0];
+		expect(result.totalRounds).toBe(5);
+		expect(result.matches).toHaveLength(rows.length);
+		expect(rows).toHaveLength(10 + 5); // 10 games in total, plus one bye per round
+		expect(rows.every((r) => r.tournament_id === "T1")).toBe(true);
+		expect(rows.filter((r) => r.status === "bye")).toHaveLength(5);
+		expect(rows.filter((r) => r.round === 1 && r.status === "ready")).toHaveLength(2);
+		expect(rows.filter((r) => r.round > 1 && r.status === "ready")).toHaveLength(0);
+		expect(tournamentModel.updateTournamentStatus).toHaveBeenCalledWith("T1", "in_progress");
+	});
+
+	it("emits bracket_generated to the tournament room when an io server is given", async () => {
+		tournamentModel.createBracketMatches.mockImplementation(async (rows) => rows);
+		const emit = jest.fn();
+		const io = { to: jest.fn(() => ({ emit })) };
+		const players = addresses(4).map((wallet_address) => ({ wallet_address }));
+
+		await tournamentService.generateRoundRobinSchedule("T2", players, { io });
+
+		expect(io.to).toHaveBeenCalledWith("tournament:T2");
+		expect(emit).toHaveBeenCalledWith(
+			"tournament:bracket_generated",
+			expect.objectContaining({ tournamentId: "T2", format: "round_robin", totalRounds: 3 }),
+		);
+	});
+
+	describe("advanceRoundRobinRound", () => {
+		const row = (id, round, status) => ({ id, round, status });
+
+		it("activates the next round once the current one is finished and emits round_started", async () => {
+			tournamentModel.getBracketMatches.mockResolvedValue([
+				row("a", 1, "completed"),
+				row("b", 1, "bye"),
+				row("c", 2, "pending"),
+				row("d", 2, "pending"),
+			]);
+			tournamentModel.updateBracketMatchStatus.mockResolvedValue({});
+			const emit = jest.fn();
+			const io = { to: jest.fn(() => ({ emit })) };
+
+			const result = await tournamentService.advanceRoundRobinRound("T3", { io });
+
+			expect(result).toEqual({ status: "round_started", round: 2, activatedMatchIds: ["c", "d"] });
+			expect(tournamentModel.updateBracketMatchStatus).toHaveBeenCalledWith("c", "ready");
+			expect(tournamentModel.updateBracketMatchStatus).toHaveBeenCalledWith("d", "ready");
+			expect(emit).toHaveBeenCalledWith(
+				"tournament:round_started",
+				expect.objectContaining({ round: 2, matchIds: ["c", "d"] }),
+			);
+		});
+
+		it("waits while the current round still has unfinished matches", async () => {
+			tournamentModel.getBracketMatches.mockResolvedValue([
+				row("a", 1, "completed"),
+				row("b", 1, "ready"),
+				row("c", 2, "pending"),
+			]);
+
+			const result = await tournamentService.advanceRoundRobinRound("T3");
+
+			expect(result).toEqual({ status: "in_progress", round: 1, activatedMatchIds: [] });
+			expect(tournamentModel.updateBracketMatchStatus).not.toHaveBeenCalled();
+		});
+
+		it("reports completion once every match is finished", async () => {
+			tournamentModel.getBracketMatches.mockResolvedValue([row("a", 1, "completed"), row("b", 2, "bye")]);
+
+			await expect(tournamentService.advanceRoundRobinRound("T3")).resolves.toEqual({
+				status: "completed",
+				round: null,
+				activatedMatchIds: [],
+			});
+		});
+	});
+});

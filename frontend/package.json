@@ -14,6 +14,7 @@
     "size-check": "node scripts/check-bundle-size.mjs",
     "lint": "eslint .",
     "lhci": "lhci autorun --config=../.lighthouserc.json",
+    "lhci:audit": "lhci autorun --config=./lighthouserc.json",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests",

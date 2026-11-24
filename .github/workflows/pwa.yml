@@ -1,0 +1,48 @@
+name: Offline PWA
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-browser:
+    name: Production Offline PWA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      VITE_BACKEND_URL: http://127.0.0.1:3011
+      VITE_CONTRACT_ID: CA4OPJENMO3ZL2AEJ4IZD4ZQI3TRWK5ES6NTWZUGRUWSTSVYT5H46I4Y
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: frontend/.nvmrc
+      - name: Set up pinned pnpm
+        run: npm install --global --ignore-scripts --no-audit --no-fund pnpm@11.18.0
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Test installation and local-game behavior
+        run: pnpm exec vitest run src/hooks/usePwaInstall.test.tsx src/components/OfflineBotGame.test.tsx
+      - name: Test production offline boot and local Stockfish
+        run: pnpm exec playwright test --config playwright.pwa.config.ts
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: offline-pwa-failure
+          path: frontend/test-results
+          if-no-files-found: ignore

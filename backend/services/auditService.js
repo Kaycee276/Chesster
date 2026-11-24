@@ -1,3 +1,5 @@
+const { Keypair } = require("@stellar/stellar-sdk");
+const { restoreArchivedMoves } = require("./moveArchive");
 const crypto = require("crypto");
 const supabase = require("../config/supabase");
 const { boardToFEN } = require("./botService");
@@ -107,14 +109,14 @@ async function getGame(idOrCode) {
 	return data || null;
 }
 
-async function getMoves(gameId) {
+async function getMoves(game) {
 	const { data, error } = await supabase
 		.from("moves")
 		.select("*")
-		.eq("game_id", gameId)
+		.eq("game_id", game.id)
 		.order("move_number", { ascending: true });
 	if (error) throw new Error(error.message);
-	return data || [];
+	return restoreArchivedMoves(game, data || []);
 }
 
 async function getAuditLogs(gameId) {
@@ -247,7 +249,7 @@ function signOutcome(outcome) {
  * Moves are ordered by move number and events chronologically.
  */
 async function buildAuditPackage(game) {
-	const [moveRows, logRows] = await Promise.all([getMoves(game.id), getAuditLogs(game.id)]);
+	const [moveRows, logRows] = await Promise.all([getMoves(game), getAuditLogs(game.id)]);
 
 	// Sort audit logs chronologically for hash chain verification
 	const sortedLogRows = logRows
@@ -537,7 +539,7 @@ async function verifyMatchAuditIntegrity(gameId) {
 	const game = await getGame(gameId);
 	if (!game) throw new Error("Game not found");
 
-	const moves = await getMoves(gameId);
+	const moveRows = await getMoves(game);
 	const pkg = await buildAuditPackage(game);
 
 	if (!pkg || !pkg.integrity) {
@@ -545,6 +547,7 @@ async function verifyMatchAuditIntegrity(gameId) {
 	}
 
 	const expectedHash = pkg.integrity.outcome.movesDigest;
+	const moves = buildMoves(game, moveRows, pkg.events);
 	const calculatedHash = sha256(canonicalJson(moves));
 	const verified = expectedHash === calculatedHash;
 
@@ -554,6 +557,111 @@ async function verifyMatchAuditIntegrity(gameId) {
 		calculatedHash,
 		moveCount: moves.length,
 	};
+}
+
+/**
+ * Task 1: Hash a single move event for Merkle tree construction.
+ * Format: `${idx}:${m.ply}:${m.uci}:${m.timestamp}:${m.whiteClock}:${m.blackClock}`
+ *
+ * @param {object} move - Move event object
+ * @param {number} [idx=0] - Sequence index
+ * @returns {string} SHA-256 hash in hex
+ */
+function hashLeaf(move, idx = 0) {
+	const i = move.idx !== undefined ? move.idx : idx;
+	const ply = move.ply !== undefined ? move.ply : (move.move_number !== undefined ? move.move_number : i + 1);
+	const uci = move.uci || "";
+	const timestamp = move.timestamp !== undefined ? move.timestamp : (move.created_at || "");
+	const whiteClock = move.whiteClock !== undefined ? move.whiteClock : (move.white_clock !== undefined ? move.white_clock : "");
+	const blackClock = move.blackClock !== undefined ? move.blackClock : (move.black_clock !== undefined ? move.black_clock : "");
+	const payload = `${i}:${ply}:${uci}:${timestamp}:${whiteClock}:${blackClock}`;
+	return crypto.createHash("sha256").update(payload).digest("hex");
+}
+
+/**
+ * Task 2: Compute Merkle root hash from ordered move leaves.
+ *
+ * @param {Array<string>} leaves - Ordered hex leaf hashes
+ * @returns {string} Root SHA-256 hash in hex
+ */
+function computeMerkleRoot(leaves) {
+	if (!leaves || leaves.length === 0) {
+		return crypto.createHash("sha256").update("").digest("hex");
+	}
+	let currentLevel = [...leaves];
+	while (currentLevel.length > 1) {
+		const nextLevel = [];
+		for (let i = 0; i < currentLevel.length; i += 2) {
+			if (i + 1 < currentLevel.length) {
+				const combined = crypto
+					.createHash("sha256")
+					.update(currentLevel[i] + currentLevel[i + 1])
+					.digest("hex");
+				nextLevel.push(combined);
+			} else {
+				const combined = crypto
+					.createHash("sha256")
+					.update(currentLevel[i] + currentLevel[i])
+					.digest("hex");
+				nextLevel.push(combined);
+			}
+		}
+		currentLevel = nextLevel;
+	}
+	return currentLevel[0];
+}
+
+/**
+ * Task 3: Sign root hash with server private key and produce an audit manifest.
+ *
+ * @param {object} match - { id, tournamentId, ... }
+ * @param {Array<object>} moves - Ordered move records
+ * @param {object} [serverKeypair] - Optional Stellar Keypair instance
+ * @returns {object} Structured manifest with signature
+ */
+function generateAuditManifest(match, moves, serverKeypair) {
+	const leaves = moves.map((m, idx) => hashLeaf(m, idx));
+	const rootHash = computeMerkleRoot(leaves);
+	const keypair = serverKeypair || (process.env.COORDINATOR_SECRET_KEY ? Keypair.fromSecret(process.env.COORDINATOR_SECRET_KEY) : Keypair.random());
+	const signatureBytes = keypair.sign(Buffer.from(rootHash, "hex"));
+	const signature = Buffer.from(signatureBytes).toString("base64");
+
+	return {
+		matchId: match.id || match.matchId,
+		tournamentId: match.tournamentId || match.tournament_id,
+		merkleRoot: rootHash,
+		publicKey: keypair.publicKey(),
+		signature,
+		leavesCount: leaves.length,
+		moves,
+	};
+}
+
+/**
+ * Task 5: Standalone verification function verifying signature and Merkle root.
+ *
+ * @param {object} manifest - Output from generateAuditManifest
+ * @param {string} [publicKey] - Optional override public key
+ * @returns {boolean} True if all leaves roll up to merkleRoot and signature is valid
+ */
+function verifyAuditTrail(manifest, publicKey) {
+	if (!manifest || !manifest.moves || !manifest.merkleRoot || !manifest.signature) {
+		return false;
+	}
+	const leaves = manifest.moves.map((m, idx) => hashLeaf(m, idx));
+	const calculatedRoot = computeMerkleRoot(leaves);
+	if (calculatedRoot !== manifest.merkleRoot) {
+		return false;
+	}
+	try {
+		const pubKey = publicKey || manifest.publicKey;
+		if (!pubKey) return false;
+		const keypair = Keypair.fromPublicKey(pubKey);
+		const isValid = keypair.verify(Buffer.from(manifest.merkleRoot, "hex"), Buffer.from(manifest.signature, "base64"));
+		return Boolean(isValid);
+	} catch (_) {
+		return false;
+	}
 }
 
 module.exports = {
@@ -570,4 +678,8 @@ module.exports = {
 	toCsv,
 	hashIp,
 	canonicalJson,
+	hashLeaf,
+	computeMerkleRoot,
+	generateAuditManifest,
+	verifyAuditTrail,
 };

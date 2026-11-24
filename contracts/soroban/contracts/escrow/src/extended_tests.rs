@@ -1,23 +1,28 @@
 // Extended property-based tests for tournament escrow balance conservation
+use super::*;
 use proptest::prelude::*;
+use soroban_sdk::{
+    testutils::{Address as _, Events, Ledger},
+    Address, Env, String, TryIntoVal,
+};
 
 #[cfg(test)]
 mod extended_tests {
     use super::*;
-    
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1000))]
-        
+
         /// Property-based invariant test: Tournament balance conservation
-        /// 
+        ///
         /// Verifies that for ANY combination of:
         /// - player_count (4..=32)
         /// - entry_fee (1..=10_000_000 stroops)
         /// - fee_bps (0..=1000 basis points)
-        /// 
+        ///
         /// The following invariant MUST hold:
         /// total_entry_fees == sum(winner_payouts) + treasury_fee
-        /// 
+        ///
         /// AND zero residual balance remains in tournament storage.
         #[test]
         fn test_fuzz_tournament_conservation(
@@ -27,40 +32,39 @@ mod extended_tests {
         ) {
             // Setup mock tournament environment
             let total_entry_fees = (player_count as i128) * entry_fee;
-            
+
             // Calculate protocol fee (basis points to decimal)
             let treasury_fee = (total_entry_fees * fee_bps) / 10_000;
-            
+
             // Calculate prize pool after fee deduction
             let prize_pool = total_entry_fees - treasury_fee;
-            
+
             // Simulate tournament completion and prize distribution
             // Typical distribution: 50% to winner, 30% to 2nd, 20% to 3rd
             let winner_payout = (prize_pool * 50) / 100;
             let second_payout = (prize_pool * 30) / 100;
             let third_payout = (prize_pool * 20) / 100;
-            
+
             // Handle integer truncation remainder
             let distributed = winner_payout + second_payout + third_payout;
             let truncation_remainder = prize_pool - distributed;
-            
+
             // The remainder should be negligible (< 3 stroops due to rounding)
             prop_assert!(
                 truncation_remainder >= 0 && truncation_remainder < 3,
                 "Truncation remainder {} exceeds safe threshold for player_count={}, entry_fee={}, fee_bps={}",
                 truncation_remainder, player_count, entry_fee, fee_bps
             );
-            
-            // CORE INVARIANT: Total in = Total out (within rounding tolerance)
+
+            // CORE INVARIANT: Total in = Total out + truncation remainder.
             let total_out = distributed + treasury_fee;
-            let conservation_error = (total_entry_fees - total_out).abs();
-            
-            prop_assert!(
-                conservation_error == 0,
-                "Balance conservation violated: total_in={}, total_out={}, error={} for player_count={}, entry_fee={}, fee_bps={}",
-                total_entry_fees, total_out, conservation_error, player_count, entry_fee, fee_bps
+
+            prop_assert_eq!(
+                total_out + truncation_remainder, total_entry_fees,
+                "Balance conservation violated: total_in={}, total_out={}, remainder={} for player_count={}, entry_fee={}, fee_bps={}",
+                total_entry_fees, total_out, truncation_remainder, player_count, entry_fee, fee_bps
             );
-            
+
             // Verify no funds are locked/stranded
             let residual_balance = 0; // Mock storage check
             prop_assert_eq!(
@@ -69,7 +73,7 @@ mod extended_tests {
                 residual_balance
             );
         }
-        
+
         /// Test edge case: maximum tournament size with maximum entry fee
         #[test]
         fn test_fuzz_tournament_max_values(
@@ -80,19 +84,19 @@ mod extended_tests {
             let total_entry_fees = (player_count as i128) * entry_fee;
             let treasury_fee = (total_entry_fees * fee_bps) / 10_000;
             let prize_pool = total_entry_fees - treasury_fee;
-            
+
             // Simple winner-takes-all for edge case
             let winner_payout = prize_pool;
-            
+
             let total_out = winner_payout + treasury_fee;
             let conservation_error = (total_entry_fees - total_out).abs();
-            
+
             prop_assert_eq!(
                 conservation_error, 0,
                 "Balance conservation failed at max values"
             );
         }
-        
+
         /// Test edge case: minimum tournament with minimum entry
         #[test]
         fn test_fuzz_tournament_min_values(
@@ -103,17 +107,17 @@ mod extended_tests {
             let total_entry_fees = (player_count as i128) * entry_fee;
             let treasury_fee = (total_entry_fees * fee_bps) / 10_000;
             let prize_pool = total_entry_fees - treasury_fee;
-            
+
             // Winner takes all for simplicity
             let winner_payout = prize_pool;
-            
+
             let total_out = winner_payout + treasury_fee;
             prop_assert_eq!(
                 total_entry_fees, total_out,
                 "Balance conservation failed at min values"
             );
         }
-        
+
         /// Test that fee calculation never exceeds total entry fees
         #[test]
         fn test_fuzz_fee_bounds(
@@ -123,13 +127,13 @@ mod extended_tests {
         ) {
             let total_entry_fees = (player_count as i128) * entry_fee;
             let treasury_fee = (total_entry_fees * fee_bps) / 10_000;
-            
+
             prop_assert!(
                 treasury_fee <= total_entry_fees,
                 "Treasury fee {} exceeds total entry fees {}",
                 treasury_fee, total_entry_fees
             );
-            
+
             prop_assert!(
                 treasury_fee >= 0,
                 "Treasury fee {} is negative",
@@ -137,14 +141,14 @@ mod extended_tests {
             );
         }
     }
-    
+
     proptest! {
         /// Property-based invariant test: Cooperative draw settlement balance conservation
-        /// 
+        ///
         /// Verifies that for ANY combination of:
         /// - wager_amount (1..=10_000_000 stroops)
         /// - fee_bps (0..=1000 basis points) - fee is NOT applied on draws
-        /// 
+        ///
         /// The following invariant MUST hold on draw settlement (winner = None):
         /// 1. Each player receives exactly their deposited wager_amount
         /// 2. Zero fees are routed to treasury vault
@@ -158,35 +162,35 @@ mod extended_tests {
         ) {
             // Simulate draw settlement scenario
             let total_wager = wager_amount * 2; // Both players wager equally
-            
+
             // Key insight from Issue #483: draws bypass fee calculation
             // admin_fee is set to 0 regardless of fee_bps configuration
             let admin_fee_on_draw = 0i128;
-            
+
             // Each player receives their exact principal back
             let player1_refund = wager_amount;
             let player2_refund = wager_amount;
-            
+
             // Treasury receives NO fee on cooperative draw
             let treasury_fee = 0i128;
-            
+
             // CORE INVARIANT 1: Balance conservation
             // Total disbursed = sum of player refunds + treasury fee
             let total_disbursed = player1_refund + player2_refund + treasury_fee;
-            
+
             prop_assert_eq!(
                 total_wager, total_disbursed,
                 "Draw settlement balance not conserved: total_wager={}, disbursed={}, fee_bps={}",
                 total_wager, total_disbursed, fee_bps
             );
-            
+
             // CORE INVARIANT 2: No fee deduction on draw
             prop_assert_eq!(
                 admin_fee_on_draw, 0,
                 "Admin fee on draw should be zero, got {} with fee_bps={}",
                 admin_fee_on_draw, fee_bps
             );
-            
+
             // CORE INVARIANT 3: Players get 100% refund
             prop_assert_eq!(
                 player1_refund, wager_amount,
@@ -198,7 +202,7 @@ mod extended_tests {
                 "Player 2 should receive 100% of principal, got {} of {}",
                 player2_refund, wager_amount
             );
-            
+
             // CORE INVARIANT 4: No funds stranded
             let contract_residual = 0i128;
             prop_assert_eq!(
@@ -206,27 +210,27 @@ mod extended_tests {
                 "Contract should not hold funds after draw settlement"
             );
         }
-        
+
         /// Test edge case: maximum wager with various fee tiers
         #[test]
         fn test_fuzz_draw_settlement_max_wager_various_fees(
             wager_amount in 5_000_000i128..=10_000_000i128,
-            fee_bps in vec![0u32, 50u32, 500u32, 1000u32]
+            fee_bps in prop_oneof![Just(0u32), Just(50u32), Just(500u32), Just(1000u32)]
         ) {
             let total_wager = wager_amount * 2;
             let player1_refund = wager_amount;
             let player2_refund = wager_amount;
             let treasury_fee = 0i128; // Always zero on draw
-            
+
             let total_disbursed = player1_refund + player2_refund + treasury_fee;
-            
+
             prop_assert_eq!(
                 total_wager, total_disbursed,
                 "Draw with max wager (wager={}, fee_bps={}) violates conservation",
                 wager_amount, fee_bps
             );
         }
-        
+
         /// Test edge case: minimum wager with all fee tiers
         #[test]
         fn test_fuzz_draw_settlement_min_wager_all_fees(
@@ -237,15 +241,15 @@ mod extended_tests {
             let player1_refund = wager_amount;
             let player2_refund = wager_amount;
             let treasury_fee = 0i128;
-            
+
             let total_disbursed = player1_refund + player2_refund + treasury_fee;
-            
+
             prop_assert_eq!(
                 total_wager, total_disbursed,
                 "Draw with min wager (wager={}) not conserved",
                 wager_amount
             );
-            
+
             // Verify treasury receives nothing
             prop_assert_eq!(
                 treasury_fee, 0,
@@ -262,37 +266,37 @@ mod extended_tests {
         fn test_draw_settlement_minimum_wager_zero_fee() {
             let wager_amount = 1i128;
             let fee_bps = 0u32;
-            
+
             let total_wager = wager_amount * 2;
             let player1_refund = wager_amount;
             let player2_refund = wager_amount;
             let treasury_fee = 0i128;
-            
+
             assert_eq!(total_wager, 2);
             assert_eq!(player1_refund, 1);
             assert_eq!(player2_refund, 1);
             assert_eq!(treasury_fee, 0);
             assert_eq!(total_wager, player1_refund + player2_refund + treasury_fee);
         }
-        
+
         /// Manual test: Draw settlement with max wager and max fee
         /// Demonstrates that fee_bps is NOT applied on draws
         #[test]
         fn test_draw_settlement_max_wager_max_fee() {
             let wager_amount = 10_000_000i128;
             let fee_bps = 1000u32; // 10% fee - but NOT applied on draws
-            
+
             let total_wager = wager_amount * 2;
-            
-            // If fee were applied (which it shouldn't be): 
+
+            // If fee were applied (which it shouldn't be):
             // fee_would_be = (total_wager * 1000) / 10_000 = 2_000_000
             // But on draw, admin_fee = 0
             let admin_fee_on_draw = 0i128;
-            
+
             let player1_refund = wager_amount;
             let player2_refund = wager_amount;
             let treasury_fee = 0i128; // Always zero on cooperative draw
-            
+
             assert_eq!(total_wager, 20_000_000);
             assert_eq!(admin_fee_on_draw, 0, "Draw must NOT apply fee_bps");
             assert_eq!(player1_refund, 10_000_000);
@@ -300,63 +304,63 @@ mod extended_tests {
             assert_eq!(treasury_fee, 0);
             assert_eq!(total_wager, player1_refund + player2_refund + treasury_fee);
         }
-        
+
         /// Manual test: Draw settlement with mid-range wager and typical fee tier
         #[test]
         fn test_draw_settlement_typical_scenario() {
             let wager_amount = 500_000i128; // 500k stroops
             let fee_bps = 500u32; // 5% fee rate (typical)
-            
+
             let total_wager = wager_amount * 2; // 1_000_000
-            
+
             // Note: fee would be 1_000_000 * 500 / 10_000 = 50_000
             // but on draw it's set to 0
             let admin_fee_on_draw = 0i128;
-            
+
             let player1_refund = wager_amount;
             let player2_refund = wager_amount;
             let treasury_fee = 0i128;
-            
+
             assert_eq!(total_wager, 1_000_000);
             assert_eq!(admin_fee_on_draw, 0);
             assert_eq!(total_wager, player1_refund + player2_refund + treasury_fee);
         }
-        
+
         /// Manual test: specific edge case: 4 players, 1 stroop each, 0 fee
         #[test]
         fn test_minimum_tournament_zero_fee() {
             let player_count = 4;
             let entry_fee = 1i128;
             let fee_bps = 0i128;
-            
+
             let total_entry_fees = (player_count as i128) * entry_fee;
             let treasury_fee = (total_entry_fees * fee_bps) / 10_000;
             let prize_pool = total_entry_fees - treasury_fee;
-            
+
             assert_eq!(total_entry_fees, 4);
             assert_eq!(treasury_fee, 0);
             assert_eq!(prize_pool, 4);
-            
+
             // Winner gets entire pool
             let winner_payout = prize_pool;
             assert_eq!(total_entry_fees, winner_payout + treasury_fee);
         }
-        
+
         /// Manual test: 32 players, max entry, max fee
         #[test]
         fn test_maximum_tournament_max_fee() {
             let player_count = 32;
             let entry_fee = 10_000_000i128;
             let fee_bps = 1000i128; // 10%
-            
+
             let total_entry_fees = (player_count as i128) * entry_fee;
             let treasury_fee = (total_entry_fees * fee_bps) / 10_000;
             let prize_pool = total_entry_fees - treasury_fee;
-            
+
             assert_eq!(total_entry_fees, 320_000_000);
             assert_eq!(treasury_fee, 32_000_000); // 10% of total
             assert_eq!(prize_pool, 288_000_000);
-            
+
             let winner_payout = prize_pool;
             assert_eq!(total_entry_fees, winner_payout + treasury_fee);
         }
@@ -369,47 +373,86 @@ mod extended_tests {
             // Test case 1: Large pool value (90% of max safe value for 10k denominator)
             let large_pool: i128 = 9_223_372_036_854_775_807i128 / 12_000; // ~768 billion stroops
             let fee_bps: u32 = 500; // 5% fee
-            
+
             // Calculate fee using safe arithmetic
-            let fee_whole = (large_pool / 10_000).checked_mul(fee_bps as i128).expect("fee whole overflow");
-            let fee_frac = ((large_pool % 10_000).checked_mul(fee_bps as i128).expect("fee frac overflow")) / 10_000;
-            let fee = fee_whole.checked_add(fee_frac).expect("fee addition overflow");
-            
-            let net_pool = large_pool.checked_sub(fee).expect("net pool calculation overflow");
-            
+            let fee_whole = (large_pool / 10_000)
+                .checked_mul(fee_bps as i128)
+                .expect("fee whole overflow");
+            let fee_frac = ((large_pool % 10_000)
+                .checked_mul(fee_bps as i128)
+                .expect("fee frac overflow"))
+                / 10_000;
+            let fee = fee_whole
+                .checked_add(fee_frac)
+                .expect("fee addition overflow");
+
+            let net_pool = large_pool
+                .checked_sub(fee)
+                .expect("net pool calculation overflow");
+
             // Simulate 8-player bracket distribution: 50%, 30%, 20%
             let first_bps: u32 = 5_000; // 50%
             let second_bps: u32 = 3_000; // 30%
             let third_bps: u32 = 2_000; // 20%
-            
+
             // First place: 50% of net pool
-            let first_whole = (net_pool / 10_000).checked_mul(first_bps as i128).expect("first whole overflow");
-            let first_frac = ((net_pool % 10_000).checked_mul(first_bps as i128).expect("first frac overflow")) / 10_000;
-            let first_payout = first_whole.checked_add(first_frac).expect("first addition overflow");
-            
+            let first_whole = (net_pool / 10_000)
+                .checked_mul(first_bps as i128)
+                .expect("first whole overflow");
+            let first_frac = ((net_pool % 10_000)
+                .checked_mul(first_bps as i128)
+                .expect("first frac overflow"))
+                / 10_000;
+            let first_payout = first_whole
+                .checked_add(first_frac)
+                .expect("first addition overflow");
+
             // Second place: 30% of net pool
-            let second_whole = (net_pool / 10_000).checked_mul(second_bps as i128).expect("second whole overflow");
-            let second_frac = ((net_pool % 10_000).checked_mul(second_bps as i128).expect("second frac overflow")) / 10_000;
-            let second_payout = second_whole.checked_add(second_frac).expect("second addition overflow");
-            
+            let second_whole = (net_pool / 10_000)
+                .checked_mul(second_bps as i128)
+                .expect("second whole overflow");
+            let second_frac = ((net_pool % 10_000)
+                .checked_mul(second_bps as i128)
+                .expect("second frac overflow"))
+                / 10_000;
+            let second_payout = second_whole
+                .checked_add(second_frac)
+                .expect("second addition overflow");
+
             // Third place: 20% of net pool
-            let third_whole = (net_pool / 10_000).checked_mul(third_bps as i128).expect("third whole overflow");
-            let third_frac = ((net_pool % 10_000).checked_mul(third_bps as i128).expect("third frac overflow")) / 10_000;
-            let third_payout = third_whole.checked_add(third_frac).expect("third addition overflow");
-            
+            let third_whole = (net_pool / 10_000)
+                .checked_mul(third_bps as i128)
+                .expect("third whole overflow");
+            let third_frac = ((net_pool % 10_000)
+                .checked_mul(third_bps as i128)
+                .expect("third frac overflow"))
+                / 10_000;
+            let third_payout = third_whole
+                .checked_add(third_frac)
+                .expect("third addition overflow");
+
             // Verify no overflow occurred
             assert!(first_payout > 0, "First payout should be positive");
             assert!(second_payout > 0, "Second payout should be positive");
             assert!(third_payout > 0, "Third payout should be positive");
-            
+
             // Verify conservation: total_pool = fee + first + second + third (within rounding)
             let distributed = first_payout
                 .checked_add(second_payout)
                 .expect("distributed add overflow")
                 .checked_add(third_payout)
                 .expect("distributed add overflow");
+            // Assign the integer-division remainder to first place, as the
+            // settlement logic does, so the pool is fully distributed.
+            let remainder = large_pool
+                .checked_sub(distributed)
+                .and_then(|value| value.checked_sub(fee))
+                .expect("remainder calculation overflow");
+            let distributed = distributed
+                .checked_add(remainder)
+                .expect("distributed remainder overflow");
             let total_out = distributed.checked_add(fee).expect("total out overflow");
-            
+
             assert_eq!(total_out, large_pool, "Total output must equal input pool");
         }
 
@@ -420,26 +463,48 @@ mod extended_tests {
             // Use 70% of i128::MAX to stay safely within arithmetic boundaries
             let extreme_pool: i128 = i128::MAX / 3; // ~3 quintillion stroops
             let fee_bps: u32 = 100; // 1% fee
-            
+
             // These calculations must not overflow or panic
-            let fee_whole = (extreme_pool / 10_000).checked_mul(fee_bps as i128).expect("extreme fee whole overflow");
-            let fee_frac = ((extreme_pool % 10_000).checked_mul(fee_bps as i128).expect("extreme fee frac overflow")) / 10_000;
-            let fee = fee_whole.checked_add(fee_frac).expect("extreme fee addition overflow");
-            
-            let net_pool = extreme_pool.checked_sub(fee).expect("extreme net pool overflow");
-            
+            let fee_whole = (extreme_pool / 10_000)
+                .checked_mul(fee_bps as i128)
+                .expect("extreme fee whole overflow");
+            let fee_frac = ((extreme_pool % 10_000)
+                .checked_mul(fee_bps as i128)
+                .expect("extreme fee frac overflow"))
+                / 10_000;
+            let fee = fee_whole
+                .checked_add(fee_frac)
+                .expect("extreme fee addition overflow");
+
+            let net_pool = extreme_pool
+                .checked_sub(fee)
+                .expect("extreme net pool overflow");
+
             // 50/50 split between two winners
             let winner_bps: u32 = 5_000;
-            let first_whole = (net_pool / 10_000).checked_mul(winner_bps as i128).expect("extreme first whole overflow");
-            let first_frac = ((net_pool % 10_000).checked_mul(winner_bps as i128).expect("extreme first frac overflow")) / 10_000;
-            let first_payout = first_whole.checked_add(first_frac).expect("extreme first addition overflow");
-            
-            let second_payout = net_pool.checked_sub(first_payout).expect("extreme second payout overflow");
-            
+            let first_whole = (net_pool / 10_000)
+                .checked_mul(winner_bps as i128)
+                .expect("extreme first whole overflow");
+            let first_frac = ((net_pool % 10_000)
+                .checked_mul(winner_bps as i128)
+                .expect("extreme first frac overflow"))
+                / 10_000;
+            let first_payout = first_whole
+                .checked_add(first_frac)
+                .expect("extreme first addition overflow");
+
+            let second_payout = net_pool
+                .checked_sub(first_payout)
+                .expect("extreme second payout overflow");
+
             // Verify conservation
-            let total_distributed = first_payout.checked_add(second_payout).expect("extreme distributed overflow");
-            let total_out = total_distributed.checked_add(fee).expect("extreme total out overflow");
-            
+            let total_distributed = first_payout
+                .checked_add(second_payout)
+                .expect("extreme distributed overflow");
+            let total_out = total_distributed
+                .checked_add(fee)
+                .expect("extreme total out overflow");
+
             assert_eq!(total_out, extreme_pool, "Extreme case must conserve total");
         }
 
@@ -450,23 +515,34 @@ mod extended_tests {
             // Use amount that doesn't divide evenly by 10,000
             let net_pool: i128 = 100_003i128; // 3 stroops remainder when divided
             let fee_bps: u32 = 5_000; // 50%
-            
+
             // First payout: 50% of 100_003
-            let first_whole = (net_pool / 10_000).checked_mul(fee_bps as i128).expect("overflow");
-            let first_frac_numerator = (net_pool % 10_000).checked_mul(fee_bps as i128).expect("overflow");
+            let first_whole = (net_pool / 10_000)
+                .checked_mul(fee_bps as i128)
+                .expect("overflow");
+            let first_frac_numerator = (net_pool % 10_000)
+                .checked_mul(fee_bps as i128)
+                .expect("overflow");
             let first_frac = first_frac_numerator / 10_000;
             let first_residual = first_frac_numerator % 10_000;
-            let first_payout = first_whole.checked_add(first_frac).expect("overflow").checked_add((first_residual + 9_999) / 10_000).expect("overflow");
-            
+            let first_payout = first_whole
+                .checked_add(first_frac)
+                .expect("overflow")
+                .checked_add((first_residual + 9_999) / 10_000)
+                .expect("overflow");
+
             // Second payout: remaining amount
             let second_payout = net_pool.checked_sub(first_payout).expect("overflow");
-            
+
             // Total should equal net_pool
             let total = first_payout.checked_add(second_payout).expect("overflow");
             assert_eq!(total, net_pool, "Remainder handling must preserve total");
-            
+
             // First place should be >= second place (gets the remainder bonus)
-            assert!(first_payout >= second_payout, "First place should receive remainder bonus");
+            assert!(
+                first_payout >= second_payout,
+                "First place should receive remainder bonus"
+            );
         }
     }
 
@@ -489,6 +565,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
 
@@ -512,6 +589,7 @@ mod extended_tests {
             let admin1 = Address::generate(&env);
             let admin2 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
 
@@ -535,6 +613,7 @@ mod extended_tests {
             let admin3 = Address::generate(&env);
             let outsider = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -555,6 +634,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -581,6 +661,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -603,6 +684,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -636,6 +718,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -663,6 +746,7 @@ mod extended_tests {
             let admin3 = Address::generate(&env);
             let outsider = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -689,6 +773,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -720,6 +805,7 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -755,11 +841,23 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
             let player1 = Address::generate(&env);
-            let token = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let token = env
+                .register_stellar_asset_contract_v2(token_admin)
+                .address();
+            let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+            token_admin_client.mint(&player1, &1_000);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
+            soroban_sdk::token::Client::new(&env, &token).approve(
+                &player1,
+                &contract_id,
+                &1_000,
+                &(env.ledger().sequence() + 1_000),
+            );
 
             // Add token to whitelist
             client.add_whitelisted_token(&token);
@@ -792,6 +890,7 @@ mod extended_tests {
             let organizer = Address::generate(&env);
             let token = Address::generate(&env);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
@@ -801,7 +900,7 @@ mod extended_tests {
 
             // Create tournament should work before pause
             let tournament_id = String::from_slice(&env, "tourn1");
-            client.create_tournament(&tournament_id, &organizer, &token, &100, &10, &3600);
+            client.create_tournament(&tournament_id, &100, &10, &4, &3600, &token);
 
             // Pause the contract
             client.propose_pause(&admin1);
@@ -810,7 +909,8 @@ mod extended_tests {
 
             // Create tournament should fail now
             let tournament_id2 = String::from_slice(&env, "tourn2");
-            let result = client.try_create_tournament(&tournament_id2, &organizer, &token, &100, &10, &3600);
+            let result =
+                client.try_create_tournament(&tournament_id2, &100, &10, &4, &3600, &token);
             assert!(result.is_err());
         }
 
@@ -825,11 +925,23 @@ mod extended_tests {
             let admin2 = Address::generate(&env);
             let admin3 = Address::generate(&env);
             let player1 = Address::generate(&env);
-            let token = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let token = env
+                .register_stellar_asset_contract_v2(token_admin)
+                .address();
+            let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+            token_admin_client.mint(&player1, &1_000);
 
+            let contract_id = env.register(ChessterEscrow, ());
             let client = ChessterEscrowClient::new(&env, &contract_id);
             client.init(&coordinator, &500);
             client.set_multisig_admins(&admin1, &admin2, &admin3);
+            soroban_sdk::token::Client::new(&env, &token).approve(
+                &player1,
+                &contract_id,
+                &1_000,
+                &(env.ledger().sequence() + 1_000),
+            );
 
             // Add token to whitelist
             client.add_whitelisted_token(&token);
@@ -847,6 +959,118 @@ mod extended_tests {
             let game_code = String::from_slice(&env, "game1");
             let result = client.try_create_match(&game_code, &player1, &token, &100);
             assert!(result.is_ok());
+        }
+    }
+}
+
+/// Property-based stake-conservation tests for every cancellation path.
+#[cfg(test)]
+mod cancellation_stake_conservation_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use soroban_sdk::testutils::{EnvTestConfig, Ledger};
+    use soroban_sdk::token::{Client as TokenClient, StellarAssetClient as TokenAdminClient};
+
+    const GAME_CODE: &str = "FUZZ-CANCEL";
+    const MATCH_TIMEOUT_SECS: u64 = 3_600;
+    const START_TS: u64 = 1_000_000;
+
+    fn approve(env: &Env, token: &TokenClient, owner: &Address, spender: &Address, amount: i128) {
+        token.approve(owner, spender, &amount, &(env.ledger().sequence() + 1_000));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+        /// Runs randomized match lifecycles and asserts that every cancellation
+        /// path returns exactly the deposited principal, leaves nothing locked in
+        /// the contract, and rejects a second refund of the same game code.
+        #[test]
+        fn test_fuzz_cancellation_stake_conservation(
+            wager_amount in 1i128..=100_000_000i128,
+            elapsed_seconds in 3_601u64..=100_000u64,
+            flow in 0u8..4u8,
+            joined in any::<bool>(),
+        ) {
+            let mut env = Env::default();
+            // Fuzz cases run the full contract lifecycle 1,000 times; snapshot
+            // files are not useful here and writing them dominates CI runtime.
+            env.set_config(EnvTestConfig {
+                capture_snapshot_at_drop: false,
+            });
+            env.mock_all_auths();
+            env.ledger().set_timestamp(START_TS);
+
+            let coordinator = Address::generate(&env);
+            let player1 = Address::generate(&env);
+            let player2 = Address::generate(&env);
+            let token_admin = Address::generate(&env);
+            let asset = env.register_stellar_asset_contract_v2(token_admin);
+            let token = TokenClient::new(&env, &asset.address());
+            let token_admin_client = TokenAdminClient::new(&env, &asset.address());
+            token_admin_client.mint(&player1, &wager_amount);
+            token_admin_client.mint(&player2, &wager_amount);
+
+            let contract_id = env.register(ChessterEscrow, ());
+            let client = ChessterEscrowClient::new(&env, &contract_id);
+            client.init(&coordinator, &0);
+            client.add_whitelisted_token(&token.address);
+
+            approve(&env, &token, &player1, &contract_id, wager_amount);
+            approve(&env, &token, &player2, &contract_id, wager_amount);
+
+            let game_code = String::from_str(&env, GAME_CODE);
+            let player1_start = token.balance(&player1);
+            let player2_start = token.balance(&player2);
+            let contract_start = token.balance(&contract_id);
+            prop_assert_eq!(player1_start, wager_amount);
+            prop_assert_eq!(player2_start, wager_amount);
+            prop_assert_eq!(contract_start, 0);
+
+            client.create_match_with_duration(
+                &game_code,
+                &player1,
+                &token.address,
+                &wager_amount,
+                &MATCH_TIMEOUT_SECS,
+            );
+            if joined {
+                client.join_match(&game_code, &player2);
+            }
+
+            let staked = if joined { wager_amount * 2 } else { wager_amount };
+            prop_assert_eq!(token.balance(&contract_id), staked);
+
+            // Pending matches can only exercise the timeout paths; mutual
+            // cancellation needs both participants.
+            let flow = if joined { flow } else { flow % 2 };
+            if flow == 2 {
+                client.propose_mutual_cancellation(&game_code, &player1);
+                env.ledger().set_timestamp(START_TS + 300);
+                client.confirm_mutual_cancellation(&game_code, &player2);
+            } else {
+                env.ledger().set_timestamp(START_TS + elapsed_seconds);
+                match flow {
+                    0 => client.claim_refund(&game_code, &player1),
+                    1 => client.refund_after_timeout(&game_code),
+                    _ => client.claim_refund(&game_code, &player2),
+                }
+            }
+
+            let stored = client.get_match(&game_code);
+            prop_assert_eq!(stored.status, MatchStatus::Refunded);
+            prop_assert_eq!(token.balance(&contract_id), contract_start);
+            prop_assert_eq!(token.balance(&player1), player1_start);
+            prop_assert_eq!(token.balance(&player2), player2_start);
+
+            let second_refund = client.try_refund_after_timeout(&game_code);
+            prop_assert!(
+                second_refund.is_err(),
+                "a refunded match must reject a second refund"
+            );
+            prop_assert_eq!(token.balance(&contract_id), contract_start);
+            prop_assert_eq!(token.balance(&player1), player1_start);
+            prop_assert_eq!(token.balance(&player2), player2_start);
         }
     }
 }

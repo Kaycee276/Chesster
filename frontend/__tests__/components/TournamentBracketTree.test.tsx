@@ -201,7 +201,111 @@ describe("TournamentBracketTree", () => {
       fireEvent.click(zoomInBtn);
     }
 
-    expect(screen.getByText("250%")).toBeInTheDocument();
+    expect(screen.getByText("200%")).toBeInTheDocument();
+  });
+
+  it("clamps zoom out at 50%", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1" },
+        player2: { id: "p2", name: "Player 2" },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+    const zoomOutBtn = screen.getByRole("button", { name: "−" });
+    for (let i = 0; i < 20; i++) {
+      fireEvent.click(zoomOutBtn);
+    }
+
+    expect(screen.getByText("50%")).toBeInTheDocument();
+  });
+
+  it("zooms around the pointer position on wheel input", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1" },
+        player2: { id: "p2", name: "Player 2" },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+    const container = screen.getByTestId("tournament-bracket-tree");
+    container.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+
+    fireEvent.wheel(container, { deltaY: -100, clientX: 200, clientY: 100 });
+
+    const content = screen.getByTestId("bracket-content");
+    expect(content.style.transform).toContain("translate(-64px, -32px)");
+    expect(content.style.transform).toContain("scale(1.32)");
+  });
+
+  it("pans the bracket by dragging the canvas", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1" },
+        player2: { id: "p2", name: "Player 2" },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+    const container = screen.getByTestId("tournament-bracket-tree");
+
+    fireEvent.mouseDown(container, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(container, { clientX: 150, clientY: 130 });
+    fireEvent.mouseUp(container);
+
+    expect(screen.getByTestId("bracket-content").style.transform).toContain(
+      "translate(50px, 30px)",
+    );
+  });
+
+  it("pinch-zooms on touch devices", () => {
+    const matches: TreeMatch[] = [
+      {
+        id: "m1",
+        roundIndex: 0,
+        matchIndex: 0,
+        gameCode: "game-101",
+        status: "active",
+        player1: { id: "p1", name: "Player 1" },
+        player2: { id: "p2", name: "Player 2" },
+      },
+    ];
+
+    render(<TournamentBracketTree matches={matches} />);
+    const container = screen.getByTestId("tournament-bracket-tree");
+
+    fireEvent.touchStart(container, {
+      touches: [
+        { clientX: 100, clientY: 100 },
+        { clientX: 200, clientY: 100 },
+      ],
+    });
+    fireEvent.touchMove(container, {
+      touches: [
+        { clientX: 50, clientY: 100 },
+        { clientX: 250, clientY: 100 },
+      ],
+    });
+
+    expect(screen.getByText("200%")).toBeInTheDocument();
   });
 
   it("highlights winning player when match is finished", () => {

@@ -13,6 +13,7 @@ class FakeOscillatorNode {
 	type = "sine";
 	private record: RecordedOscillator;
 	frequency = {
+		exponentialRampToValueAtTime: () => {},
 		setValueAtTime: (value: number) => {
 			this.record.freq = value;
 		},
@@ -23,6 +24,7 @@ class FakeOscillatorNode {
 	connect() {}
 	start() {}
 	stop() {}
+	disconnect() {}
 }
 
 class FakeGainNode {
@@ -32,6 +34,7 @@ class FakeGainNode {
 		exponentialRampToValueAtTime: () => {},
 	};
 	connect() {}
+	disconnect() {}
 }
 
 class FakeAudioContext {
@@ -107,19 +110,19 @@ afterEach(() => {
 
 describe("soundService", () => {
 	describe("frequency synthesis", () => {
-		it("plays a single square tone at 520Hz on move()", async () => {
+		it("plays a low triangle tone at 140Hz on move()", async () => {
 			const soundService = await loadService();
 			soundService.move();
 			expect(created).toHaveLength(1);
-			expect(created[0].freq).toBe(520);
-			expect(created[0].type).toBe("square");
+			expect(created[0].freq).toBe(140);
+			expect(created[0].type).toBe("triangle");
 		});
 
-		it("plays a descending two-tone sawtooth on capture()", async () => {
+		it("plays a descending two-tone triangle on capture()", async () => {
 			const soundService = await loadService();
 			soundService.capture();
 			expect(created.map((o) => o.freq)).toEqual([300, 220]);
-			expect(created.every((o) => o.type === "sawtooth")).toBe(true);
+			expect(created.every((o) => o.type === "triangle")).toBe(true);
 		});
 
 		it("plays a repeated 880Hz alert on check()", async () => {

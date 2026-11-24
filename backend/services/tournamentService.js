@@ -401,6 +401,96 @@ class TournamentService {
 	}
 
 	/**
+	 * Schedules a round-robin tournament where every participant plays every other participant once.
+	 * All rounds are stored up front in bracket_matches. Round 1 is ready to play and later rounds
+	 * stay pending until advanceRoundRobinRound activates them. Byes are stored as `bye` matches.
+	 *
+	 * @param {string} tournamentId
+	 * @param {Array<object>} players - Participants with wallet_address and optional elo (used for seeding).
+	 * @param {{ io?: object }} [options] - Socket.IO server used to emit bracket_generated.
+	 * @returns {Promise<{ totalRounds: number, matches: Array<object> }>}
+	 */
+	async generateRoundRobinSchedule(tournamentId, players = [], { io = null } = {}) {
+		const seeded = this.seedPlayers(players);
+		const schedule = buildRoundRobinSchedule(seeded.map((p) => p.wallet_address));
+
+		const rows = [];
+		for (const round of schedule) {
+			const status = round.round === 1 ? "ready" : "pending";
+			round.games.forEach((game, index) => {
+				rows.push({
+					tournament_id: tournamentId,
+					round: round.round,
+					match_number: index + 1,
+					player_one: game.white,
+					player_two: game.black,
+					winner: null,
+					status,
+					game_code: null,
+				});
+			});
+			if (round.bye) {
+				rows.push({
+					tournament_id: tournamentId,
+					round: round.round,
+					match_number: round.games.length + 1,
+					player_one: round.bye,
+					player_two: null,
+					winner: round.bye,
+					status: "bye",
+					game_code: null,
+				});
+			}
+		}
+
+		const matches = await tournamentModel.createBracketMatches(rows);
+
+		try {
+			await tournamentModel.updateTournamentStatus(tournamentId, "in_progress");
+		} catch (err) {
+			logger.warn("[TournamentService] Failed to update tournament status to in_progress:", err.message);
+		}
+
+		emitBracketGenerated(io, tournamentId, {
+			format: "round_robin",
+			totalRounds: schedule.length,
+			matchCount: rows.length,
+		});
+
+		return { totalRounds: schedule.length, matches: matches || [] };
+	}
+
+	/**
+	 * Moves a round-robin tournament on once the current round is finished.
+	 * The current round is the lowest-numbered round with an unfinished match. If its matches are
+	 * still pending they are activated (`ready`) and `tournament:round_started` is emitted.
+	 *
+	 * @param {string} tournamentId
+	 * @param {{ io?: object }} [options] - Socket.IO server used to emit round events.
+	 * @returns {Promise<{ status: "round_started"|"in_progress"|"completed", round: number|null, activatedMatchIds: Array<string> }>}
+	 */
+	async advanceRoundRobinRound(tournamentId, { io = null } = {}) {
+		const matches = (await tournamentModel.getBracketMatches(tournamentId)) || [];
+		const unfinished = matches.filter((m) => m.status !== "completed" && m.status !== "bye");
+
+		if (unfinished.length === 0) {
+			return { status: "completed", round: null, activatedMatchIds: [] };
+		}
+
+		const round = Math.min(...unfinished.map((m) => m.round));
+		const toActivate = unfinished.filter((m) => m.round === round && m.status === "pending");
+		if (toActivate.length === 0) {
+			return { status: "in_progress", round, activatedMatchIds: [] };
+		}
+
+		const activatedMatchIds = toActivate.map((m) => m.id);
+		await Promise.all(activatedMatchIds.map((id) => tournamentModel.updateBracketMatchStatus(id, "ready")));
+		broadcastTournamentEvent(io, tournamentId, "tournament:round_started", { round, matchIds: activatedMatchIds });
+
+		return { status: "round_started", round, activatedMatchIds };
+	}
+
+	/**
 	 * Build hierarchical round-by-round bracket tree for tournament visualization.
 	 * @param {string} tournamentId
 	 * @returns {Promise<object>} { totalRounds, rounds }
@@ -579,6 +669,60 @@ class TournamentService {
 
 		return rows.join("\n");
 	}
+}
+
+/** Stands in for the missing opponent when a round-robin field has an odd number of players. */
+const ROUND_ROBIN_BYE = null;
+
+/**
+ * Builds a complete round-robin schedule with the circle (polygon) method. Every pair of
+ * participants meets exactly once. For an odd field a dummy slot is added, so each round has one
+ * real bye and every player receives exactly one bye over the whole schedule.
+ *
+ * Colours: in each game the player with fewer whites so far gets white. A tie goes to the
+ * participant nearer the top of the rotation, which keeps the result deterministic.
+ *
+ * @param {Array<string>} walletAddresses - Unique, non-empty addresses in seed order.
+ * @returns {Array<{ round: number, games: Array<{ white: string, black: string }>, bye: string|null }>}
+ */
+function buildRoundRobinSchedule(walletAddresses) {
+	if (!Array.isArray(walletAddresses) || walletAddresses.length < 2) {
+		throw new Error("A round-robin schedule requires at least 2 participants");
+	}
+	if (new Set(walletAddresses).size !== walletAddresses.length || walletAddresses.some((w) => !w)) {
+		throw new Error("Round-robin participants must be unique, non-empty wallet addresses");
+	}
+
+	const slots = [...walletAddresses];
+	if (slots.length % 2 === 1) slots.push(ROUND_ROBIN_BYE);
+	const n = slots.length;
+	const half = n / 2;
+	// Whites minus blacks so far, per participant.
+	const colourBalance = new Map(walletAddresses.map((w) => [w, 0]));
+
+	const rounds = [];
+	for (let r = 0; r < n - 1; r += 1) {
+		const games = [];
+		let bye = null;
+		for (let i = 0; i < half; i += 1) {
+			const a = slots[i];
+			const b = slots[n - 1 - i];
+			if (a === ROUND_ROBIN_BYE || b === ROUND_ROBIN_BYE) {
+				bye = a === ROUND_ROBIN_BYE ? b : a;
+				continue;
+			}
+			const aIsWhite = colourBalance.get(a) <= colourBalance.get(b);
+			const white = aIsWhite ? a : b;
+			const black = aIsWhite ? b : a;
+			colourBalance.set(white, colourBalance.get(white) + 1);
+			colourBalance.set(black, colourBalance.get(black) - 1);
+			games.push({ white, black });
+		}
+		rounds.push({ round: r + 1, games, bye });
+		// Keep slots[0] fixed and rotate the rest one place clockwise.
+		slots.splice(1, 0, slots.pop());
+	}
+	return rounds;
 }
 
 function pairSwissRound(players, previousMatches, roundNumber) {
@@ -784,6 +928,7 @@ function emitTournamentCompleted(io, tournamentId, payload) {
 
 const tournamentService = new TournamentService();
 tournamentService.__pairSwissRoundForTest = pairSwissRound;
+tournamentService.buildRoundRobinSchedule = buildRoundRobinSchedule;
 tournamentService.calculateBuchholz = calculateBuchholz;
 tournamentService.calculateSonnebornBerger = calculateSonnebornBerger;
 tournamentService.calculateTiebreaks = calculateTiebreaks;

@@ -61,6 +61,26 @@ describe("GamePage Mobile Bottom Sheet Drawer (#684)", () => {
     cleanup();
   });
 
+  it("opens the keyboard shortcuts modal from the game toolbar and via ? (#750)", async () => {
+    render(
+      <MemoryRouter initialEntries={["/game/test1234"]}>
+        <Routes>
+          <Route path="/game/:gameCode" element={<GamePage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const trigger = await screen.findByLabelText("View keyboard shortcuts (Press ?)");
+    fireEvent.click(trigger);
+    expect(screen.getByText("Keyboard Shortcuts")).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByText("Keyboard Shortcuts")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: "?" });
+    expect(screen.getByText("Keyboard Shortcuts")).toBeInTheDocument();
+  });
+
   it("renders MobileDrawer with initial collapsed snap point (60px)", async () => {
     render(
       <MemoryRouter initialEntries={["/game/test1234"]}>

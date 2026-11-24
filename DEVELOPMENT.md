@@ -88,6 +88,9 @@ Before opening a Pull Request targeting `dev`, run the checks relevant to your c
   scripts/pnpm-audit.sh frontend
   ```
   Moderate and low findings are reported without failing. Advisories already known when the gate was introduced are listed in `.github/pnpm-audit-ignore.txt`; remove an entry when the dependency is upgraded, and do not add new entries without a short justification.
+- **Security and license compliance gate** (`.github/workflows/security.yml`): every pull request and push to `dev` audits all three Node lockfiles and the Soroban lockfile. High/critical Node advisories and RustSec vulnerabilities block this gate, including findings suppressed by the older production-only audit. Each job writes its results to the Actions summary.
+  Production dependency licenses must be MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, or ISC. SPDX `OR` expressions pass when a permitted license can be selected; every obligation in an `AND` expression must be permitted. Unknown, inferred, malformed, and incomplete license inventories fail. The application package itself is excluded; private third-party dependencies are checked.
+  CI collects the installed dependency tree with pinned `license-checker`, then validates it with `scripts/license-policy.cjs`. Run its regression cases with `node --test scripts/license-policy.test.cjs` when using the normal local development workflow.
 - **Soroban WASM size report** (pull requests only; CI posts a comment comparing the optimized size with the target branch):
   ```bash
   cd contracts/soroban
