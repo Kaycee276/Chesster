@@ -45,6 +45,12 @@ router.get(
 	tournamentController.getTournamentBracket,
 );
 
+router.get(
+	"/tournaments/:id/standings",
+	validate(tournamentIdSchema, "params"),
+	tournamentController.getTournamentStandings,
+);
+
 router.post(
 	"/tournaments/:id/register",
 	validate(tournamentIdSchema, "params"),
