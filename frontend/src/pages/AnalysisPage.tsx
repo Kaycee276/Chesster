@@ -287,6 +287,18 @@ export default function AnalysisPage() {
     [currentBoard, turnToMove]
   );
 
+  const currentPgn = useMemo(() => {
+    if (moves.length === 0) return "";
+    const headerLines = Object.entries(headers)
+      .filter(([, value]) => Boolean(value))
+      .map(([key, value]) => `[${key} "${value}"]`);
+    const moveTokens = moves.map((m, idx) =>
+      idx % 2 === 0 ? `${m.moveNumber}. ${m.san}` : m.san
+    );
+    const moveText = [...moveTokens, result || "*"].join(" ");
+    return headerLines.length > 0 ? `${headerLines.join("\n")}\n\n${moveText}` : moveText;
+  }, [moves, headers, result]);
+
   const { evaluation: liveEvaluation, variations } = useStockfishEvaluation(currentFen, {
     depth: analysisPrefs.targetDepth,
     multiPv: analysisPrefs.multiPv,
@@ -850,6 +862,8 @@ export default function AnalysisPage() {
             isPlaying={isPlaying}
             onMoveChange={goToMove}
             onTogglePlay={() => setIsPlaying((p) => !p)}
+            currentFen={currentFen}
+            pgn={currentPgn}
           />
 
           {moves.length > 0 && (

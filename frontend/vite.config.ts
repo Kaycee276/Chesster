@@ -69,6 +69,20 @@ export default defineConfig({
 							cacheableResponse: { statuses: [200] },
 						},
 					},
+					// Cache daily puzzle responses for offline playback
+					{
+						urlPattern: /\/api\/puzzles\/daily/,
+						handler: "NetworkFirst",
+						options: {
+							cacheName: "daily-puzzles",
+							networkTimeoutSeconds: 3,
+							expiration: {
+								maxEntries: 5,
+								maxAgeSeconds: 60 * 60 * 24, // 24 hours
+							},
+							cacheableResponse: { statuses: [200] },
+						},
+					},
 				],
 			},
 			devOptions: {
