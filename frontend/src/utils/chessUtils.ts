@@ -211,13 +211,64 @@ export const PIECE_VALUES: Record<string, number> = {
 	k: 0,
 };
 
-/** Total material value captured in a list of captured pieces. */
+/**
+ * Total material value captured in a list of captured pieces.
+ */
 export function capturedMaterial(captured: string[]): number {
 	return captured.reduce(
 		(sum, piece) => sum + (PIECE_VALUES[piece.toLowerCase()] ?? 0),
 		0,
 	);
 }
+
+export type PieceCount = Record<string, number>;
+
+export interface FenCapturedPiecesResult {
+	whiteCaptured: PieceCount;
+	blackCaptured: PieceCount;
+	materialAdvantage: number;
+}
+
+/**
+ * Calculates captured pieces and material advantage from a FEN string.
+ */
+export function calculateMaterial(fen: string): FenCapturedPiecesResult {
+	const [piecePlacement] = (fen || "").split(" ");
+	const counts: Record<string, number> = {
+		P: 0, N: 0, B: 0, R: 0, Q: 0, K: 0,
+		p: 0, n: 0, b: 0, r: 0, q: 0, k: 0,
+	};
+	for (const char of piecePlacement || "") {
+		if (counts[char] !== undefined) counts[char]++;
+	}
+
+	const whiteCaptured: PieceCount = {
+		p: Math.max(0, 8 - counts.p),
+		n: Math.max(0, 2 - counts.n),
+		b: Math.max(0, 2 - counts.b),
+		r: Math.max(0, 2 - counts.r),
+		q: Math.max(0, 1 - counts.q),
+	};
+
+	const blackCaptured: PieceCount = {
+		p: Math.max(0, 8 - counts.P),
+		n: Math.max(0, 2 - counts.N),
+		b: Math.max(0, 2 - counts.B),
+		r: Math.max(0, 2 - counts.R),
+		q: Math.max(0, 1 - counts.Q),
+	};
+
+	const whiteVal = Object.entries(whiteCaptured).reduce((acc, [p, cnt]) => acc + (PIECE_VALUES[p] || 0) * cnt, 0);
+	const blackVal = Object.entries(blackCaptured).reduce((acc, [p, cnt]) => acc + (PIECE_VALUES[p] || 0) * cnt, 0);
+
+	return {
+		whiteCaptured,
+		blackCaptured,
+		materialAdvantage: whiteVal - blackVal,
+	};
+}
+
+export const getCapturedPiecesFromFen = calculateMaterial;
 
 /**
  * Live material values currently held by each side on the board,
